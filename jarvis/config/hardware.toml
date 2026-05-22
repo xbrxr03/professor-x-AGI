@@ -1,0 +1,16 @@
+[hardware]
+vram_gb = 12
+ram_gb = 32
+gpu = "rtx3060"
+
+[model]
+primary = "qwen2.5:14b-q4"
+fallback = "phi4:14b-q4"
+inference = "ollama"
+ollama_url = "http://localhost:11434"
+
+[compute]
+daily_hours = 7
+max_parallel_tools = 3
+context_window = 32768
+evolution_cycle_hours = 1
