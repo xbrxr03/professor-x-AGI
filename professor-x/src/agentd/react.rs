@@ -1,0 +1,562 @@
+/// ReAct execution loop — the agent's inner loop.
+///
+/// Architecture:
+/// - ReAct (arXiv:2210.03629): Thought → Action → Observation cycle
+/// - Reflexion (arXiv:2303.11366): verbal RL buffer, max 3, on task failure
+/// - Self-Generated ICE (arXiv:2505.00234): similar past tasks injected at start
+/// - MARS (arXiv:2601.11974): principle+procedure reflection, persisted to semantic
+/// - Voyager (arXiv:2305.16291): 4-attempt max per task, skill library lookup
+/// - ClawOS circuit breaker: 3 consecutive tool failures → pause + warn
+///
+/// Prompt format:
+///   <identity>...</identity>              ← pinned memory
+///   <working-memory>...</working-memory>  ← current session context
+///   <examples>...</examples>              ← ICE from episodic memory
+///   <knowledge>...</knowledge>            ← relevant cognition items
+///   <task>...</task>                      ← current task
+///   <reflections>...</reflections>        ← prior Reflexion buffer (if retry)
+///   <history>...</history>                ← prior steps this attempt
+///
+///   Available tools: ...
+///
+///   Thought: <your reasoning>
+///   Action: <tool_name>
+///   Action Input: <json>
+
+use anyhow::Result;
+use chrono::Utc;
+use serde_json::Value;
+use std::sync::Arc;
+use tracing::{debug, info, warn};
+use uuid::Uuid;
+
+use crate::agentd::graph::{ExecutionStep, TaskNode, TaskStatus};
+use crate::evolved::tracker::TaskOutcome;
+use crate::memd::MemoryManager;
+use crate::memd::episodic::EpisodicEntry;
+use crate::ollama::{ModelOptions, OllamaClient};
+use crate::policyd::{AuditStore, Decision, PermissionScope, PolicyEngine};
+use crate::toolbridge::{ToolExecutor, ToolRegistry};
+use crate::toolbridge::executor::{Action, Observation};
+use tokio_util::sync::CancellationToken;
+
+// Parsed from the LLM's output
+struct ParsedStep {
+    thought: String,
+    tool_name: String,
+    params: Value,
+}
+
+enum LoopSignal {
+    Continue,
+    TaskComplete(String),
+    TaskFailed(String),
+}
+
+pub struct ReactLoop {
+    ollama:   Arc<OllamaClient>,
+    registry: Arc<std::sync::RwLock<ToolRegistry>>,
+    policy:   Arc<PolicyEngine>,
+    memory:   Arc<MemoryManager>,
+    cancel:   CancellationToken,
+}
+
+impl ReactLoop {
+    pub fn new(
+        ollama:   Arc<OllamaClient>,
+        registry: Arc<std::sync::RwLock<ToolRegistry>>,
+        policy:   Arc<PolicyEngine>,
+        memory:   Arc<MemoryManager>,
+        cancel:   CancellationToken,
+    ) -> Self {
+        Self { ollama, registry, policy, memory, cancel }
+    }
+
+    /// Run a task to completion or exhaustion. Returns outcome for the tracker.
+    pub async fn run(&self, task: &mut TaskNode) -> Result<TaskOutcome> {
+        task.status     = TaskStatus::Running;
+        task.started_at = Some(Utc::now());
+
+        // ICE: retrieve similar past tasks from episodic memory
+        let ice_examples = self.retrieve_ice(&task.description).await;
+
+        // Cognition context: relevant items from cognition base
+        let cognition_context = self.retrieve_cognition(&task.description);
+
+        for attempt in 0..task.max_attempts {
+            task.attempt_count = attempt + 1;
+            info!("react: task '{}' attempt {}/{}", task.description, attempt + 1, task.max_attempts);
+
+            let outcome = self.run_attempt(task, &ice_examples, &cognition_context).await;
+
+            match outcome {
+                Ok(true) => {
+                    task.status       = TaskStatus::Complete;
+                    task.completed_at = Some(Utc::now());
+                    task.outcome_score = Some(1.0);
+
+                    // Persist this task as a successful episodic memory
+                    self.write_episodic(task, true).await;
+
+                    return Ok(TaskOutcome {
+                        task_id:      task.id,
+                        description:  task.description.clone(),
+                        success:      true,
+                        score:        1.0,
+                        failure_mode: None,
+                        steps_taken:  task.steps.len() as u32,
+                        timestamp:    Utc::now(),
+                    });
+                }
+                Ok(false) => {
+                    // Failed this attempt — generate Reflexion and retry
+                    if attempt + 1 < task.max_attempts {
+                        let reflection = self.generate_reflection(task).await;
+                        task.push_reflection(reflection);
+                        task.steps.clear(); // fresh attempt, prior steps preserved in reflections
+                    }
+                }
+                Err(e) => {
+                    warn!("react: attempt {} error: {e}", attempt + 1);
+                    if attempt + 1 < task.max_attempts {
+                        task.push_reflection(format!("Error on attempt {}: {e}", attempt + 1));
+                    }
+                }
+            }
+
+            if self.cancel.is_cancelled() {
+                break;
+            }
+        }
+
+        // All attempts exhausted — MARS reflection before giving up
+        let failure_mode = self.generate_mars_reflection(task).await;
+
+        task.status       = TaskStatus::Failed;
+        task.completed_at = Some(Utc::now());
+        task.outcome_score = Some(0.0);
+
+        self.write_episodic(task, false).await;
+
+        Ok(TaskOutcome {
+            task_id:      task.id,
+            description:  task.description.clone(),
+            success:      false,
+            score:        0.0,
+            failure_mode: Some(failure_mode),
+            steps_taken:  task.steps.len() as u32,
+            timestamp:    Utc::now(),
+        })
+    }
+
+    /// Run one attempt. Returns Ok(true) on success, Ok(false) on failure.
+    async fn run_attempt(
+        &self,
+        task:             &mut TaskNode,
+        ice_examples:     &[String],
+        cognition_context: &[String],
+    ) -> Result<bool> {
+        const MAX_STEPS: usize = 20;
+        let executor = ToolExecutor::new(Arc::clone(&self.registry));
+        let scope    = PermissionScope::default_autonomous();
+        let audit    = AuditStore::new(Arc::clone(&self.memory.db));
+        let session_id = Uuid::new_v4();
+
+        // Circuit breaker: pause after 3 consecutive tool failures
+        let mut consecutive_failures: u8 = 0;
+
+        for step_idx in 0..MAX_STEPS {
+            if self.cancel.is_cancelled() {
+                return Ok(false);
+            }
+
+            // Build the full prompt for this step
+            let prompt = self.build_step_prompt(task, ice_examples, cognition_context);
+
+            // Ask the model for the next Thought + Action
+            let resp = self.ollama.generate(
+                &prompt,
+                Some(SYSTEM_PROMPT),
+                Some(ModelOptions::for_react()),
+            ).await?;
+
+            let (_, answer) = resp.split_thinking();
+
+            debug!("react step {}: raw response length={}", step_idx + 1, answer.len());
+
+            // Parse Thought / Action / Action Input
+            match parse_react_step(&answer) {
+                None => {
+                    // Model output didn't match expected format — check for FINISH signal
+                    if answer.to_lowercase().contains("task complete")
+                        || answer.to_lowercase().contains("finish")
+                        || answer.to_lowercase().contains("final answer")
+                    {
+                        return Ok(true);
+                    }
+                    warn!("react: could not parse step output, retrying step");
+                    continue;
+                }
+
+                Some(parsed) => {
+                    // Special finish actions
+                    if parsed.tool_name == "finish" || parsed.tool_name == "done" {
+                        return Ok(true);
+                    }
+                    if parsed.tool_name == "fail" {
+                        return Ok(false);
+                    }
+
+                    // Gate the action through policyd
+                    let gate = self.policy.gate(
+                        &parsed.tool_name,
+                        &parsed.params,
+                        session_id,
+                        &scope,
+                    ).await;
+
+                    // Write audit entry
+                    let _ = audit.append(
+                        session_id,
+                        Some(task.id),
+                        &parsed.tool_name,
+                        &parsed.params,
+                        gate.risk_score,
+                        gate.decision.clone(),
+                        &gate.reason,
+                        None,
+                    );
+
+                    let observation = match gate.decision {
+                        Decision::Deny => {
+                            consecutive_failures += 1;
+                            Observation::denied(&gate.reason)
+                        }
+                        Decision::PendingApproval => {
+                            // Tool needs human approval — inject as observation and continue
+                            Observation::denied(&format!(
+                                "tool '{}' requires human approval (risk={}). \
+                                 Use a lower-risk alternative or wait for approval.",
+                                parsed.tool_name, gate.risk_score
+                            ))
+                        }
+                        Decision::Allow => {
+                            let action = Action {
+                                tool_name:  parsed.tool_name.clone(),
+                                params:     parsed.params.clone(),
+                                risk_score: gate.risk_score,
+                            };
+                            let obs = executor.execute(&action).await;
+                            if obs.success {
+                                consecutive_failures = 0;
+                            } else {
+                                consecutive_failures += 1;
+                            }
+                            obs
+                        }
+                    };
+
+                    // ClawOS circuit breaker: 3 consecutive failures → pause
+                    if consecutive_failures >= 3 {
+                        warn!(
+                            "react: circuit breaker tripped (3 consecutive failures) on task '{}'",
+                            task.description
+                        );
+                        return Ok(false);
+                    }
+
+                    // Record the step
+                    let step = ExecutionStep {
+                        index:       (step_idx + 1) as u32,
+                        thought:     parsed.thought,
+                        action:      Action {
+                            tool_name:  parsed.tool_name,
+                            params:     parsed.params,
+                            risk_score: gate.risk_score,
+                        },
+                        observation: observation.clone(),
+                        timestamp:   Utc::now(),
+                    };
+                    task.steps.push(step);
+
+                    // Check if the observation signals completion
+                    if is_completion_signal(&observation) {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+
+        // MAX_STEPS reached without finishing
+        warn!("react: max steps ({MAX_STEPS}) reached for task '{}'", task.description);
+        Ok(false)
+    }
+
+    fn build_step_prompt(
+        &self,
+        task:              &TaskNode,
+        ice_examples:      &[String],
+        cognition_context: &[String],
+    ) -> String {
+        let mut parts = Vec::new();
+
+        // Pinned identity + working memory from memd
+        let ctx_prefix = self.memory.build_context_prefix("current")
+            .unwrap_or_default();
+        if !ctx_prefix.is_empty() {
+            parts.push(ctx_prefix);
+        }
+
+        // ICE: similar past tasks
+        if !ice_examples.is_empty() {
+            let examples = ice_examples.iter()
+                .enumerate()
+                .map(|(i, ex)| format!("Example {}: {ex}", i + 1))
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            parts.push(format!("<examples>\n{examples}\n</examples>"));
+        }
+
+        // Cognition: relevant knowledge
+        if !cognition_context.is_empty() {
+            let knowledge = cognition_context.join("\n- ");
+            parts.push(format!("<knowledge>\n- {knowledge}\n</knowledge>"));
+        }
+
+        // Current task
+        parts.push(format!("<task>\n{}\n</task>", task.description));
+
+        // Reflexion buffer from prior failed attempts
+        if let Some(refs) = task.reflections_text() {
+            parts.push(format!("<reflections>\n{refs}\n</reflections>"));
+        }
+
+        // Prior steps this attempt
+        if !task.steps.is_empty() {
+            parts.push(format!("<history>\n{}\n</history>", task.steps_text()));
+        }
+
+        // Available tools
+        parts.push(TOOLS_DESCRIPTION.to_string());
+
+        // ReAct prompt suffix
+        parts.push(REACT_SUFFIX.to_string());
+
+        parts.join("\n\n")
+    }
+
+    async fn retrieve_ice(&self, task_desc: &str) -> Vec<String> {
+        match self.memory.episodic.search_fts(task_desc, 3) {
+            Ok(entries) => entries.iter()
+                .filter(|e| e.importance > 0.3)
+                .map(|e| {
+                    let outcome = if e.importance >= 0.7 { "succeeded" } else { "failed" };
+                    format!("Past task ({outcome}): {}", e.content)
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    fn retrieve_cognition(&self, query: &str) -> Vec<String> {
+        use crate::evolved::CognitionStore;
+        let store = CognitionStore::new(Arc::clone(&self.memory.db));
+        match store.query_top_k(query, 5) {
+            Ok(items) => items.iter()
+                .filter(|i| i.quality > 0.4)
+                .map(|i| i.content.clone())
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    async fn generate_reflection(&self, task: &TaskNode) -> String {
+        use crate::evolved::reflector::Reflector;
+        let prompt = Reflector::build_prompt(task);
+        match self.ollama.generate(
+            &prompt,
+            Some("You are a self-reflecting AI agent. Be concise and specific."),
+            Some(ModelOptions::for_reflection()),
+        ).await {
+            Ok(resp) => {
+                let (_, answer) = resp.split_thinking();
+                answer
+            }
+            Err(e) => {
+                warn!("react: reflexion generation failed: {e}");
+                format!("Failed to reflect: {e}")
+            }
+        }
+    }
+
+    /// MARS (arXiv:2601.11974): single-cycle reflection after all attempts exhausted.
+    /// Extracts principle + procedure and writes both to semantic memory.
+    async fn generate_mars_reflection(&self, task: &TaskNode) -> String {
+        let prompt = format!(
+            "Task: {}\n\nAttempts: {}\nFinal steps:\n{}\n\n\
+             Extract two things:\n\
+             PRINCIPLE: One sentence — what general rule does this failure illustrate? \
+             (what NOT to do in this class of task)\n\
+             PROCEDURE: One sentence — what concrete approach should be tried next time?",
+            task.description,
+            task.attempt_count,
+            task.steps_text(),
+        );
+
+        let resp = match self.ollama.generate(
+            &prompt,
+            Some("You are a metacognitive AI agent. Extract actionable lessons from failure."),
+            Some(ModelOptions::for_reflection()),
+        ).await {
+            Ok(r) => r,
+            Err(e) => return format!("reflection failed: {e}"),
+        };
+
+        let (_, answer) = resp.split_thinking();
+
+        // Parse PRINCIPLE and PROCEDURE
+        let principle = extract_field(&answer, "PRINCIPLE");
+        let procedure  = extract_field(&answer, "PROCEDURE");
+
+        // Write to semantic memory as lessons
+        if let Some(ref p) = principle {
+            let entry = crate::memd::semantic::SemanticEntry::new(
+                format!("PRINCIPLE (from failed task '{}'): {p}", task.description),
+                "mars:reflection".to_string(),
+            );
+            let _ = self.memory.semantic.insert(&entry);
+        }
+        if let Some(ref p) = procedure {
+            let entry = crate::memd::semantic::SemanticEntry::new(
+                format!("PROCEDURE (for task class '{}'): {p}", task.description),
+                "mars:reflection".to_string(),
+            );
+            let _ = self.memory.semantic.insert(&entry);
+        }
+
+        format!(
+            "principle={} | procedure={}",
+            principle.as_deref().unwrap_or("none"),
+            procedure.as_deref().unwrap_or("none"),
+        )
+    }
+
+    async fn write_episodic(&self, task: &TaskNode, success: bool) {
+        let importance = if success { 0.8 } else { 0.4 };
+        let summary = format!(
+            "Task: {} | {} in {} steps | attempts: {}",
+            task.description,
+            if success { "SUCCEEDED" } else { "FAILED" },
+            task.steps.len(),
+            task.attempt_count,
+        );
+
+        let entry = EpisodicEntry {
+            id:           Uuid::new_v4(),
+            session_id:   None,
+            task_id:      Some(task.id),
+            timestamp:    Utc::now(),
+            content:      summary,
+            keywords:     extract_keywords(&task.description),
+            importance,
+            embedding_id: None,
+            cluster_id:   None,
+        };
+
+        let _ = self.memory.episodic.insert(&entry);
+    }
+}
+
+// ── Parsing ───────────────────────────────────────────────────────────────────
+
+fn parse_react_step(text: &str) -> Option<ParsedStep> {
+    // Expected format:
+    //   Thought: <text>
+    //   Action: <tool_name>
+    //   Action Input: <json or plain string>
+    let thought    = extract_field(text, "Thought")?;
+    let tool_name  = extract_field(text, "Action")
+        .map(|s| s.trim().to_lowercase().replace(' ', "_"))?;
+    let params_raw = extract_field(text, "Action Input")
+        .unwrap_or_else(|| "{}".to_string());
+
+    let params = serde_json::from_str(&params_raw)
+        .unwrap_or_else(|_| serde_json::json!({ "input": params_raw }));
+
+    Some(ParsedStep { thought, tool_name, params })
+}
+
+fn extract_field(text: &str, field: &str) -> Option<String> {
+    let prefix = format!("{field}:");
+    for line in text.lines() {
+        if let Some(rest) = line.trim().strip_prefix(&prefix) {
+            return Some(rest.trim().to_string());
+        }
+    }
+    // Multi-line: find prefix and take until next field keyword
+    let lower = text.to_lowercase();
+    let prefix_lower = prefix.to_lowercase();
+    if let Some(start) = lower.find(&prefix_lower) {
+        let after = &text[start + prefix.len()..];
+        let end = FIELD_KEYWORDS.iter()
+            .filter_map(|kw| {
+                let kw_l = format!("\n{kw}:");
+                after.to_lowercase().find(&kw_l.to_lowercase())
+            })
+            .min()
+            .unwrap_or(after.len());
+        return Some(after[..end].trim().to_string());
+    }
+    None
+}
+
+const FIELD_KEYWORDS: &[&str] = &["Thought", "Action", "Action Input", "Observation",
+                                   "PRINCIPLE", "PROCEDURE"];
+
+fn is_completion_signal(obs: &Observation) -> bool {
+    if !obs.success { return false; }
+    let lower = obs.output.to_lowercase();
+    lower.contains("task complete") || lower.contains("finished") || lower.contains("done")
+}
+
+fn extract_keywords(text: &str) -> Vec<String> {
+    // Naive keyword extraction: split on whitespace, keep words > 4 chars, dedup
+    let mut words: Vec<String> = text.split_whitespace()
+        .filter(|w| w.len() > 4)
+        .map(|w| w.to_lowercase().trim_matches(|c: char| !c.is_alphanumeric()).to_string())
+        .filter(|w| !w.is_empty())
+        .collect();
+    words.dedup();
+    words.truncate(10);
+    words
+}
+
+// ── Prompts ───────────────────────────────────────────────────────────────────
+
+const SYSTEM_PROMPT: &str = "You are Professor X, an autonomous AI research agent running on \
+a consumer GPU. Your goal is to complete tasks reliably using available tools.\n\n\
+Follow the ReAct format exactly:\n\
+  Thought: <your reasoning>\n\
+  Action: <tool_name>\n\
+  Action Input: <json params>\n\n\
+After each Observation, either continue with another Thought/Action or signal completion:\n\
+  Thought: The task is complete.\n\
+  Action: finish\n\
+  Action Input: {}";
+
+const TOOLS_DESCRIPTION: &str = "Available tools:
+- fs.read       {\"path\": \"<path>\"} — read file contents
+- fs.list       {\"path\": \"<path>\"} — list directory
+- fs.write      {\"path\": \"<path>\", \"content\": \"<text>\"} — write file
+- fs.delete     {\"path\": \"<path>\"} — delete file (risk: high, may require approval)
+- web.search    {\"query\": \"<q>\", \"num_results\": 5} — search the web
+- web.fetch     {\"url\": \"<url>\"} — fetch a URL
+- shell.restricted {\"command\": \"<cmd>\"} — run a shell command (sandboxed)
+- memory.read   {\"query\": \"<q>\", \"layer\": \"episodic|semantic|procedural\"} — search memory
+- memory.write  {\"content\": \"<text>\", \"layer\": \"semantic\", \"source\": \"<src>\"} — store knowledge
+- git.commit    {\"message\": \"<msg>\"} — commit current changes
+- ollama.complete {\"prompt\": \"<p>\"} — run a sub-query through the LLM
+- finish        {} — signal task complete
+- fail          {\"reason\": \"<why>\"} — signal task failed (all options exhausted)";
+
+const REACT_SUFFIX: &str = "Now complete the task. Follow the ReAct format.\n\nThought:";

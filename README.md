@@ -69,18 +69,19 @@ Everything Professor X learns is documented here in real time.
 
 ## Status
 
-**Pre-implementation.** The research phase is complete. The design is done. No `.rs` files exist yet.
-
-Next: switch to Linux machine → `cargo new professor-x` → Week 1 of the build order.
+**Week 2 complete. Compiles clean. First autonomous run pending.**
 
 ```
-Week 1  — memd skeleton + SQLite + embedding model
-Week 2  — toolbridge + policyd gate
-Week 3  — agentd ReAct loop + evolved skeleton (observation mode)
-Week 4  — first full 7-hour autonomous cycle
-Week 5  — DHE + BF + LCAP (the trifecta)
-Week 6+ — 30 HIRO rounds, data collection, paper
+Week 1  ✅ memd (5-layer SQLite), toolbridge skeleton, policyd skeleton
+Week 2  ✅ Ollama HTTP client, ReAct loop, MARS+ICE, credential vault,
+            kill switch (SIGUSR1/2), DHE+BF+LCAP stubs, Researcher/Engineer/Analyzer loop
+Week 3  → first full 7-hour autonomous cycle
+Week 4  → HIRO baseline (null condition, 10 frozen-harness rounds)
+Week 5  → DHE+BF+LCAP active (after round 10), metacognitive self-model
+Week 6+ → 30 HIRO rounds, data collection, paper
 ```
+
+The binary is at `professor-x/`. Run with `cargo run` (requires Ollama + qwen3:8b-q4_k_m).
 
 ---
 

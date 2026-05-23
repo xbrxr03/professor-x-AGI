@@ -1,0 +1,24 @@
+[hardware]
+vram_gb = 12
+ram_gb = 32
+gpu = "rtx3060"
+
+[model]
+primary = "qwen3:8b-q4_k_m"
+fallback = "qwen3:8b"
+inference = "ollama"
+ollama_url = "http://localhost:11434"
+
+[compute]
+daily_hours = 7
+max_parallel_tools = 3
+context_window = 32768
+evolution_cycle_hours = 1
+
+[budget]
+# Token budgets per task type — LCAP defaults, updated by UCB1 after round 10
+tool_use_ceiling = 8192
+planning_ceiling = 16384
+self_correction_ceiling = 12288
+research_ceiling = 24576
+default_ceiling = 12288
