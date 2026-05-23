@@ -1,5 +1,15 @@
 # Rust build artifacts
+professor-x/target/
 jarvis/target/
 
 # Reference repos (local study material, not project code)
 _refs/
+
+# Credential vault files — never committed
+**/.professor-x/vault.key
+**/.professor-x/vault.enc
+**/.jarvis/vault.key
+**/.jarvis/vault.enc
+
+# OS noise
+.DS_Store
