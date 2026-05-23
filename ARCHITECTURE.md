@@ -57,6 +57,15 @@ git clone https://github.com/Imbad0202/academic-research-skills     # Academic S
 | 2506.02153 | Small Language Models are the Future of Agentic AI | [arxiv.org/abs/2506.02153](https://arxiv.org/abs/2506.02153) | Validates qwen2.5:14b-q4; xLAM-2-8B for tool calling |
 | 2510.03847 | SLMs for Agentic Systems Survey | [arxiv.org/abs/2510.03847](https://arxiv.org/abs/2510.03847) | vLLM/SGLang serving; JSON Schema validation patterns |
 
+**Tier 4 — Trifecta inventions (DHE, BF, LCAP) — read before implementing Section 14):**
+
+| ID | Title | Link | What it gives JARVIS |
+|----|-------|------|----------------------|
+| 2310.11511 | Self-RAG: Learning to Retrieve, Generate, and Critique | [arxiv.org/abs/2310.11511](https://arxiv.org/abs/2310.11511) | Adaptive retrieval (learn when to retrieve) — LCAP predecessor |
+| 2604.00594 | Agent Psychometrics: IRT for AI Agents | [arxiv.org/abs/2604.00594](https://arxiv.org/abs/2604.00594) | IRT decomposition: scaffold ability is separable from model ability — BF grounding |
+| 2601.19935 | Mem2ActBench | [arxiv.org/abs/2601.19935](https://arxiv.org/abs/2601.19935) | Oracle vs. retrieval 23-point gap — confirms allocation matters for LCAP |
+| 2506.21605 | MemBench | [arxiv.org/abs/2506.21605](https://arxiv.org/abs/2506.21605) | Store size degrades quality at 100K tokens — confirms BF & LCAP motivation |
+
 ---
 
 ## Contents
@@ -74,6 +83,7 @@ git clone https://github.com/Imbad0202/academic-research-skills     # Academic S
 11. [Inter-Component Data Flow](#11-inter-component-data-flow)
 12. [Design Flags](#12-design-flags)
 13. [Build Order](#13-build-order)
+14. [Trifecta Inventions — DHE, BF, LCAP](#14-trifecta-inventions--dhe-bf-lcap)
 
 ---
 
@@ -1082,11 +1092,244 @@ Week 4 — Professor X activation
   Verify: GitHub commit, Telegram/Discord messages, memd persists across restart
   Verify: evolved logged outcomes + generated at least one EvolutionNode
   Verify: AuditEntry chain valid after full day of operation
+
+Week 5 — Trifecta (DHE + BF + LCAP)
+  - DiagnosticTrace struct + 5-layer probe functions (see Section 14)
+  - DHE integration: Analyzer calls diagnostic before generating EvolutionNode
+  - BF integration: HiroRoundResult gets fingerprint: [f32; 3] field
+  - LCAP: LcapPolicy struct, ContextBudget per TaskType, bandit update loop
+  - LCAP integration: memd.build_context() accepts ContextBudget from LCAP
+  - Wire LCAP into DHE: Layer 2 attribution triggers LCAP.regress() directly
+  Run H1 experiment first (before LCAP goes live) to establish T*
+  Test: one failed task → DHE trace → attribution logged → correct layer identified
+  Test: 3 HIRO rounds with BF → fingerprint values differ across task categories
+  Test: LCAP policy updates after regression detected in one task type
 ```
 
 ---
 
-*Architecture version: 0.2*
-*Compiled: 2026-05-21*
+## 14. Trifecta Inventions — DHE, BF, LCAP
+
+**Full specification:** [brain/inventions.md](../professor-x-AGI/brain/inventions.md)
+
+Three novel mechanisms layered on top of the evolved component. None of them modify the core ReAct loop, memory architecture, or security model. They are purely additive — the system works without them (baseline JARVIS) and is instrumented by them (trifecta JARVIS).
+
+**Source papers (Tier 4 — read before Week 5):**
+- [Self-RAG (arXiv:2310.11511)](https://arxiv.org/abs/2310.11511) — adaptive retrieval as LCAP predecessor
+- [Agent Psychometrics (arXiv:2604.00594)](https://arxiv.org/abs/2604.00594) — IRT decomposition as BF grounding
+- [AHE Table 3 (arXiv:2604.25850)](https://arxiv.org/abs/2604.25850) — 33.7% fix-prediction precision as DHE baseline
+
+---
+
+### 14.1 — DHE: Diagnostic Harness Evolution
+
+When a task fails, the Analyzer runs a 5-layer probe before invoking the Researcher:
+
+```rust
+// New struct in evolved/diagnostic.rs
+DiagnosticTrace {
+    task_id: u64,
+    failed_layer: u8,       // 1=retrieval, 2=context, 3=dispatch, 4=execution, 5=reasoning
+    evidence: String,
+    confidence: f32,
+    probe_results: Vec<LayerResult>,
+}
+
+LayerResult {
+    layer: u8,
+    test: String,           // what was checked
+    passed: bool,
+    detail: String,
+}
+```
+
+**5-layer probe logic:**
+
+```
+Layer 1 — Retrieval presence
+  memd.query(task.description, top_k=10)
+  Pass: any result has cosine_sim > 0.75 to the fact needed to solve the task
+  Fail: relevant memory was not retrieved → attribution = retrieval
+
+Layer 2 — Context construction
+  Inspect raw prompt sent to Ollama.
+  Pass: injected content is in first 25% or last 25% of token positions
+  Fail A: critical content is in middle 50% → position failure → attribution = context_builder
+  Fail B: total_tokens > T* (LCAP ceiling for this task type) → overload → attribution = context_overload
+
+Layer 3 — Tool dispatch
+  Parse Action field from execution trace.
+  Pass: Action parses cleanly AND selected tool is appropriate for the task
+  Fail: malformed Action OR wrong tool selected → attribution = tool_description
+
+Layer 4 — Tool execution
+  Inspect Observation.success.
+  Pass: success=true AND content is non-empty AND content is relevant
+  Fail: success=false → attribution = tool_implementation
+
+Layer 5 — Reasoning (LLM-as-judge)
+  Prompt: "Given [task, Observations, final Thought]: did reasoning correctly use the Observations? Answer yes/no."
+  Pass: yes → reasoning was fine, failure is at a different layer (re-examine 1-4)
+  Fail: no → attribution = reasoning (system_prompt or planning guidance)
+```
+
+**Integration with evolved cycle:**
+
+Modified Phase 4 (Analyze) in Section 9:
+
+```
+If task failed:
+  1. Run DHE probe → DiagnosticTrace
+  2. If failed_layer == 2 (context_overload): LCAP.regress(task_type) — no Researcher call needed
+  3. Else: Researcher receives attribution as constraint
+     ChangeManifest.root_cause must cite failed_layer and evidence
+     Researcher proposal must modify a component in the attributed layer
+  4. DiagnosticTrace written to EvolutionNode.diagnostics[]
+```
+
+**Measurable output:**
+
+After 30 rounds: `fix_prediction_precision = hits / DHE_preceded_nodes`. Target ≥ 0.60. Baseline (rounds without DHE) ≈ 0.337 (AHE reported figure).
+
+---
+
+### 14.2 — BF: Behavioral Fingerprinting
+
+Every HIRO round computes a 3-component fingerprint in addition to the aggregate score:
+
+```rust
+// Extend HiroRoundResult with:
+fingerprint: [f32; 3],          // [p_tool_use, p_planning, p_self_correction]
+delta_fingerprint: [f32; 3],    // fingerprint[k] - fingerprint[k-1]; [0,0,0] for round 0
+component_modified: Option<ComponentClass>,  // what changed since last round
+harness_commit: String,         // git commit hash of harness/ at round start
+
+// ComponentClass enum
+enum ComponentClass {
+    SystemPrompt,
+    ToolDescription,
+    MemoryArchitecture,
+    SkillDefinition,
+    ContextPolicy,   // LCAP policy change
+    None,            // null round (no modification)
+}
+```
+
+**Computation:** fingerprint[i] = pass@3 on the 20 tasks in category i. Already computed during HIRO — this is just storage and breakdown, not additional inference.
+
+**Storage:** `hiro_rounds` table in SQLite. One row per round. The 30-round fingerprint trajectory is the longitudinal dataset.
+
+**Automatic analysis at round end:**
+
+```
+If max(|delta_fingerprint|) > 0.05:
+  Log: "Significant fingerprint shift in round {k}: {category} moved {delta} pp"
+  Tag the EvolutionNode that was active this round as "fingerprint-significant"
+
+If any component < 0.50 and delta < 0:
+  Prioritize DHE probe on that category's failed tasks next round
+  (BF drives DHE targeting — this is the detect → attribute loop)
+```
+
+---
+
+### 14.3 — LCAP: Learned Context Allocation Policy
+
+Per-task-type context budget, updated between HIRO rounds via a UCB1 multi-armed bandit.
+
+```rust
+// New file: evolved/lcap.rs
+
+ContextBudget {
+    episodic_slots: u8,         // 0-10 episodic memory entries
+    semantic_slots: u8,         // 0-10 semantic memory entries
+    tool_depth: ToolDepth,      // Shallow / Medium / Full
+    system_prompt_tokens: u16,  // soft cap on system prompt length
+    hard_ceiling_tokens: u32,   // set from H1's T* once resolved
+}
+
+// Bandit arms per task type: 5 pre-defined strategies
+const ARMS: [ContextBudget; 5] = [
+    // Sparse: 1 episodic, 1 semantic, Shallow tools
+    // Conservative: 3 episodic, 2 semantic, Medium tools  (initial default)
+    // Balanced: 4 episodic, 4 semantic, Medium tools
+    // Rich: 6 episodic, 5 semantic, Full tools
+    // Memory-heavy: 8 episodic, 7 semantic, Shallow tools
+];
+
+LcapPolicy = HashMap<TaskType, ArmState>
+
+ArmState {
+    arm_idx: usize,            // current selected arm
+    arm_stats: [(f32, u32); 5], // (mean_pass3, visit_count) per arm
+    total_rounds: u32,
+}
+```
+
+**Update rule (called at end of each HIRO round):**
+
+```
+For each TaskType T:
+  arm = policy[T].arm_idx
+  arm_stats[arm].visits += 1
+  arm_stats[arm].mean = running_mean(arm_stats[arm].mean, p_T(k))
+
+  // UCB1 selection for next round
+  next_arm = argmax_i [ arm_stats[i].mean + 1.414 * sqrt(ln(total_rounds) / arm_stats[i].visits) ]
+  policy[T].arm_idx = next_arm
+```
+
+**Integration with memd.build_context():**
+
+```rust
+// Modified function signature:
+memd.build_context(task: &TaskNode, budget: &ContextBudget) -> ContextPrefix
+
+// agentd calls:
+let budget = lcap.get(task.task_type);
+let context = memd.build_context(task, &budget);
+```
+
+**DHE fast-path:**
+
+```
+If DHE attribution == context_overload (Layer 2, failed_layer=2):
+  lcap.force_reduce(task.task_type)  // reduce both episodic_slots and semantic_slots by 1
+  // no EvolutionNode generated, no Researcher call
+  // logged as DiagnosticTrace with layer=2 and action="lcap_reduce"
+```
+
+**Initial policy (before H1 resolves):**
+
+All task types start on arm 1 (Conservative: 3 episodic, 2 semantic, Medium tools, hard_ceiling_tokens = 6000). Once H1 experiment resolves T*, hard_ceiling_tokens is updated across all arms for all task types.
+
+---
+
+### 14.4 — Trifecta Integration Summary
+
+Three questions answered per HIRO round:
+
+| Question | Answered by | Data produced |
+|----------|-------------|---------------|
+| What is the harness bad at? | BF (fingerprint delta) | fingerprint[k], delta_fingerprint |
+| Why is it bad at it? | DHE (layer attribution) | DiagnosticTrace.failed_layer |
+| How should context be adjusted? | LCAP (bandit update) | new arm selection per task type |
+
+The three do not require each other to function. BF runs regardless. DHE runs on any failure. LCAP runs at every round end. But they are designed to feed each other:
+
+```
+BF identifies weak category
+  → DHE prioritizes that category's failures for diagnostic
+    → DHE attribution (layer 2) triggers LCAP fast-path reduce
+      → next round, BF measures whether the category recovered
+```
+
+This is the primary feedback loop of the trifecta. It operates faster than the full Researcher/Engineer/Analyzer loop (no LLM call needed for layer-2 attribution → LCAP response), which means context-related failures can be corrected in one round rather than waiting for a full evolution cycle.
+
+---
+
+*Architecture version: 0.3*
+*Compiled: 2026-05-22*
 *Status: Pre-implementation. No Rust files written yet.*
 *Next action: User reviews this document → switch to Linux machine → begin Week 1.*
+*Trifecta (Section 14) implemented in Week 5 after core system is stable.*
