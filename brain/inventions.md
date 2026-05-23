@@ -1,10 +1,10 @@
-# Inventions
+﻿# Inventions
 
 ## MHE — Metacognitive Harness Evolution (the overarching claim)
 
-**One sentence:** JARVIS is the first implementation of Metacognitive Harness Evolution — a self-improving agent system that operates three orthogonal self-improvement levers (parametric, contextual, structural) directed by a metacognitive self-model, running entirely on consumer hardware.
+**One sentence:** Professor X is the first implementation of Metacognitive Harness Evolution — a self-improving agent system that operates three orthogonal self-improvement levers (parametric, contextual, structural) directed by a metacognitive self-model, running entirely on consumer hardware.
 
-**Why MHE is the frame:** The ICML 2025 position paper "Truly Self-Improving Agents Require Intrinsic Metacognitive Learning" ([arXiv:2506.05109](https://arxiv.org/abs/2506.05109)) identified that genuine self-improvement requires three things: metacognitive knowledge (what can I do), metacognitive planning (what should I learn next), and metacognitive evaluation (did my learning work). It found no implementation. JARVIS is the implementation.
+**Why MHE is the frame:** The ICML 2025 position paper "Truly Self-Improving Agents Require Intrinsic Metacognitive Learning" ([arXiv:2506.05109](https://arxiv.org/abs/2506.05109)) identified that genuine self-improvement requires three things: metacognitive knowledge (what can I do), metacognitive planning (what should I learn next), and metacognitive evaluation (did my learning work). It found no implementation. Professor X is the implementation.
 
 **The three levers:**
 ```
@@ -21,11 +21,11 @@ Lever 3 — Structural (DHE-guided harness evolution, version-controlled)
   Portability: harness evolved on Qwen3-8B transfers to 17+ models (Life-Harness, arXiv:2605.22166).
 ```
 
-**The metacognitive self-model (MCA):** After each HIRO round, JARVIS records: which DHE layer was attributed, which lever was applied, did performance improve. Over time it learns calibration patterns — e.g., "Layer 3 → Lever 3 attribution is 78% reliable; Layer 5 → Lever 1 is only 41%." This is **MCA (Metacognitive Calibration Accuracy)**. Target: Pearson r(MCA, improvement_rate) > 0.70 over 30 rounds.
+**The metacognitive self-model (MCA):** After each HIRO round, Professor X records: which DHE layer was attributed, which lever was applied, did performance improve. Over time it learns calibration patterns — e.g., "Layer 3 → Lever 3 attribution is 78% reliable; Layer 5 → Lever 1 is only 41%." This is **MCA (Metacognitive Calibration Accuracy)**. Target: Pearson r(MCA, improvement_rate) > 0.70 over 30 rounds.
 
-**What makes this Alpaca-scale:** Stanford Alpaca showed: use GPT-4 to generate cheap training data, fine-tune a smaller model. JARVIS shows: use consumer-hardware harness evolution to generate portable structural improvements that transfer across the model ecosystem. The evolved harness *is* the dataset — a small-team artifact any lab can adopt.
+**What makes this Alpaca-scale:** Stanford Alpaca showed: use GPT-4 to generate cheap training data, fine-tune a smaller model. Professor X shows: use consumer-hardware harness evolution to generate portable structural improvements that transfer across the model ecosystem. The evolved harness *is* the dataset — a small-team artifact any lab can adopt.
 
-**The closest competitor:** Meta-Harness ([arXiv:2603.28052](https://arxiv.org/abs/2603.28052), Stanford/MIT/KRAFTON) uses Claude Code as proposer, achieves +7.7pp text classification, #2 TerminalBench-2. Requires frontier API, no metacognitive self-model, Lever 3 only. JARVIS runs on Qwen3-8B locally, combines all three levers, has DHE diagnostics before every proposal.
+**The closest competitor:** Meta-Harness ([arXiv:2603.28052](https://arxiv.org/abs/2603.28052), Stanford/MIT/KRAFTON) uses Claude Code as proposer, achieves +7.7pp text classification, #2 TerminalBench-2. Requires frontier API, no metacognitive self-model, Lever 3 only. Professor X runs on Qwen3-8B locally, combines all three levers, has DHE diagnostics before every proposal.
 
 ---
 
@@ -157,13 +157,13 @@ AHE reports 33.7% fix-prediction precision (Table 3, unguided component modifica
 
 ### One-sentence claim
 
-A harness's behavioral fingerprint is a performance vector across the HIRO task categories, computed every round. JARVIS produces the first longitudinal fingerprint dataset — 30 data points showing how a consumer-hardware harness's capability profile shifts during autonomous evolution — and shows that improvement is non-uniform across task types.
+A harness's behavioral fingerprint is a performance vector across the HIRO task categories, computed every round. Professor X produces the first longitudinal fingerprint dataset — 30 data points showing how a consumer-hardware harness's capability profile shifts during autonomous evolution — and shows that improvement is non-uniform across task types.
 
 ### Why this is novel
 
 Agent benchmarks report aggregate performance (pass@k on a fixed suite). No existing work tracks a harness's *capability profile* as a vector over time. You cannot tell from a HIRO(30) = 0.04 score whether the harness became uniformly slightly better at everything, or excellent at tool-use while regressing on planning. These are different outcomes with different implications.
 
-Longitudinal capability data for self-evolving harnesses does not exist in the literature. JARVIS creates it.
+Longitudinal capability data for self-evolving harnesses does not exist in the literature. Professor X creates it.
 
 ### The fingerprint vector
 
@@ -238,7 +238,7 @@ This dataset, released alongside the paper, enables:
 
 ### One-sentence claim
 
-Instead of a hand-designed static context allocation (e.g., "always inject top-5 memories, always use full tool descriptions"), JARVIS learns a per-task-type allocation policy — how many episodic entries, how many semantic entries, what tool description depth, what system prompt version — and updates this policy based on HIRO round outcomes.
+Instead of a hand-designed static context allocation (e.g., "always inject top-5 memories, always use full tool descriptions"), Professor X learns a per-task-type allocation policy — how many episodic entries, how many semantic entries, what tool description depth, what system prompt version — and updates this policy based on HIRO round outcomes.
 
 ### Why this is novel
 
@@ -385,7 +385,7 @@ BF cannot be ablated — it's the measurement instrument. The fingerprint always
 - 4-baseline table fully filled: Lever 1 + Lever 3 combination is superadditive
 - H9 confirmed: HIRO(30) on RTX 3060 ≥ frontier API with same harness → harness dominates model
 - MCA-IR correlation > 0.70: agents with better self-models improve faster (the metacognitive claim)
-- Harness transfer: evolved harness from JARVIS improves a completely different model (test on llama4:scout) with no re-evolution
+- Harness transfer: evolved harness from Professor X improves a completely different model (test on llama4:scout) with no re-evolution
 
 ---
 

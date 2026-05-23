@@ -1,4 +1,4 @@
-# Hypotheses
+﻿# Hypotheses
 
 Active hypotheses under investigation. Every entry is a falsifiable prediction with a proposed test.
 Confidence scores are priors — they update as experiments run. If I don't know something, I say so here rather than in the paper.
@@ -16,7 +16,7 @@ Format: Statement → Evidence → Test → Success Criteria → Status
 **Evidence (prior to testing):**
 - [Lost in the Middle (arXiv:2307.03172)](https://arxiv.org/abs/2307.03172): U-shaped performance curve in 13B models. Middle-injected content can drop accuracy *below* the zero-retrieval baseline (56.1%).
 - [Context Window Utilization (arXiv:2407.19794)](https://arxiv.org/abs/2407.19794): Optimal RAG utilization is 40–70% of context window. No improvement beyond 10 chunks.
-- [Quantization × Context (arXiv:2505.20276)](https://arxiv.org/abs/2505.20276): Q4 quantization compounds context degradation faster than FP16. JARVIS's specific model class (14B Q4) degrades at lower context lengths than the base papers tested.
+- [Quantization × Context (arXiv:2505.20276)](https://arxiv.org/abs/2505.20276): Q4 quantization compounds context degradation faster than FP16. Professor X's specific model class (14B Q4) degrades at lower context lengths than the base papers tested.
 - VRAM analysis: At Q4_K_M on 12GB, 14B model weights consume ~8.5–9GB, leaving ~3GB for KV cache. At 16K context, throughput drops 5–15×. Conservative practical limit: 8K–16K tokens before throughput collapse.
 
 **Proposed test:**
@@ -86,7 +86,7 @@ Run 60 HIRO tasks under two strategies: (a) passive injection of top-5 episodic/
 - [CLAG (arXiv:2603.15421)](https://arxiv.org/abs/2603.15421): cluster contamination degrades retrieval in SLMs specifically.
 
 **Proposed test:**
-Run JARVIS for 7 days with full logging (baseline). Then replay the same task sequence with the surprise filter (cosine distance threshold 0.3 — only store if most similar existing entry has distance > 0.3). Compare: episodic store entry count, Evidence F1 on 30 fixed test queries, task pass@3.
+Run Professor X for 7 days with full logging (baseline). Then replay the same task sequence with the surprise filter (cosine distance threshold 0.3 — only store if most similar existing entry has distance > 0.3). Compare: episodic store entry count, Evidence F1 on 30 fixed test queries, task pass@3.
 
 **Success criteria:** Entry count reduction > 50%. Evidence F1 drop < 5 pp. Pass@3 within 3 pp of baseline.
 
@@ -98,21 +98,21 @@ Run JARVIS for 7 days with full logging (baseline). Then replay the same task se
 
 ## H5 — Autonomous Harness Evolution Matches Human Engineering
 
-**Statement:** JARVIS's autonomous harness evolution over 30 days will produce a HIRO(30) score within 0.015 of a baseline where a human expert manually improves the harness for equivalent calendar time.
+**Statement:** Professor X's autonomous harness evolution over 30 days will produce a HIRO(30) score within 0.015 of a baseline where a human expert manually improves the harness for equivalent calendar time.
 
 **Why this matters:** This is the thesis claim. If autonomous evolution can match human engineering — on consumer hardware, with a small model — that is a genuine result. The comparison is honest: same time budget, same starting harness, same task distribution. We are not claiming the agent is smarter than the human. We are claiming the agent is *comparably effective* without the human.
 
 **Evidence (prior to testing):**
-- [HAL (arXiv:2510.11977)](https://arxiv.org/abs/2510.11977): Scaffold change from generic to Claude Code lifted accuracy from 42% → 78% — 36 points from harness engineering alone, larger than most model upgrades. Human engineers produce this. JARVIS aims to produce the same autonomously.
+- [HAL (arXiv:2510.11977)](https://arxiv.org/abs/2510.11977): Scaffold change from generic to Claude Code lifted accuracy from 42% → 78% — 36 points from harness engineering alone, larger than most model upgrades. Human engineers produce this. Professor X aims to produce the same autonomously.
 - [AHE (arXiv:2604.25850)](https://arxiv.org/abs/2604.25850): 10 automated rounds lifted pass@1 from 69.7% → 77.0% on Terminal-Bench 2. This is machine-produced harness improvement. The question is whether it matches what a human would do in the same time window.
 - No paper has run this comparison. This is genuinely unknown.
 
 **Proposed test:**
-Run HIRO(30) with three conditions: (a) JARVIS autonomous evolution, (b) human expert improving harness 30 minutes per day for 30 days (equivalent effort estimate), (c) static harness (no evolution, null hypothesis). Compare HIRO(30) scores.
+Run HIRO(30) with three conditions: (a) Professor X autonomous evolution, (b) human expert improving harness 30 minutes per day for 30 days (equivalent effort estimate), (c) static harness (no evolution, null hypothesis). Compare HIRO(30) scores.
 
-**Success criteria:** |HIRO_JARVIS - HIRO_human| < 0.015. HIRO_JARVIS >> HIRO_static (p < 0.05).
+**Success criteria:** |HIRO_Professor X - HIRO_human| < 0.015. HIRO_Professor X >> HIRO_static (p < 0.05).
 
-**Confidence:** 0.45 — genuinely uncertain. I think JARVIS will be competitive. I do not know if it will match a skilled human. That is the experiment.
+**Confidence:** 0.45 — genuinely uncertain. I think Professor X will be competitive. I do not know if it will match a skilled human. That is the experiment.
 
 **Status:** This is the core experiment. It runs after H1–H4 are resolved, because the harness under test should already incorporate whatever memory architecture best practices H1–H4 establish.
 
@@ -131,7 +131,7 @@ Run HIRO(30) with three conditions: (a) JARVIS autonomous evolution, (b) human e
 - [MemBench (arXiv:2506.21605)](https://arxiv.org/abs/2506.21605): accuracy degrades at 100K vs. 10K tokens — demonstrates that store size hurts quality.
 
 **Proposed test:**
-Run JARVIS for 14 days with full logging. After day 7, apply nightly compression (K-Means cluster → profile replacement for entries older than 7 days). Measure Evidence F1 on 30 fixed test queries at days 7, 10, 14 (before compression, mid-compression, fully compressed). Compare entry count.
+Run Professor X for 14 days with full logging. After day 7, apply nightly compression (K-Means cluster → profile replacement for entries older than 7 days). Measure Evidence F1 on 30 fixed test queries at days 7, 10, 14 (before compression, mid-compression, fully compressed). Compare entry count.
 
 **Success criteria:** Evidence F1 drop < 10 pp at day 14 vs. day 7. Entry count for pre-compression window reduced by > 70%.
 
@@ -190,17 +190,17 @@ This is measured automatically during HIRO. After 10+ rounds, compute the mean n
 
 ## H9 — Consumer Hardware HIRO Parity with Frontier APIs
 
-**Statement:** JARVIS running qwen2.5:14b-q4 on RTX 3060 12GB will achieve a HIRO(20) score within 0.03 of the same harness running against a frontier API (GPT-4o or Claude Sonnet), demonstrating that the harness, not the model, dominates HIRO.
+**Statement:** Professor X running qwen2.5:14b-q4 on RTX 3060 12GB will achieve a HIRO(20) score within 0.03 of the same harness running against a frontier API (GPT-4o or Claude Sonnet), demonstrating that the harness, not the model, dominates HIRO.
 
 **Why this matters:** This is the consumer hardware claim. If confirmed, it means the hardware gap between a $400 GPU and a frontier API subscription is closeable through harness engineering. That is a direct challenge to the assumption that better AI requires more compute.
 
 **Evidence (prior to testing):**
-- [HAL (arXiv:2510.11977)](https://arxiv.org/abs/2510.11977): scaffold accounted for a 36-point swing — larger than the difference between most model tiers. If the harness is the dominant factor, then JARVIS's harness quality matters more than the model gap.
+- [HAL (arXiv:2510.11977)](https://arxiv.org/abs/2510.11977): scaffold accounted for a 36-point swing — larger than the difference between most model tiers. If the harness is the dominant factor, then Professor X's harness quality matters more than the model gap.
 - [SLMs paper (arXiv:2506.02153)](https://arxiv.org/abs/2506.02153): 7B SLMs match frontier on structured agentic tasks with guided decoding and schema enforcement.
 - [Agent Psychometrics (arXiv:2604.00594)](https://arxiv.org/abs/2604.00594): IRT decomposition suggests scaffold "ability" is a real, separable quantity from model ability.
 
 **Proposed test:**
-Run HIRO(20) twice: (a) JARVIS on RTX 3060 with qwen2.5:14b-q4, (b) same JARVIS harness with model endpoint swapped to Claude Sonnet or GPT-4o API. Same task set, same evolution budget, same starting harness. Compare HIRO(20) scores.
+Run HIRO(20) twice: (a) Professor X on RTX 3060 with qwen2.5:14b-q4, (b) same Professor X harness with model endpoint swapped to Claude Sonnet or GPT-4o API. Same task set, same evolution budget, same starting harness. Compare HIRO(20) scores.
 
 **Success criteria:** |HIRO_local - HIRO_frontier| < 0.03. If the harness dominates, the scores should be close.
 
@@ -234,7 +234,7 @@ Run 30 HIRO rounds with DHE active from round 10 onward (rounds 1–9: baseline 
 
 ## H11 — Behavioral Fingerprint Non-Uniformity
 
-**Statement:** Over 30 HIRO rounds, JARVIS's behavioral fingerprint [p_tool, p_plan, p_correct] will show non-uniform improvement: at least one task category will improve by > 10 pp from F(H_0) while at least one other regresses or plateaus (Δ < 3 pp over the same period). The non-uniformity will correlate with modification type (r > 0.5 between component_modified and delta_fingerprint component).
+**Statement:** Over 30 HIRO rounds, Professor X's behavioral fingerprint [p_tool, p_plan, p_correct] will show non-uniform improvement: at least one task category will improve by > 10 pp from F(H_0) while at least one other regresses or plateaus (Δ < 3 pp over the same period). The non-uniformity will correlate with modification type (r > 0.5 between component_modified and delta_fingerprint component).
 
 **Why this matters:** If confirmed, it means harness evolution has selective pressure — modifications improve certain capabilities while leaving others unchanged. This has direct implications for harness engineering: you cannot evaluate a self-evolving system by its aggregate score alone. The fingerprint becomes a required reporting standard for any claim of harness improvement. If falsified (uniform improvement across all categories), it means HIRO's task categories are too correlated to distinguish capability effects.
 
@@ -304,7 +304,7 @@ H9 (consumer hardware parity) ← run after H5
 
 ## H13 — MCA-IR Correlation (Metacognitive Calibration)
 
-**Statement:** Over 30 HIRO rounds, JARVIS's metacognitive calibration accuracy (MCA — fraction of DHE attributions where the predicted lever fix actually improved the targeted task type) will correlate positively with improvement rate IR (5-round rolling HIRO gain). Pearson r(MCA, IR) > 0.70.
+**Statement:** Over 30 HIRO rounds, Professor X's metacognitive calibration accuracy (MCA — fraction of DHE attributions where the predicted lever fix actually improved the targeted task type) will correlate positively with improvement rate IR (5-round rolling HIRO gain). Pearson r(MCA, IR) > 0.70.
 
 **Why this matters:** This is the core empirical claim of Metacognitive Harness Evolution. It says: agents that have more accurate self-models improve faster. If confirmed, it validates the metacognitive frame — not just as a philosophical point, but as a measurable operational driver of improvement rate. If falsified (r < 0.40), the self-model is epiphenomenal and the improvement comes from the mechanisms (DHE, LCAP) themselves, not from calibrated self-knowledge.
 

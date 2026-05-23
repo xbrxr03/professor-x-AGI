@@ -1,4 +1,4 @@
-# Knowledge Base
+﻿# Knowledge Base
 
 What I currently know, with sources. This grows as I research. Every claim has a citation.
 
@@ -16,7 +16,7 @@ What I currently know, with sources. This grows as I research. Every claim has a
 
 **Harness-level evolution is not covered in the literature as a first-class category.** Confirmed by: [arXiv:2507.21046](https://arxiv.org/abs/2507.21046) (What/When/How/Where taxonomy — harness infrastructure absent from "What to evolve"), [arXiv:2508.07407](https://arxiv.org/abs/2508.07407) (comprehensive survey — same gap), [arXiv:2604.08224](https://arxiv.org/abs/2604.08224) (identifies self-evolving harnesses as emerging direction but cites no implementations).
 
-**Darwin Gödel Machine ([arXiv:2505.22954](https://arxiv.org/abs/2505.22954))** is the closest system to JARVIS's self-modification approach. SWE-bench: 20% → 50% across agent generations. Modifies its own code including future modification capability. Does NOT isolate harness vs. model contribution. Does NOT operate on consumer hardware.
+**Darwin Gödel Machine ([arXiv:2505.22954](https://arxiv.org/abs/2505.22954))** is the closest system to Professor X's self-modification approach. SWE-bench: 20% → 50% across agent generations. Modifies its own code including future modification capability. Does NOT isolate harness vs. model contribution. Does NOT operate on consumer hardware.
 
 ---
 
@@ -28,7 +28,7 @@ What I currently know, with sources. This grows as I research. Every claim has a
 
 **For qwen2.5:14b-q4 on 12GB VRAM, the practical context limit is approximately 8K–16K tokens.** Derived from: model weights consume ~8.5–9GB, leaving ~3GB for KV cache. At 16K context, throughput drops 5–15×. At 14K context (Qwen1.5-14B equivalent), latency overhead is +700%. Conservative safe operating range: 6,000–10,000 tokens total context.
 
-**Quantization compounds context degradation.** [arXiv:2505.20276](https://arxiv.org/abs/2505.20276): Q4 models degrade faster at long context than FP16, particularly with RoPE positional encoding. JARVIS's model class (14B Q4) is specifically tested here.
+**Quantization compounds context degradation.** [arXiv:2505.20276](https://arxiv.org/abs/2505.20276): Q4 models degrade faster at long context than FP16, particularly with RoPE positional encoding. Professor X's model class (14B Q4) is specifically tested here.
 
 **Retrieval failure is the dominant bottleneck, not reasoning.** [Mem2ActBench (arXiv:2601.19935)](https://arxiv.org/abs/2601.19935): oracle injection (F1 ≈ 53.8) vs. standard retrieval (F1 ≈ 30.7) — 23-point gap. When the right memory is directly provided, performance jumps 23 points. The retrieval mechanism, not the model's reasoning, accounts for most failures.
 
@@ -44,7 +44,7 @@ What I currently know, with sources. This grows as I research. Every claim has a
 
 **The harness matters more than the model at this scale.** HAL's +36pp scaffold finding means a well-engineered harness around a 14B model can outperform a poorly-engineered harness around a frontier model on structured tasks. This is the empirical foundation for the thesis.
 
-**xLAM-2-8B surpasses GPT-4o on function calling benchmarks.** [SLMs paper (arXiv:2506.02153)](https://arxiv.org/abs/2506.02153). Worth evaluating as a dedicated tool-dispatch sub-model inside JARVIS alongside qwen2.5:14b-q4 as the primary reasoning model.
+**xLAM-2-8B surpasses GPT-4o on function calling benchmarks.** [SLMs paper (arXiv:2506.02153)](https://arxiv.org/abs/2506.02153). Worth evaluating as a dedicated tool-dispatch sub-model inside Professor X alongside qwen2.5:14b-q4 as the primary reasoning model.
 
 **all-MiniLM-L6-v2 at 384 dimensions is the correct embedding model.** Used by ASI-Evolve ([arXiv:2603.29640](https://arxiv.org/abs/2603.29640)) in production. ~80MB RAM. CPU-only (no VRAM cost). ~5–10ms per embedding. CLAG ([arXiv:2603.15421](https://arxiv.org/abs/2603.15421)) validates retrieval quality using this model.
 
@@ -86,7 +86,7 @@ What I currently know, with sources. This grows as I research. Every claim has a
 
 ## On the Three-Lever Framework
 
-**The three levers are orthogonal and composable.** Every existing self-improvement paper touches exactly one: parametric (weights), contextual (in-context), or structural (harness). JARVIS is the first to combine all three with a metacognitive self-model directing which lever to apply per failure type.
+**The three levers are orthogonal and composable.** Every existing self-improvement paper touches exactly one: parametric (weights), contextual (in-context), or structural (harness). Professor X is the first to combine all three with a metacognitive self-model directing which lever to apply per failure type.
 
 **Lever 1 — Parametric (SDAR, fine-tuning):** [SDAR (arXiv:2605.15155)](https://arxiv.org/abs/2605.15155) — token-level sigmoid-gated distillation on Qwen3 families. +9.4% ALFWorld, +10.2% WebShop. Overnight QLoRA feasible on RTX 3060 (Qwen3-8B 4-bit ≈ 6GB with unsloth). The Alpaca analogy: use the agent's own successful trajectories as self-generated training data. Slow, model-specific, permanent.
 
@@ -98,21 +98,21 @@ What I currently know, with sources. This grows as I research. Every claim has a
 
 **No existing paper states the three-lever framework explicitly.** The taxonomy is a contribution in itself — it names and structures something the community is doing implicitly.
 
-**"It's Not the Size" ([arXiv:2605.12129](https://arxiv.org/abs/2605.12129))** directly validates JARVIS's approach: 4-stage pipeline (planning, execution, verification, recovery) achieves TSR=0.952 on Gemma4 2B. Harness design determines operational stability, not model size. Published May 2026.
+**"It's Not the Size" ([arXiv:2605.12129](https://arxiv.org/abs/2605.12129))** directly validates Professor X's approach: 4-stage pipeline (planning, execution, verification, recovery) achieves TSR=0.952 on Gemma4 2B. Harness design determines operational stability, not model size. Published May 2026.
 
 ---
 
-## On Comparable Systems and What JARVIS Adds
+## On Comparable Systems and What Professor X Adds
 
 **Meta-Harness (Stanford, [arXiv:2603.28052](https://arxiv.org/abs/2603.28052))** is the closest competitor for Lever 3. Key differences:
 - Meta-Harness: frontier API (Claude Code), no consumer hardware constraint, no metacognitive self-model, Lever 3 only
-- JARVIS: Qwen3-8B locally, metacognitive self-model (MHE), all three levers, diagnostics before modification (DHE)
+- Professor X: Qwen3-8B locally, metacognitive self-model (MHE), all three levers, diagnostics before modification (DHE)
 
-**Statistical Limits of Self-Improving Agents ([arXiv:2510.04399](https://arxiv.org/abs/2510.04399))** establishes a formal theorem: self-improvement is safe and lossless iff model capacity is bounded. JARVIS's harness evolution (frozen model weights, harness-level changes only) satisfies this condition by construction. This is free theoretical grounding for why our approach is safe to let run unattended.
+**Statistical Limits of Self-Improving Agents ([arXiv:2510.04399](https://arxiv.org/abs/2510.04399))** establishes a formal theorem: self-improvement is safe and lossless iff model capacity is bounded. Professor X's harness evolution (frozen model weights, harness-level changes only) satisfies this condition by construction. This is free theoretical grounding for why our approach is safe to let run unattended.
 
-**MARS ([arXiv:2601.11974](https://arxiv.org/abs/2601.11974))** is the Lever 2 component that complements DHE at Layer 5 (reasoning failures). Principle-based reflection (what rules to avoid) + procedural reflection (what steps to take). Single cycle, no multi-turn loop. ~70% less compute than recursive Reflexion. Integrates directly into JARVIS's Reflexion buffer.
+**MARS ([arXiv:2601.11974](https://arxiv.org/abs/2601.11974))** is the Lever 2 component that complements DHE at Layer 5 (reasoning failures). Principle-based reflection (what rules to avoid) + procedural reflection (what steps to take). Single cycle, no multi-turn loop. ~70% less compute than recursive Reflexion. Integrates directly into Professor X's Reflexion buffer.
 
-**Missing Knowledge Layer ([arXiv:2604.11364](https://arxiv.org/abs/2604.11364))** identifies a four-tier memory hierarchy with distinct persistence semantics: Knowledge (indefinite supersession), Memory (Ebbinghaus decay), Wisdom (evidence-gated revision), Intelligence (ephemeral). JARVIS's current CoALA-based design partially maps: Pinned ≈ Knowledge, Episodic ≈ Memory, Semantic ≈ Wisdom (partially). Upgrade path: separate persistence semantics per tier with different update rules.
+**Missing Knowledge Layer ([arXiv:2604.11364](https://arxiv.org/abs/2604.11364))** identifies a four-tier memory hierarchy with distinct persistence semantics: Knowledge (indefinite supersession), Memory (Ebbinghaus decay), Wisdom (evidence-gated revision), Intelligence (ephemeral). Professor X's current CoALA-based design partially maps: Pinned ≈ Knowledge, Episodic ≈ Memory, Semantic ≈ Wisdom (partially). Upgrade path: separate persistence semantics per tier with different update rules.
 
 ---
 
@@ -137,7 +137,7 @@ What I currently know, with sources. This grows as I research. Every claim has a
 
 **Confidence scores update with evidence.** Every hypothesis has a prior confidence. It moves based on data. A hypothesis I was 0.85 confident in, if it fails the test, moves to dead-ends.md with the reason. The initial confidence score is not a claim — it is a starting point.
 
-**Every claim in the paper needs an arXiv ID or a JARVIS experiment ID.** No unsourced claims. If I don't know something, I say I don't know it.
+**Every claim in the paper needs an arXiv ID or a Professor X experiment ID.** No unsourced claims. If I don't know something, I say I don't know it.
 
 ---
 
@@ -145,14 +145,14 @@ What I currently know, with sources. This grows as I research. Every claim has a
 
 ## On Reference Implementations (toolbridge and agentd)
 
-**ARGO ([github.com/xark-argo/argo](https://github.com/xark-argo/argo))** is an open-source local "Manus alternative" desktop agent platform. Offline-first RAG, built-in tools (web search, crawler, browser, file management), MCP integration (STDIO + SSE). Supports Win/Mac/Docker. Relevant to JARVIS as a reference for toolbridge's tool registry and agentd's task execution patterns. JARVIS differs: Rust core, policyd security layer, self-evolution. ARGO is a reference, not a competitor.
+**ARGO ([github.com/xark-argo/argo](https://github.com/xark-argo/argo))** is an open-source local "Manus alternative" desktop agent platform. Offline-first RAG, built-in tools (web search, crawler, browser, file management), MCP integration (STDIO + SSE). Supports Win/Mac/Docker. Relevant to Professor X as a reference for toolbridge's tool registry and agentd's task execution patterns. Professor X differs: Rust core, policyd security layer, self-evolution. ARGO is a reference, not a competitor.
 
-**AgenticSeek ([github.com/andrewstack-maker/agenticSeek](https://github.com/andrewstack-maker/agenticSeek))** is a fully local voice-enabled autonomous agent (26K stars). Web browsing, code execution, task planning, zero cloud dependency. Runs on local LLMs. Directly validates the market demand for local-first autonomous agents. Patterns useful for JARVIS's agentd task graph and toolbridge web/code tools. Note: MCP agent not yet functional as of 2026.
+**AgenticSeek ([github.com/andrewstack-maker/agenticSeek](https://github.com/andrewstack-maker/agenticSeek))** is a fully local voice-enabled autonomous agent (26K stars). Web browsing, code execution, task planning, zero cloud dependency. Runs on local LLMs. Directly validates the market demand for local-first autonomous agents. Patterns useful for Professor X's agentd task graph and toolbridge web/code tools. Note: MCP agent not yet functional as of 2026.
 
-Both systems confirm the gap: no open-source local agent has a self-evolution loop, metacognitive self-model, or harness-level version-controlled modification. JARVIS fills this.
+Both systems confirm the gap: no open-source local agent has a self-evolution loop, metacognitive self-model, or harness-level version-controlled modification. Professor X fills this.
 
 ---
 
 *Last updated: 2026-05-23*
-*Status: Pre-experiment. All entries are literature-based, not yet from JARVIS experiments.*
+*Status: Pre-experiment. All entries are literature-based, not yet from Professor X experiments.*
 *Major update: Added three-lever framework, comparable systems analysis, model stack correction (Qwen3-8B), 9 new Tier 5 papers, ARGO/AgenticSeek reference implementations.*

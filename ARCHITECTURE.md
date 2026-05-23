@@ -1,4 +1,4 @@
-# JARVIS — Architecture Document
+﻿# Professor X — Architecture Document
 > Design-before-code. No .rs files until this document is reviewed and approved.
 >
 > **For the Linux agent:** Every repo and paper linked below should be cloned/fetched before starting implementation. The repos are the direct sources for the data structures and patterns described here.
@@ -27,7 +27,7 @@ git clone https://github.com/Imbad0202/academic-research-skills     # Academic S
 
 **Tier 1 — Core architecture (read in full before touching any component):**
 
-| ID | Title | Link | What it gives JARVIS |
+| ID | Title | Link | What it gives Professor X |
 |----|-------|------|----------------------|
 | 2604.25850 | Agentic Harness Engineering (AHE) | [arxiv.org/abs/2604.25850](https://arxiv.org/abs/2604.25850) | Harness taxonomy, 3-pillar observability, change manifests |
 | 2603.29640 | ASI-Evolve: AI Accelerates AI | [arxiv.org/abs/2603.29640](https://arxiv.org/abs/2603.29640) | Researcher/Engineer/Analyzer loop, cognition base, Node schema |
@@ -38,7 +38,7 @@ git clone https://github.com/Imbad0202/academic-research-skills     # Academic S
 
 **Tier 2 — Memory and context (read before implementing memd):**
 
-| ID | Title | Link | What it gives JARVIS |
+| ID | Title | Link | What it gives Professor X |
 |----|-------|------|----------------------|
 | 2603.07670 | Memory for Autonomous LLM Agents | [arxiv.org/abs/2603.07670](https://arxiv.org/abs/2603.07670) | Write-manage-read loop, multi-signal retrieval scoring |
 | 2603.15421 | CLAG: Memory for Small Language Models | [arxiv.org/abs/2603.15421](https://arxiv.org/abs/2603.15421) | Two-stage cluster retrieval, 100-entry cold start |
@@ -47,11 +47,11 @@ git clone https://github.com/Imbad0202/academic-research-skills     # Academic S
 
 **Tier 3 — Self-evolution taxonomy + SLMs (read before implementing evolved):**
 
-| ID | Title | Link | What it gives JARVIS |
+| ID | Title | Link | What it gives Professor X |
 |----|-------|------|----------------------|
 | 2507.21046 | Self-Evolving Agents: What/When/How/Where | [arxiv.org/abs/2507.21046](https://arxiv.org/abs/2507.21046) | Confirms harness-level evolution is a literature gap |
 | 2508.07407 | Comprehensive Survey of Self-Evolving AI | [arxiv.org/abs/2508.07407](https://arxiv.org/abs/2508.07407) | Four-component framework; confirms gap |
-| 2508.16153 | Memento: Agent Optimization Without Weight Updates | [arxiv.org/abs/2508.16153](https://arxiv.org/abs/2508.16153) | Closest prior work to JARVIS's approach — read carefully |
+| 2508.16153 | Memento: Agent Optimization Without Weight Updates | [arxiv.org/abs/2508.16153](https://arxiv.org/abs/2508.16153) | Closest prior work to Professor X's approach — read carefully |
 | 2507.19457 | GEPA: Reflective Prompt Evolution Beats RL | [arxiv.org/abs/2507.19457](https://arxiv.org/abs/2507.19457) | Prompt-level evolution as a feasible evolution target |
 | 2511.10395 | AgentEvolver | [arxiv.org/abs/2511.10395](https://arxiv.org/abs/2511.10395) | Experience unit format "when to use" + "content" |
 | 2506.02153 | Small Language Models are the Future of Agentic AI | [arxiv.org/abs/2506.02153](https://arxiv.org/abs/2506.02153) | Validates SLM + good harness ≥ frontier + bad harness; xLAM-2-8B for tool calling |
@@ -59,7 +59,7 @@ git clone https://github.com/Imbad0202/academic-research-skills     # Academic S
 
 **Tier 4 — Trifecta inventions (DHE, BF, LCAP) — read before implementing Section 14):**
 
-| ID | Title | Link | What it gives JARVIS |
+| ID | Title | Link | What it gives Professor X |
 |----|-------|------|----------------------|
 | 2310.11511 | Self-RAG: Learning to Retrieve, Generate, and Critique | [arxiv.org/abs/2310.11511](https://arxiv.org/abs/2310.11511) | Adaptive retrieval (learn when to retrieve) — LCAP predecessor |
 | 2604.00594 | Agent Psychometrics: IRT for AI Agents | [arxiv.org/abs/2604.00594](https://arxiv.org/abs/2604.00594) | IRT decomposition: scaffold ability is separable from model ability — BF grounding |
@@ -68,22 +68,22 @@ git clone https://github.com/Imbad0202/academic-research-skills     # Academic S
 
 **Tier 5 — Three-lever framework + comparative landscape (read before writing the paper):**
 
-| ID | Title | Link | What it gives JARVIS |
+| ID | Title | Link | What it gives Professor X |
 |----|-------|------|----------------------|
 | 2605.15155 | SDAR: Self-Distilled Agentic Reinforcement Learning | [arxiv.org/abs/2605.15155](https://arxiv.org/abs/2605.15155) | Lever 1 (parametric): token-level sigmoid-gated distillation, +9.4% ALFWorld on Qwen3 |
 | 2605.22166 | Life-Harness (Adapting the Interface, Not the Model) | [arxiv.org/abs/2605.22166](https://arxiv.org/abs/2605.22166) | Lever 3 portability proof: harness from Qwen3-4B transfers to 17 models, 88.5% avg improvement |
 | 2505.00234 | Self-Generated In-Context Examples | [arxiv.org/abs/2505.00234](https://arxiv.org/abs/2505.00234) | Lever 2 (contextual): 73%→93% ALFWorld zero fine-tuning, trajectory replay via ICL |
 | 2505.03335 | Absolute Zero | [arxiv.org/abs/2505.03335](https://arxiv.org/abs/2505.03335) | Self-generated curriculum, zero external data, NeurIPS 2025 spotlight |
-| 2603.28052 | Meta-Harness (Stanford) | [arxiv.org/abs/2603.28052](https://arxiv.org/abs/2603.28052) | Closest competitor: LLM-based harness optimization using frontier APIs (Claude Code as proposer). JARVIS differs: consumer hardware, metacognitive self-model, three levers combined |
+| 2603.28052 | Meta-Harness (Stanford) | [arxiv.org/abs/2603.28052](https://arxiv.org/abs/2603.28052) | Closest competitor: LLM-based harness optimization using frontier APIs (Claude Code as proposer). Professor X differs: consumer hardware, metacognitive self-model, three levers combined |
 | 2604.20938 | Harbor: Automated Harness Optimization | [arxiv.org/abs/2604.20938](https://arxiv.org/abs/2604.20938) | Bayesian optimization (not LLM-based) for harness config search — complementary approach, no metacognition |
 | 2603.10600 | Trajectory-Informed Memory Generation | [arxiv.org/abs/2603.10600](https://arxiv.org/abs/2603.10600) | Lever 2 variant: 14.3pp gains (149% relative on complex tasks) from trajectory-derived memory |
 | 2601.11974 | MARS: Metacognitive Agent Reflective Self-improvement | [arxiv.org/abs/2601.11974](https://arxiv.org/abs/2601.11974) | Principle + procedural reflection in single cycle — DHE Layer 5 grounding |
-| 2605.12129 | It's Not the Size: Harness Design Determines Stability in SLMs | [arxiv.org/abs/2605.12129](https://arxiv.org/abs/2605.12129) | 4-stage pipeline achieves TSR=0.952 on 2-3B models — validates JARVIS's SLM+harness thesis |
+| 2605.12129 | It's Not the Size: Harness Design Determines Stability in SLMs | [arxiv.org/abs/2605.12129](https://arxiv.org/abs/2605.12129) | 4-stage pipeline achieves TSR=0.952 on 2-3B models — validates Professor X's SLM+harness thesis |
 | 2510.04618 | Agentic Context Engineering (ACE) | [arxiv.org/abs/2510.04618](https://arxiv.org/abs/2510.04618) | ICLR 2026: context as evolving playbook, +10.6% agent benchmarks — Lever 2 predecessor |
 | 2510.04399 | Statistical Limits of Self-Improving Agents | [arxiv.org/abs/2510.04399](https://arxiv.org/abs/2510.04399) | Theorem: self-improvement safe iff capacity bounded. Harness evolution (frozen model) satisfies this by construction |
 | 2604.11364 | The Missing Knowledge Layer | [arxiv.org/abs/2604.11364](https://arxiv.org/abs/2604.11364) | Four-layer memory (Knowledge/Memory/Wisdom/Intelligence) with distinct persistence semantics — upgrade path for memd |
-| 2506.05109 | Truly Self-Improving Agents Require Intrinsic Metacognitive Learning | [arxiv.org/abs/2506.05109](https://arxiv.org/abs/2506.05109) | ICML 2025 position paper with no implementation — JARVIS is the implementation |
-| 2603.25723 | Natural-Language Agent Harnesses | [arxiv.org/abs/2603.25723](https://arxiv.org/abs/2603.25723) | Harness logic is rarely portable — confirms the gap JARVIS fills |
+| 2506.05109 | Truly Self-Improving Agents Require Intrinsic Metacognitive Learning | [arxiv.org/abs/2506.05109](https://arxiv.org/abs/2506.05109) | ICML 2025 position paper with no implementation — Professor X is the implementation |
+| 2603.25723 | Natural-Language Agent Harnesses | [arxiv.org/abs/2603.25723](https://arxiv.org/abs/2603.25723) | Harness logic is rarely portable — confirms the gap Professor X fills |
 
 ---
 
@@ -138,12 +138,12 @@ The brief names components as `memd`, `agentd`, etc. These names describe **modu
 - `broadcast`: kill switch propagation (one sender, all components listen)
 - Direct function calls where the call is synchronous and internal
 
-**The policyd module is the exception.** It wraps every outbound tool call as async middleware. Every call that exits JARVIS's boundary goes through policyd's gate function before it touches the OS.
+**The policyd module is the exception.** It wraps every outbound tool call as async middleware. Every call that exits Professor X's boundary goes through policyd's gate function before it touches the OS.
 
 ### Process topology at runtime
 
 ```
-jarvis (single PID)
+professor-x (single PID)
   ├── tokio runtime (async executor)
   ├── memd (memory manager, owns SQLite handles)
   ├── toolbridge (tool registry + executor)
@@ -154,7 +154,7 @@ jarvis (single PID)
 
 ### What runs outside the binary
 
-- **Ollama**: Separate process, LLM inference. JARVIS talks to Ollama via HTTP (localhost:11434). Primary model: `qwen3:8b-q4_k_m` (5.2GB VRAM, ~42 tok/s, 32K ctx, thinking mode). Upgrade: `llama4:scout` (MoE 109B total / 17B active, ~10GB VRAM). Fallback: `qwen3:14b-q4_k_m`. No JARVIS code runs inside Ollama.
+- **Ollama**: Separate process, LLM inference. Professor X talks to Ollama via HTTP (localhost:11434). Primary model: `qwen3:8b-q4_k_m` (5.2GB VRAM, ~42 tok/s, 32K ctx, thinking mode). Upgrade: `llama4:scout` (MoE 109B total / 17B active, ~10GB VRAM). Fallback: `qwen3:14b-q4_k_m`. No Professor X code runs inside Ollama.
 - **Embedding model** (`all-MiniLM-L6-v2`): Runs via ONNX runtime using the `ort` crate. In-process, CPU only. No Python dependency, ~80MB RAM, no VRAM cost. Same model used by [ASI-Evolve's](https://github.com/GAIR-NLP/ASI-Evolve) cognition store.
 
 ---
@@ -163,7 +163,7 @@ jarvis (single PID)
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  JARVIS binary                                                │
+│  professor-x binary                                                │
 │                                                              │
 │  ┌─────────┐   context     ┌─────────┐  tasks    ┌───────┐  │
 │  │  memd   │◄──injection───│ agentd  │──queue───►│ queue │  │
@@ -200,7 +200,7 @@ These are the canonical data structures. Every component owns some of these. The
 
 ### 4.1 Memory types
 
-Taxonomy from [CoALA](https://arxiv.org/abs/2309.02427) (Working / Episodic / Semantic / Procedural), extended with a Pinned layer for JARVIS's identity and goals. Write path from [Memory for LLM Agents](https://arxiv.org/abs/2603.07670). Retrieval from [CLAG](https://arxiv.org/abs/2603.15421). Quality scoring from [EvolveR](https://arxiv.org/abs/2510.16079).
+Taxonomy from [CoALA](https://arxiv.org/abs/2309.02427) (Working / Episodic / Semantic / Procedural), extended with a Pinned layer for Professor X's identity and goals. Write path from [Memory for LLM Agents](https://arxiv.org/abs/2603.07670). Retrieval from [CLAG](https://arxiv.org/abs/2603.15421). Quality scoring from [EvolveR](https://arxiv.org/abs/2510.16079).
 
 ```rust
 // Layer 1 — Pinned: identity, goals, permanent facts. Always injected into context.
@@ -339,7 +339,7 @@ CronJob {
 
 ### 4.3 Security types (policyd)
 
-Risk scoring and validation pipeline from [ClawOS](https://github.com/xbrxr03/clawos) (`policyd/service.py`). Merkle chaining is designed here from scratch — ClawOS claims it in docs but the code does plain SQLite append. JARVIS actually implements it.
+Risk scoring and validation pipeline from [ClawOS](https://github.com/xbrxr03/clawos) (`policyd/service.py`). Merkle chaining is designed here from scratch — ClawOS claims it in docs but the code does plain SQLite append. Professor X actually implements it.
 
 ```rust
 // Every tool call produces one of these, win or lose
@@ -437,7 +437,7 @@ HarnessComponent {
     SystemPrompt,
     ToolDescription(String),    // tool name
     SkillDefinition(String),    // skill name
-    HarnessConfig,              // jarvis.toml keys
+    HarnessConfig,              // professor-x.toml keys
     ProceduralMemory,           // skill library add/prune
     Middleware,                 // agentd hooks (human-approval only)
 }
@@ -467,7 +467,7 @@ CognitionItem {
 ### Storage layout
 
 ```
-~/.jarvis/
+~/.professor-x/
   state.db          ← SQLite: all structured data (WAL mode)
   embeddings/
     episodic.faiss  ← FAISS flat index, 384-dim
@@ -637,7 +637,7 @@ The [K-Dense-AI/scientific-agent-skills](https://github.com/K-Dense-AI/scientifi
 - **Name regex:** `^[a-z0-9]([a-z0-9-]*[a-z0-9])?$` — max 64 chars, no consecutive hyphens, must match directory name exactly
 - **Required fields:** `name`, `description`
 - **Optional fields:** `license`, `compatibility`, `metadata` (open `Dict[str, str]`), `allowed-tools`
-- **JARVIS extensions go in `metadata`:** `metadata.jarvis-version`, `metadata.min-harness-version`, `metadata.requires` (dependency list — not in the spec but needed)
+- **Professor X extensions go in `metadata`:** `metadata.px-version`, `metadata.min-harness-version`, `metadata.requires` (dependency list — not in the spec but needed)
 
 **3-tier progressive disclosure** (discovered from [K-Dense-AI/scientific-agent-skills](https://github.com/K-Dense-AI/scientific-agent-skills) README):
 ```
@@ -754,7 +754,7 @@ The 7-hour cycle is a set of cron jobs registered at startup — not special-cas
 18:00 → task: "Evening post (X + Discord) — call px-teach skill"
 ```
 
-Each task uses Professor X's SKILL.md conductor skills (defined in `jarvis/skills/conductor/`).
+Each task uses Professor X's SKILL.md conductor skills (defined in `professor-x/skills/conductor/`).
 
 ---
 
@@ -797,13 +797,13 @@ entry.prev_hash = SHA256(bytes_of_previous_entry)
 Genesis: prev_hash = [0u8; 32]
 ```
 
-Verification: `verify_chain() → bool` walks all entries in timestamp order, recomputes hashes. Called at JARVIS startup. Any mismatch means the log has been tampered with.
+Verification: `verify_chain() → bool` walks all entries in timestamp order, recomputes hashes. Called at Professor X startup. Any mismatch means the log has been tampered with.
 
-**Why this matters for the thesis:** [ClawOS](https://github.com/xbrxr03/clawos) claimed Merkle chaining as a competitive moat but the `policyd/service.py` source shows plain SQLite append with no hashing. JARVIS actually builds this. It's part of the paper's contribution: a real tamper-evident audit trail for an autonomous agent on consumer hardware.
+**Why this matters for the thesis:** [ClawOS](https://github.com/xbrxr03/clawos) claimed Merkle chaining as a competitive moat but the `policyd/service.py` source shows plain SQLite append with no hashing. Professor X actually builds this. It's part of the paper's contribution: a real tamper-evident audit trail for an autonomous agent on consumer hardware.
 
 ### Credential vault
 
-Storage: `~/.jarvis/vault.enc`. Encryption: AES-256-GCM (`aes-gcm` crate). Key: `~/.jarvis/vault.key`, chmod 600. Injection: credentials only reach subprocess via `Command::env(key, value)` at exec boundary. Never appear in LLM prompts, audit logs, or evolution diffs.
+Storage: `~/.professor-x/vault.enc`. Encryption: AES-256-GCM (`aes-gcm` crate). Key: `~/.professor-x/vault.key`, chmod 600. Injection: credentials only reach subprocess via `Command::env(key, value)` at exec boundary. Never appear in LLM prompts, audit logs, or evolution diffs.
 
 ### Kill switch
 
@@ -825,7 +825,7 @@ let cancel = CancellationToken::new();
 **Source papers:** [ASI-Evolve](https://arxiv.org/abs/2603.29640) (Researcher/Engineer/Analyzer loop, Node + CognitionItem schemas, UCB1) · [AHE](https://arxiv.org/abs/2604.25850) (change manifests, falsifiable contracts, component observability) · [EvolveR](https://arxiv.org/abs/2510.16079) (quality scoring) · [Reflexion](https://arxiv.org/abs/2303.11366) (verbal reflection) · [Memento](https://arxiv.org/abs/2508.16153) (agent-level optimization without weight updates — closest prior work) · [GEPA](https://arxiv.org/abs/2507.19457) (prompt evolution as RL alternative)
 **Source repos:** [ASI-Evolve](https://github.com/GAIR-NLP/ASI-Evolve) (`utils/structures.py`, `pipeline/`, `config.yaml`)
 
-### What JARVIS can evolve
+### What Professor X can evolve
 
 Based on [AHE's 7-component harness taxonomy](https://arxiv.org/abs/2604.25850) and [ClawOS's](https://github.com/xbrxr03/clawos) security precedent:
 
@@ -834,7 +834,7 @@ Based on [AHE's 7-component harness taxonomy](https://arxiv.org/abs/2604.25850) 
 | System prompt | Text edit | Semi-autonomous (Professor X approves) |
 | Tool descriptions (YAML) | Text edit | Semi-autonomous |
 | Skill definitions (SKILL.md) | Text edit + new files | Semi-autonomous |
-| Harness config (jarvis.toml) | Key-value edits | Semi-autonomous |
+| Harness config (professor-x.toml) | Key-value edits | Semi-autonomous |
 | Procedural memory | Add/prune skills | Autonomous (low risk) |
 | Middleware/hooks | Code edit | Human approval required |
 | Core Rust modules (policyd, memd) | Code edit | Human approval required — never autonomous |
@@ -909,13 +909,13 @@ At start of each cycle, verify previous cycle's manifest:
 
 ### Version control for harness files
 
-All evolvable components live in `jarvis/harness/` under git:
+All evolvable components live in `professor-x/harness/` under git:
 ```
-jarvis/harness/
+professor-x/harness/
   system_prompt.md
   tool_descriptions/   ← *.yaml
   skills/              ← *.md  (SKILL.md format)
-  config/              ← jarvis.toml
+  config/              ← professor-x.toml
   middleware/          ← *.rs  (human-review-only)
 ```
 
@@ -927,7 +927,7 @@ This satisfies [AHE Component Observability](https://arxiv.org/abs/2604.25850): 
 
 Professor X starts with ~100–150 pre-seeded CognitionItems (matching [ASI-Evolve's](https://github.com/GAIR-NLP/ASI-Evolve) documented scale). Seeded from:
 - Key claims extracted from the 15 papers in this document
-- JARVIS's own design decisions (from this ARCHITECTURE.md)
+- Professor X's own design decisions (from this ARCHITECTURE.md)
 - Known failure modes from [ClawOS](https://github.com/xbrxr03/clawos) history
 
 ### Why this is novel
@@ -942,7 +942,7 @@ Agent self-improvement operates on three orthogonal axes. Every existing system 
 | **Lever 2 — Contextual** | In-context content (trajectory replay, heuristics) | Self-Generated ICE (2505.00234), MARS (2601.11974), ACE (2510.04618), Trajectory-Informed Memory (2603.10600) | Ephemeral (lost each session), can't accumulate structural fixes |
 | **Lever 3 — Structural** | Harness infrastructure (tool descriptions, memory arch, prompts) | AHE (2604.25850), Meta-Harness (2603.28052), Life-Harness (2605.22166), Harbor (2604.20938) | Each paper covers structural-only; no metacognitive self-model |
 
-**JARVIS operates on all three simultaneously, with a metacognitive self-model tracking performance across levers.**
+**Professor X operates on all three simultaneously, with a metacognitive self-model tracking performance across levers.**
 
 #### What the latest papers do and don't cover
 
@@ -950,7 +950,7 @@ Agent self-improvement operates on three orthogonal axes. Every existing system 
 - [Life-Harness (arXiv:2605.22166)](https://arxiv.org/abs/2605.22166): proves Lever 3 is portable (88.5% avg improvement across 17 models). Runtime adaptation only — no evolution loop, no diagnostics.
 - [SDAR (arXiv:2605.15155)](https://arxiv.org/abs/2605.15155): Lever 1 on Qwen3 families. +9.4% ALFWorld. No harness evolution. Feasible on RTX 3060 overnight (see hardware budget).
 - [Harbor (arXiv:2604.20938)](https://arxiv.org/abs/2604.20938): Bayesian optimization for harness config search. Not LLM-based, no metacognition, no diagnostics.
-- [arXiv:2510.04399](https://arxiv.org/abs/2510.04399): Statistical limits theorem. Proves self-improvement is safe iff model capacity is bounded. JARVIS's harness evolution (frozen model weights) satisfies this by construction.
+- [arXiv:2510.04399](https://arxiv.org/abs/2510.04399): Statistical limits theorem. Proves self-improvement is safe iff model capacity is bounded. Professor X's harness evolution (frozen model weights) satisfies this by construction.
 
 **The gap:** No existing paper (a) combines all three levers, (b) uses metacognitive self-knowledge to direct which lever to pull at each round, (c) runs entirely on consumer hardware, (d) measures improvement with harness-isolated attribution (HIRO + DHE + BF + LCAP).
 
@@ -971,7 +971,7 @@ RTX 3060 12GB VRAM. Numbers based on [SLMs paper](https://arxiv.org/abs/2506.021
 | KV cache (32K context) | ~1.5 GB | — | Varies with depth; 32K = Qwen3 native ctx |
 | FAISS indices | 0 | ~150 MB | CPU only |
 | all-MiniLM-L6-v2 (ONNX) | 0 | ~80 MB | CPU only, same as ASI-Evolve |
-| JARVIS binary | ~0 | ~15 MB | Rust single binary |
+| professor-x binary | ~0 | ~15 MB | Rust single binary |
 | SQLite | 0 | ~50 MB | WAL mode |
 | Ollama runtime | ~100 MB | ~100 MB | Server overhead |
 | **Total** | **~6.9 GB** | **~400 MB** | |
@@ -1078,7 +1078,7 @@ Things that diverge from the brief or need a decision before writing code.
 ### Flag 5 — "13,700+ skills on day one" means parser, not bundled library
 
 **Brief:** "Inherits OpenClaw's 13,700+ skill ecosystem on day one."
-**Architecture clarifies:** JARVIS implements the full [SKILL.md spec](https://github.com/K-Dense-AI/scientific-agent-skills), making any agentskills.io skill installable. "Day one interoperability" = the parser is ready. The 13,700+ skills are installable on demand, not pre-bundled. This is an accurate statement of what we deliver.
+**Architecture clarifies:** Professor X implements the full [SKILL.md spec](https://github.com/K-Dense-AI/scientific-agent-skills), making any agentskills.io skill installable. "Day one interoperability" = the parser is ready. The 13,700+ skills are installable on demand, not pre-bundled. This is an accurate statement of what we deliver.
 
 ### Flag 6 — Core Rust never autonomously evolves
 
@@ -1150,7 +1150,7 @@ Week 5 — Trifecta (DHE + BF + LCAP)
 
 **Full specification:** [brain/inventions.md](../professor-x-AGI/brain/inventions.md)
 
-Three novel mechanisms layered on top of the evolved component. None of them modify the core ReAct loop, memory architecture, or security model. They are purely additive — the system works without them (baseline JARVIS) and is instrumented by them (trifecta JARVIS).
+Three novel mechanisms layered on top of the evolved component. None of them modify the core ReAct loop, memory architecture, or security model. They are purely additive — the system works without them (baseline Professor X) and is instrumented by them (trifecta Professor X).
 
 **Source papers (Tier 4 — read before Week 5):**
 - [Self-RAG (arXiv:2310.11511)](https://arxiv.org/abs/2310.11511) — adaptive retrieval as LCAP predecessor
@@ -1373,7 +1373,7 @@ This is the primary feedback loop of the trifecta. It operates faster than the f
 
 ### The framework
 
-Agent self-improvement operates on three orthogonal levers. JARVIS combines all three. The framework is the thesis framing — the paper's central contribution beyond the specific mechanisms.
+Agent self-improvement operates on three orthogonal levers. Professor X combines all three. The framework is the thesis framing — the paper's central contribution beyond the specific mechanisms.
 
 ```
 Lever 1 — PARAMETRIC (weights)
@@ -1415,7 +1415,7 @@ Lever 3 — STRUCTURAL (harness)
 | Consumer hardware feasible | ✓ overnight | ✓ always | ✓ always | ✓ |
 | Metacognitive self-model | ✗ | ✗ | ✗ | ✓ (MHE) |
 
-No existing paper combines all columns. JARVIS is the first implementation.
+No existing paper combines all columns. Professor X is the first implementation.
 
 ### The 4-baseline experimental table
 
@@ -1425,8 +1425,8 @@ Required for the paper (Table 1). Isolates each lever's contribution.
 |-----------|---------------|---------------|-------------------|------------|
 | **Baseline 1**: Stock qwen3:8b, no evolution | ✗ | ✗ | ✗ | Lowest absolute performance, HIRO(30) ≈ 0 |
 | **Baseline 2**: SDAR qwen3:8b, no evolution | ✓ | ✗ | ✗ | Model-only ceiling — confirms Lever 1 gain |
-| **Baseline 3**: Stock qwen3:8b + JARVIS evolved | ✗ | ✓ | ✓ | Structural+contextual without parametric |
-| **Target**: SDAR qwen3:8b + JARVIS evolved | ✓ | ✓ | ✓ | All-lever combination — expected: superadditive |
+| **Baseline 3**: Stock qwen3:8b + Professor X evolved | ✗ | ✓ | ✓ | Structural+contextual without parametric |
+| **Target**: SDAR qwen3:8b + Professor X evolved | ✓ | ✓ | ✓ | All-lever combination — expected: superadditive |
 | **Cloud ref**: GPT-4o one-time runs | — | — | — | Frontier ceiling for calibration (no evolution) |
 
 **The superadditivity claim:** If Lever 1 gains X pp and Lever 3 gains Y pp independently, the combination should gain ≥ X + Y pp — because SDAR-improved model is a better proposer for Lever 3 (it generates better ChangeManifests), and Lever 3 structural improvements make Lever 1 fine-tuning data higher quality (failures are already diagnosed and addressed, so remaining failures are model-layer failures that fine-tuning can fix).

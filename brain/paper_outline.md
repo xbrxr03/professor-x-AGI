@@ -1,4 +1,4 @@
-# Paper Outline
+﻿# Paper Outline
 
 The actual paper we are writing. This is the authoritative structure — everything in the repo exists to produce this document.
 
@@ -27,7 +27,7 @@ Short form for citations: **MHE**
 4. The metacognitive gap: [arXiv:2506.05109] identified that truly self-improving agents need a metacognitive self-model. No implementation exists.
 5. Contributions (bulleted):
    - The three-lever taxonomy: naming and formalizing parametric/contextual/structural as orthogonal axes of agent self-improvement
-   - JARVIS: first implementation combining all three on consumer hardware
+   - Professor X: first implementation combining all three on consumer hardware
    - HIRO benchmark: first metric for harness-isolated improvement rate
    - DFA Trifecta: DHE + BF + LCAP as the structural improvement mechanism
    - MHE: metacognitive self-model directing lever selection, measured by MCA
@@ -64,7 +64,7 @@ Short form for citations: **MHE**
 - arXiv:2506.05109 (ICML 2025): position paper, three components, no implementation
 - HyperAgents (Meta, arXiv:2603.19461): improvement@k, frontier APIs, coding domain only
 - Agent Psychometrics (arXiv:2604.00594): IRT decomposition — scaffold ability is separable
-- Connection to our work: JARVIS is the implementation of arXiv:2506.05109
+- Connection to our work: Professor X is the implementation of arXiv:2506.05109
 
 ### 2.5 Consumer Hardware Feasibility
 - arXiv:2506.02153: SLMs match frontier models on structured agentic tasks
@@ -100,7 +100,7 @@ This is the claim we test in Table 1 (4-baseline experimental design).
 
 ---
 
-## Section 4 — JARVIS: System Description (3 pages)
+## Section 4 — Professor X: System Description (3 pages)
 
 ### 4.1 Architecture overview
 Five modules: memd, toolbridge, agentd, policyd, evolved. Single Rust binary. Tokio async. Hardware: RTX 3060, qwen3:8b-q4_k_m.
@@ -145,7 +145,7 @@ Source of tasks: synthetic + adapted from ALFWorld, AppWorld, ToolEval. Tasks ar
 ### 5.4 Baselines
 - Static harness null (noise floor): HIRO(30) ≈ 0 expected
 - Human expert (same time budget, informed by same papers): establishes H5 claim
-- Frontier API with same harness: GPT-4o endpoint, same JARVIS harness, no evolution — establishes H9 claim
+- Frontier API with same harness: GPT-4o endpoint, same Professor X harness, no evolution — establishes H9 claim
 
 ### 5.5 Reproducibility
 Full task suite, evaluation rubrics, and harness snapshot at round 0 released on GitHub. Any researcher with an RTX 3060 and Ollama can reproduce the benchmark in ~47 min/round.
@@ -210,7 +210,7 @@ Superadditivity test: H_T > H3 + ΔL1? (Is combining all three levers better tha
 - Interpretation: agents with more accurate self-models improve faster
 
 ### 7.6 Consumer Hardware Parity (H9)
-- Comparison: JARVIS + qwen3:8b-q4_k_m vs JARVIS + GPT-4o endpoint, same harness
+- Comparison: Professor X + qwen3:8b-q4_k_m vs Professor X + GPT-4o endpoint, same harness
 - Metric: |HIRO_local - HIRO_frontier| < 0.03
 
 ---
