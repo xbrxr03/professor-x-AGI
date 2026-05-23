@@ -66,6 +66,24 @@ What I currently know, with sources. This grows as I research. Every claim has a
 
 ---
 
+## On the Trifecta Inventions
+
+**The AHE fix-prediction precision baseline is 33.7%.** [AHE (arXiv:2604.25850)](https://arxiv.org/abs/2604.25850), Table 3: unguided component-level harness modifications achieve a 33.7% fix-prediction precision — the fraction of predicted improvements that actually materialize in the next evaluation round. This is the DHE baseline to beat. DHE's target is ≥ 60%.
+
+**No existing system runs a layer-by-layer failure trace before proposing a harness modification.** AHE has component observability (which component class a failure might map to) but not a diagnostic trace on specific failure instances. ASI-Evolve, EvolveR, and AgentEvolver observe task outcome only and propose modifications without attribution. DHE is the first protocol to do this.
+
+**No existing benchmark tracks a harness's capability vector over time.** All current benchmarks (HIRO, AHE, Terminal-Bench) report aggregate pass@k. Fingerprinting — treating the harness as a performance vector across task categories, tracked round-by-round — does not appear in any existing paper. The longitudinal fingerprint dataset is a first-of-its-kind contribution.
+
+**Agent Psychometrics ([arXiv:2604.00594](https://arxiv.org/abs/2604.00594)) provides theoretical grounding for fingerprinting.** IRT (Item Response Theory) decomposition of agent performance shows that scaffold "ability" is a real, separable quantity from model ability. BF operationalizes this: the fingerprint vector is the empirical scaffold ability profile across task categories.
+
+**No existing system learns a per-task-type context allocation policy.** [Self-RAG (arXiv:2310.11511)](https://arxiv.org/abs/2310.11511) learns whether to retrieve at all (binary: retrieve or don't). No system learns how to allocate the full context budget across episodic memory, semantic memory, tool descriptions, and system prompt as a function of task type. LCAP is the first implementation of this.
+
+**The allocation distribution within T* is expected to matter.** Three converging sources: (1) Lost in the Middle shows content position changes accuracy by ~20 pp; (2) Self-RAG shows that retrieval timing (when to retrieve) matters; (3) Mem2ActBench's 23-point oracle-vs-retrieval gap shows that what you retrieve matters. Together these predict that LCAP's per-type allocation learning should extract signal — but this is untested.
+
+**The DHE 5-layer trace is not the same as Reflexion.** [Reflexion (arXiv:2303.11366)](https://arxiv.org/abs/2303.11366): free-form verbal reflection after task failure. DHE: structured 5-layer probe with deterministic tests at Layers 1–4 (retrieval presence check, context position check, Action schema validation, Observation success flag) and LLM-as-judge only at Layer 5 (reasoning quality). DHE produces a machine-readable `{ layer, evidence, confidence }` tuple; Reflexion produces free text. DHE is a structured replacement for Reflexion at the harness-evolution level.
+
+---
+
 ## On Scientific Method (as it applies to this project)
 
 **A dead end is a result.** Recording what didn't work — with the specific reason — is as valuable as recording what did. The field does not have enough documented failures. I record mine.
@@ -76,5 +94,5 @@ What I currently know, with sources. This grows as I research. Every claim has a
 
 ---
 
-*Last updated: 2026-05-21*
+*Last updated: 2026-05-22*
 *Status: Pre-experiment. All entries are literature-based, not yet from JARVIS experiments.*
