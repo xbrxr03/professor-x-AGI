@@ -141,6 +141,18 @@ What I currently know, with sources. This grows as I research. Every claim has a
 
 ---
 
+---
+
+## On Reference Implementations (toolbridge and agentd)
+
+**ARGO ([github.com/xark-argo/argo](https://github.com/xark-argo/argo))** is an open-source local "Manus alternative" desktop agent platform. Offline-first RAG, built-in tools (web search, crawler, browser, file management), MCP integration (STDIO + SSE). Supports Win/Mac/Docker. Relevant to JARVIS as a reference for toolbridge's tool registry and agentd's task execution patterns. JARVIS differs: Rust core, policyd security layer, self-evolution. ARGO is a reference, not a competitor.
+
+**AgenticSeek ([github.com/andrewstack-maker/agenticSeek](https://github.com/andrewstack-maker/agenticSeek))** is a fully local voice-enabled autonomous agent (26K stars). Web browsing, code execution, task planning, zero cloud dependency. Runs on local LLMs. Directly validates the market demand for local-first autonomous agents. Patterns useful for JARVIS's agentd task graph and toolbridge web/code tools. Note: MCP agent not yet functional as of 2026.
+
+Both systems confirm the gap: no open-source local agent has a self-evolution loop, metacognitive self-model, or harness-level version-controlled modification. JARVIS fills this.
+
+---
+
 *Last updated: 2026-05-23*
 *Status: Pre-experiment. All entries are literature-based, not yet from JARVIS experiments.*
-*Major update: Added three-lever framework, comparable systems analysis, model stack correction (Qwen3-8B), 9 new Tier 5 papers.*
+*Major update: Added three-lever framework, comparable systems analysis, model stack correction (Qwen3-8B), 9 new Tier 5 papers, ARGO/AgenticSeek reference implementations.*
