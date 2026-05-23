@@ -1,6 +1,37 @@
 # Inventions
 
-Three novel contributions that form a unified research claim. Together: the **DFA Trifecta** (Diagnostic, Fingerprint, Adaptive) — the first agent harness framework that attributes its own failures by layer, tracks its capability profile over time, and learns its own context allocation policy per task type.
+## MHE — Metacognitive Harness Evolution (the overarching claim)
+
+**One sentence:** JARVIS is the first implementation of Metacognitive Harness Evolution — a self-improving agent system that operates three orthogonal self-improvement levers (parametric, contextual, structural) directed by a metacognitive self-model, running entirely on consumer hardware.
+
+**Why MHE is the frame:** The ICML 2025 position paper "Truly Self-Improving Agents Require Intrinsic Metacognitive Learning" ([arXiv:2506.05109](https://arxiv.org/abs/2506.05109)) identified that genuine self-improvement requires three things: metacognitive knowledge (what can I do), metacognitive planning (what should I learn next), and metacognitive evaluation (did my learning work). It found no implementation. JARVIS is the implementation.
+
+**The three levers:**
+```
+Lever 1 — Parametric (SDAR overnight fine-tuning on self-generated trajectories)
+  Permanent. Model-specific. Slow. Addresses: model-layer reasoning failures (DHE Layer 5).
+  Paper: SDAR (arXiv:2605.15155), +9.4% ALFWorld on Qwen3 families.
+
+Lever 2 — Contextual (Self-Generated ICE + MARS reflection per session)
+  Ephemeral. Domain-specific. Fast. Addresses: session-level performance gaps.
+  Papers: ICE (arXiv:2505.00234) 73%→93% ALFWorld; MARS (arXiv:2601.11974) single-cycle reflection.
+
+Lever 3 — Structural (DHE-guided harness evolution, version-controlled)
+  Persistent. Model-agnostic. Medium pace. Addresses: infrastructure failures (DHE Layers 1-4).
+  Portability: harness evolved on Qwen3-8B transfers to 17+ models (Life-Harness, arXiv:2605.22166).
+```
+
+**The metacognitive self-model (MCA):** After each HIRO round, JARVIS records: which DHE layer was attributed, which lever was applied, did performance improve. Over time it learns calibration patterns — e.g., "Layer 3 → Lever 3 attribution is 78% reliable; Layer 5 → Lever 1 is only 41%." This is **MCA (Metacognitive Calibration Accuracy)**. Target: Pearson r(MCA, improvement_rate) > 0.70 over 30 rounds.
+
+**What makes this Alpaca-scale:** Stanford Alpaca showed: use GPT-4 to generate cheap training data, fine-tune a smaller model. JARVIS shows: use consumer-hardware harness evolution to generate portable structural improvements that transfer across the model ecosystem. The evolved harness *is* the dataset — a small-team artifact any lab can adopt.
+
+**The closest competitor:** Meta-Harness ([arXiv:2603.28052](https://arxiv.org/abs/2603.28052), Stanford/MIT/KRAFTON) uses Claude Code as proposer, achieves +7.7pp text classification, #2 TerminalBench-2. Requires frontier API, no metacognitive self-model, Lever 3 only. JARVIS runs on Qwen3-8B locally, combines all three levers, has DHE diagnostics before every proposal.
+
+---
+
+## The DFA Trifecta (mechanism layer)
+
+Three novel contributions that form the mechanism of MHE's Lever 3. Together: the **DFA Trifecta** (Diagnostic, Fingerprint, Adaptive) — the first agent harness framework that attributes its own failures by layer, tracks its capability profile over time, and learns its own context allocation policy per task type.
 
 Every piece of this is measurable, falsifiable, and implementable on consumer hardware with no model weight changes.
 
@@ -314,7 +345,7 @@ evolved.compute_fingerprint():
 
 3. **Learned allocation outperforms static:** LCAP's bandit policy learns task-type-specific context budgets that outperform hand-designed static allocation by ≥ 3 pp — the first demonstration of learned context allocation in an agent harness.
 
-4. **All three on consumer hardware:** RTX 3060 12GB, qwen2.5:14b-q4, no cloud APIs required for the core result.
+4. **All three on consumer hardware:** RTX 3060 12GB, qwen3:8b-q4_k_m as primary model (5.2GB VRAM, 42 tok/s), no cloud APIs required for the core result.
 
 ### Ablation design (Section 5 of the paper)
 
@@ -333,23 +364,32 @@ BF cannot be ablated — it's the measurement instrument. The fingerprint always
 
 ## Paper Framing
 
-**Tentative title:** "DHE, Fingerprint, and LCAP: A Diagnostic Trifecta for Self-Evolving Agent Harnesses on Consumer Hardware"
+**Tentative title:** "Metacognitive Harness Evolution: Combining Three Self-Improvement Levers with Diagnostic Attribution on Consumer Hardware"
 
-**The thesis sentence:** A self-evolving harness that diagnoses before it modifies, tracks its capability fingerprint over time, and learns its context allocation policy achieves fix-prediction precision of X% (vs. AHE's 33.7%), produces the first longitudinal harness fingerprint dataset, and demonstrates learned allocation gains of Y pp — all running on a $400 GPU with a 14B quantized model.
+**Alternative title (if three-lever framing is novel enough to stand alone):** "The Three Levers of Agent Self-Improvement: A Framework and Consumer-Hardware Implementation"
 
-**Venue target:** NeurIPS 2026 Datasets & Benchmarks Track (HIRO as the benchmark, fingerprint dataset as the dataset, trifecta as the methodology). Alternatively: ICLR 2027 main track if H5 and H9 results are strong enough to anchor the AGI claim.
+**The thesis sentence:** We present MHE, the first agent system that (1) operates parametric, contextual, and structural self-improvement levers simultaneously, (2) directs lever selection using a metacognitive self-model built from layer-attributed failure traces, (3) runs entirely on a \$400 consumer GPU. MHE achieves DHE fix-prediction precision of X% (vs. AHE's 33.7%), a first longitudinal harness fingerprint dataset over 30 rounds, LCAP allocation gains of Y pp, and demonstrates that the structural lever (harness evolution) produces improvements that transfer to 17+ model families — making the evolved harness a portable, model-agnostic corpus rather than a model artifact.
+
+**Venue target (in priority order):**
+1. **NeurIPS 2026 D&B Track** — HIRO as the benchmark, fingerprint dataset as the dataset, trifecta + three-lever framework as the methodology. Deadline: ~June 2026. This is the primary target.
+2. **ICLR 2027 main track** — if H9 (frontier-API parity) and H5 (expert-level harness evolution) are confirmed.
+3. **arXiv preprint first** — post when 30-round data is available, regardless of venue outcome.
 
 **Minimum publishable result:**
-- DHE fix-precision data from 30 rounds (even if the result is negative — dead end is a result)
-- Fingerprint trajectory plot for 30 rounds
-- LCAP vs. static allocation comparison on 10-round ablation
+- DHE fix-precision data from 30 rounds (even if negative — dead end is a result)
+- Fingerprint trajectory plot for 30 rounds showing non-uniform improvement
+- LCAP vs. static allocation on 10-round ablation (≥3pp or falsified)
+- 4-baseline table from Table 1 (at least Baselines 1 and 3)
 
-**The result that would make it a top-venue paper:**
-- H9 confirmed: HIRO parity between RTX 3060 and frontier API → harness dominates model
-- H5 confirmed: autonomous evolution within 0.015 HIRO of human expert → the agent is comparably effective to a human engineer
+**The result that would make it a landmark paper:**
+- 4-baseline table fully filled: Lever 1 + Lever 3 combination is superadditive
+- H9 confirmed: HIRO(30) on RTX 3060 ≥ frontier API with same harness → harness dominates model
+- MCA-IR correlation > 0.70: agents with better self-models improve faster (the metacognitive claim)
+- Harness transfer: evolved harness from JARVIS improves a completely different model (test on llama4:scout) with no re-evolution
 
 ---
 
-*Last updated: 2026-05-22*
+*Last updated: 2026-05-23*
 *Status: Formalized — not yet implemented*
-*Next: H10, H11, H12 added to hypotheses.md. Implementation begins in Week 5 of the build order.*
+*Major update: Added MHE overarching frame, three-lever framework, updated closest competitor analysis (Meta-Harness, Harbor), updated paper title and venue strategy.*
+*Next: MHE + three-lever framework added to hypotheses.md as H13. Implementation begins in Week 5 of the build order.*

@@ -54,7 +54,7 @@ git clone https://github.com/Imbad0202/academic-research-skills     # Academic S
 | 2508.16153 | Memento: Agent Optimization Without Weight Updates | [arxiv.org/abs/2508.16153](https://arxiv.org/abs/2508.16153) | Closest prior work to JARVIS's approach — read carefully |
 | 2507.19457 | GEPA: Reflective Prompt Evolution Beats RL | [arxiv.org/abs/2507.19457](https://arxiv.org/abs/2507.19457) | Prompt-level evolution as a feasible evolution target |
 | 2511.10395 | AgentEvolver | [arxiv.org/abs/2511.10395](https://arxiv.org/abs/2511.10395) | Experience unit format "when to use" + "content" |
-| 2506.02153 | Small Language Models are the Future of Agentic AI | [arxiv.org/abs/2506.02153](https://arxiv.org/abs/2506.02153) | Validates qwen2.5:14b-q4; xLAM-2-8B for tool calling |
+| 2506.02153 | Small Language Models are the Future of Agentic AI | [arxiv.org/abs/2506.02153](https://arxiv.org/abs/2506.02153) | Validates SLM + good harness ≥ frontier + bad harness; xLAM-2-8B for tool calling |
 | 2510.03847 | SLMs for Agentic Systems Survey | [arxiv.org/abs/2510.03847](https://arxiv.org/abs/2510.03847) | vLLM/SGLang serving; JSON Schema validation patterns |
 
 **Tier 4 — Trifecta inventions (DHE, BF, LCAP) — read before implementing Section 14):**
@@ -65,6 +65,25 @@ git clone https://github.com/Imbad0202/academic-research-skills     # Academic S
 | 2604.00594 | Agent Psychometrics: IRT for AI Agents | [arxiv.org/abs/2604.00594](https://arxiv.org/abs/2604.00594) | IRT decomposition: scaffold ability is separable from model ability — BF grounding |
 | 2601.19935 | Mem2ActBench | [arxiv.org/abs/2601.19935](https://arxiv.org/abs/2601.19935) | Oracle vs. retrieval 23-point gap — confirms allocation matters for LCAP |
 | 2506.21605 | MemBench | [arxiv.org/abs/2506.21605](https://arxiv.org/abs/2506.21605) | Store size degrades quality at 100K tokens — confirms BF & LCAP motivation |
+
+**Tier 5 — Three-lever framework + comparative landscape (read before writing the paper):**
+
+| ID | Title | Link | What it gives JARVIS |
+|----|-------|------|----------------------|
+| 2605.15155 | SDAR: Self-Distilled Agentic Reinforcement Learning | [arxiv.org/abs/2605.15155](https://arxiv.org/abs/2605.15155) | Lever 1 (parametric): token-level sigmoid-gated distillation, +9.4% ALFWorld on Qwen3 |
+| 2605.22166 | Life-Harness (Adapting the Interface, Not the Model) | [arxiv.org/abs/2605.22166](https://arxiv.org/abs/2605.22166) | Lever 3 portability proof: harness from Qwen3-4B transfers to 17 models, 88.5% avg improvement |
+| 2505.00234 | Self-Generated In-Context Examples | [arxiv.org/abs/2505.00234](https://arxiv.org/abs/2505.00234) | Lever 2 (contextual): 73%→93% ALFWorld zero fine-tuning, trajectory replay via ICL |
+| 2505.03335 | Absolute Zero | [arxiv.org/abs/2505.03335](https://arxiv.org/abs/2505.03335) | Self-generated curriculum, zero external data, NeurIPS 2025 spotlight |
+| 2603.28052 | Meta-Harness (Stanford) | [arxiv.org/abs/2603.28052](https://arxiv.org/abs/2603.28052) | Closest competitor: LLM-based harness optimization using frontier APIs (Claude Code as proposer). JARVIS differs: consumer hardware, metacognitive self-model, three levers combined |
+| 2604.20938 | Harbor: Automated Harness Optimization | [arxiv.org/abs/2604.20938](https://arxiv.org/abs/2604.20938) | Bayesian optimization (not LLM-based) for harness config search — complementary approach, no metacognition |
+| 2603.10600 | Trajectory-Informed Memory Generation | [arxiv.org/abs/2603.10600](https://arxiv.org/abs/2603.10600) | Lever 2 variant: 14.3pp gains (149% relative on complex tasks) from trajectory-derived memory |
+| 2601.11974 | MARS: Metacognitive Agent Reflective Self-improvement | [arxiv.org/abs/2601.11974](https://arxiv.org/abs/2601.11974) | Principle + procedural reflection in single cycle — DHE Layer 5 grounding |
+| 2605.12129 | It's Not the Size: Harness Design Determines Stability in SLMs | [arxiv.org/abs/2605.12129](https://arxiv.org/abs/2605.12129) | 4-stage pipeline achieves TSR=0.952 on 2-3B models — validates JARVIS's SLM+harness thesis |
+| 2510.04618 | Agentic Context Engineering (ACE) | [arxiv.org/abs/2510.04618](https://arxiv.org/abs/2510.04618) | ICLR 2026: context as evolving playbook, +10.6% agent benchmarks — Lever 2 predecessor |
+| 2510.04399 | Statistical Limits of Self-Improving Agents | [arxiv.org/abs/2510.04399](https://arxiv.org/abs/2510.04399) | Theorem: self-improvement safe iff capacity bounded. Harness evolution (frozen model) satisfies this by construction |
+| 2604.11364 | The Missing Knowledge Layer | [arxiv.org/abs/2604.11364](https://arxiv.org/abs/2604.11364) | Four-layer memory (Knowledge/Memory/Wisdom/Intelligence) with distinct persistence semantics — upgrade path for memd |
+| 2506.05109 | Truly Self-Improving Agents Require Intrinsic Metacognitive Learning | [arxiv.org/abs/2506.05109](https://arxiv.org/abs/2506.05109) | ICML 2025 position paper with no implementation — JARVIS is the implementation |
+| 2603.25723 | Natural-Language Agent Harnesses | [arxiv.org/abs/2603.25723](https://arxiv.org/abs/2603.25723) | Harness logic is rarely portable — confirms the gap JARVIS fills |
 
 ---
 
@@ -84,6 +103,7 @@ git clone https://github.com/Imbad0202/academic-research-skills     # Academic S
 12. [Design Flags](#12-design-flags)
 13. [Build Order](#13-build-order)
 14. [Trifecta Inventions — DHE, BF, LCAP](#14-trifecta-inventions--dhe-bf-lcap)
+15. [Three-Lever Framework & Experimental Design](#15-three-lever-framework--experimental-design)
 
 ---
 
@@ -92,7 +112,7 @@ git clone https://github.com/Imbad0202/academic-research-skills     # Academic S
 Every architectural decision in this document follows from three rules:
 
 **Rule 1 — VRAM is the scarce resource.**
-The RTX 3060 has 12GB VRAM. The LLM inference engine (qwen2.5:14b-q4) consumes ~8GB. Everything else shares the remaining 4GB. Every MB saved in the harness is a MB available for KV cache, which is a larger effective context window, which is a smarter agent.
+The RTX 3060 has 12GB VRAM. The LLM inference engine (qwen3:8b-q4_k_m) consumes ~5.2GB. Everything else shares the remaining ~6.8GB. Every MB saved in the harness is a MB available for KV cache, which is a larger effective context window, which is a smarter agent.
 
 **Rule 2 — Lean and stable beats capable and fragile.**
 The system runs 24/7 unattended. A component that crashes once a week is worse than a simpler component that never crashes. Rust is chosen because it gives a single-digit MB runtime and no garbage collector pauses. Every architectural decision that adds reliability beats one that adds capability.
@@ -134,7 +154,7 @@ jarvis (single PID)
 
 ### What runs outside the binary
 
-- **Ollama**: Separate process, LLM inference. JARVIS talks to Ollama via HTTP (localhost:11434). Primary model: `qwen2.5:14b-q4`. Fallback: `phi4:14b-q4`. No JARVIS code runs inside Ollama.
+- **Ollama**: Separate process, LLM inference. JARVIS talks to Ollama via HTTP (localhost:11434). Primary model: `qwen3:8b-q4_k_m` (5.2GB VRAM, ~42 tok/s, 32K ctx, thinking mode). Upgrade: `llama4:scout` (MoE 109B total / 17B active, ~10GB VRAM). Fallback: `qwen3:14b-q4_k_m`. No JARVIS code runs inside Ollama.
 - **Embedding model** (`all-MiniLM-L6-v2`): Runs via ONNX runtime using the `ort` crate. In-process, CPU only. No Python dependency, ~80MB RAM, no VRAM cost. Same model used by [ASI-Evolve's](https://github.com/GAIR-NLP/ASI-Evolve) cognition store.
 
 ---
@@ -912,37 +932,54 @@ Professor X starts with ~100–150 pre-seeded CognitionItems (matching [ASI-Evol
 
 ### Why this is novel
 
-All existing self-evolving systems target:
-- [EvolveR](https://arxiv.org/abs/2510.16079) → model weights + principle repository
-- [AgentEvolver](https://arxiv.org/abs/2511.10395) → model weights (RL)
-- [ASI-Evolve](https://arxiv.org/abs/2603.29640) → programs being researched (not the harness)
-- [GEPA](https://arxiv.org/abs/2507.19457) → prompt templates
-- [Memento](https://arxiv.org/abs/2508.16153) → agent behavior without weight updates (closest)
+#### The three-lever landscape (as of May 2026)
 
-**None treat the harness infrastructure itself — tool descriptions, middleware, memory architecture, security scopes — as the primary unit of evolution, tracked under version control, with falsifiable change manifests, running on consumer hardware.**
+Agent self-improvement operates on three orthogonal axes. Every existing system operates on exactly one:
 
-Confirmed by three independent surveys:
+| Lever | What changes | Representative works | Limitation |
+|-------|-------------|---------------------|------------|
+| **Lever 1 — Parametric** | Model weights (fine-tuning) | SDAR (2605.15155), QLoRA/Alpaca | Slow, expensive, model-bound, loses generality |
+| **Lever 2 — Contextual** | In-context content (trajectory replay, heuristics) | Self-Generated ICE (2505.00234), MARS (2601.11974), ACE (2510.04618), Trajectory-Informed Memory (2603.10600) | Ephemeral (lost each session), can't accumulate structural fixes |
+| **Lever 3 — Structural** | Harness infrastructure (tool descriptions, memory arch, prompts) | AHE (2604.25850), Meta-Harness (2603.28052), Life-Harness (2605.22166), Harbor (2604.20938) | Each paper covers structural-only; no metacognitive self-model |
+
+**JARVIS operates on all three simultaneously, with a metacognitive self-model tracking performance across levers.**
+
+#### What the latest papers do and don't cover
+
+- [Meta-Harness (Stanford, arXiv:2603.28052)](https://arxiv.org/abs/2603.28052): closest competitor for Lever 3. Uses Claude Code (frontier API) as harness proposer. Achieves 7.7pp on text classification, #2 TerminalBench-2. Does NOT run on consumer hardware. Does NOT combine with Levers 1/2. Does NOT have a metacognitive self-model.
+- [Life-Harness (arXiv:2605.22166)](https://arxiv.org/abs/2605.22166): proves Lever 3 is portable (88.5% avg improvement across 17 models). Runtime adaptation only — no evolution loop, no diagnostics.
+- [SDAR (arXiv:2605.15155)](https://arxiv.org/abs/2605.15155): Lever 1 on Qwen3 families. +9.4% ALFWorld. No harness evolution. Feasible on RTX 3060 overnight (see hardware budget).
+- [Harbor (arXiv:2604.20938)](https://arxiv.org/abs/2604.20938): Bayesian optimization for harness config search. Not LLM-based, no metacognition, no diagnostics.
+- [arXiv:2510.04399](https://arxiv.org/abs/2510.04399): Statistical limits theorem. Proves self-improvement is safe iff model capacity is bounded. JARVIS's harness evolution (frozen model weights) satisfies this by construction.
+
+**The gap:** No existing paper (a) combines all three levers, (b) uses metacognitive self-knowledge to direct which lever to pull at each round, (c) runs entirely on consumer hardware, (d) measures improvement with harness-isolated attribution (HIRO + DHE + BF + LCAP).
+
+Confirmed by independent surveys:
 - [arXiv:2507.21046](https://arxiv.org/abs/2507.21046): harness-level evolution absent from What/When/How/Where taxonomy
 - [arXiv:2508.07407](https://arxiv.org/abs/2508.07407): four-component framework does not include harness infrastructure as an evolution target
-- [arXiv:2604.08224](https://arxiv.org/abs/2604.08224): identifies self-evolving harnesses as an emerging direction but cites no existing implementations
+- [arXiv:2604.08224](https://arxiv.org/abs/2604.08224): identifies self-evolving harnesses as an emerging direction but cites no implementations
 
 ---
 
 ## 10. Hardware Budget
 
-RTX 3060 12GB VRAM. Numbers based on [SLMs paper](https://arxiv.org/abs/2506.02153) benchmarks and [ASI-Evolve's](https://github.com/GAIR-NLP/ASI-Evolve) embedding model specs.
+RTX 3060 12GB VRAM. Numbers based on [SLMs paper](https://arxiv.org/abs/2506.02153) benchmarks, Qwen3 technical report, and [ASI-Evolve's](https://github.com/GAIR-NLP/ASI-Evolve) embedding model specs.
 
 | Component | VRAM | RAM | Source |
 |-----------|------|-----|--------|
-| qwen2.5:14b-q4 (weights) | 7.8 GB | — | ~8GB for 14B Q4, standard llama.cpp |
-| KV cache (32k context) | 1.8 GB | — | Varies with depth |
+| qwen3:8b-q4_k_m (weights) | 5.2 GB | — | Qwen3 technical report, 4-bit 8B |
+| KV cache (32K context) | ~1.5 GB | — | Varies with depth; 32K = Qwen3 native ctx |
 | FAISS indices | 0 | ~150 MB | CPU only |
 | all-MiniLM-L6-v2 (ONNX) | 0 | ~80 MB | CPU only, same as ASI-Evolve |
 | JARVIS binary | ~0 | ~15 MB | Rust single binary |
 | SQLite | 0 | ~50 MB | WAL mode |
 | Ollama runtime | ~100 MB | ~100 MB | Server overhead |
-| **Total** | **~9.7 GB** | **~400 MB** | |
-| **Headroom** | **~2.3 GB** | **~31.6 GB** | Buffer for KV spikes |
+| **Total** | **~6.9 GB** | **~400 MB** | |
+| **Headroom** | **~5.1 GB** | **~31.6 GB** | Significant buffer — enables sleep-time LoRA |
+
+**Upgrade path:** `llama4:scout` (MoE, 109B total / 17B active parameters, ~10GB VRAM) fits within headroom budget for higher-stakes reasoning tasks. Switch via config, no code change.
+
+**Sleep-time fine-tuning:** With qwen3:8b-q4_k_m as primary, the 5.1GB VRAM headroom is sufficient for overnight QLoRA fine-tuning (Qwen3-8B 4-bit + LoRA adapters + optimizer states ≈ 6GB with [unsloth](https://github.com/unslothai/unsloth)). Schedule via evolved's background runner when agent is idle. This is Lever 1 (parametric) in the three-lever framework.
 
 Config (`config/hardware.toml`):
 ```toml
@@ -952,8 +989,9 @@ ram_gb = 32
 gpu = "rtx3060"
 
 [model]
-primary = "qwen2.5:14b-q4"
-fallback = "phi4:14b-q4"
+primary = "qwen3:8b-q4_k_m"
+upgrade = "llama4:scout"
+fallback = "qwen3:14b-q4_k_m"
 inference = "ollama"
 
 [compute]
@@ -1329,7 +1367,107 @@ This is the primary feedback loop of the trifecta. It operates faster than the f
 ---
 
 *Architecture version: 0.3*
-*Compiled: 2026-05-22*
+---
+
+## 15. Three-Lever Framework & Experimental Design
+
+### The framework
+
+Agent self-improvement operates on three orthogonal levers. JARVIS combines all three. The framework is the thesis framing — the paper's central contribution beyond the specific mechanisms.
+
+```
+Lever 1 — PARAMETRIC (weights)
+  What: SDAR fine-tuning on successful trajectories. Overnight QLoRA run.
+  When: After 30 HIRO rounds, when agent has accumulated 500+ successful trajectories.
+  How: Alpaca-style self-distillation: use agent's own successful episodes as training data.
+       Generate with qwen3:8b, fine-tune qwen3:8b on its own good outputs.
+       Implementation: unsloth + SDAR objective (sigmoid-gated token distillation).
+  Signal: model-level capability improvement (not harness)
+  Pace: Slow (1x per batch of episodes, overnight)
+  Portability: LOW (adapter is model-specific)
+
+Lever 2 — CONTEXTUAL (trajectory replay)
+  What: Self-Generated ICE, ACE-style evolving system prompt, MARS reflection.
+  When: Every session, before each task.
+  How: memd.episodic retrieves similar past successful trajectories → inject as few-shot examples.
+       MARS single-cycle reflection: after failure, generate principle + procedure → inject to working memory.
+  Signal: session-level performance boost (ephemeral)
+  Pace: Fast (every task)
+  Portability: MEDIUM (tied to task domain, not model)
+
+Lever 3 — STRUCTURAL (harness)
+  What: DHE-guided harness evolution. Changes tool descriptions, memory architecture, prompts.
+  When: Every evolved cycle (default: every hour).
+  How: DHE diagnoses → Researcher proposes → Engineer applies → Analyzer verifies.
+  Signal: persistent harness improvement (accumulates)
+  Pace: Medium (1 cycle/hour)
+  Portability: HIGH (harness transfers across model families, Life-Harness proves this)
+```
+
+### Why the combination is stronger than any single lever
+
+| Property | Lever 1 alone | Lever 2 alone | Lever 3 alone | All three |
+|----------|--------------|--------------|--------------|-----------|
+| Persistent gains | ✓ | ✗ | ✓ | ✓ |
+| Session-time speed | ✗ | ✓ | ✓ | ✓ |
+| Transfers to new model | ✗ | Partial | ✓ | Partial+structure |
+| Theoretically bounded (safe) | Depends | ✓ | ✓ | ✓ |
+| Consumer hardware feasible | ✓ overnight | ✓ always | ✓ always | ✓ |
+| Metacognitive self-model | ✗ | ✗ | ✗ | ✓ (MHE) |
+
+No existing paper combines all columns. JARVIS is the first implementation.
+
+### The 4-baseline experimental table
+
+Required for the paper (Table 1). Isolates each lever's contribution.
+
+| Condition | Lever 1 (SDAR) | Lever 2 (ICE) | Lever 3 (evolved) | Prediction |
+|-----------|---------------|---------------|-------------------|------------|
+| **Baseline 1**: Stock qwen3:8b, no evolution | ✗ | ✗ | ✗ | Lowest absolute performance, HIRO(30) ≈ 0 |
+| **Baseline 2**: SDAR qwen3:8b, no evolution | ✓ | ✗ | ✗ | Model-only ceiling — confirms Lever 1 gain |
+| **Baseline 3**: Stock qwen3:8b + JARVIS evolved | ✗ | ✓ | ✓ | Structural+contextual without parametric |
+| **Target**: SDAR qwen3:8b + JARVIS evolved | ✓ | ✓ | ✓ | All-lever combination — expected: superadditive |
+| **Cloud ref**: GPT-4o one-time runs | — | — | — | Frontier ceiling for calibration (no evolution) |
+
+**The superadditivity claim:** If Lever 1 gains X pp and Lever 3 gains Y pp independently, the combination should gain ≥ X + Y pp — because SDAR-improved model is a better proposer for Lever 3 (it generates better ChangeManifests), and Lever 3 structural improvements make Lever 1 fine-tuning data higher quality (failures are already diagnosed and addressed, so remaining failures are model-layer failures that fine-tuning can fix).
+
+### MHE — Metacognitive Harness Evolution
+
+MHE is the overarching frame that unifies the trifecta with the three levers. The system knows what it is, what it can do, and what's holding it back.
+
+```
+MHE loop:
+  1. BF computes F(H_k) = [p_tool, p_plan, p_correct]  → "what am I good/bad at?"
+  2. DHE traces failed tasks in weak categories           → "why am I failing there?"
+  3. Attribution: which lever can fix this layer?
+     - Layer 1-2 (retrieval/context) → Lever 2 + LCAP
+     - Layer 3-4 (tool dispatch/execution) → Lever 3 (structural)
+     - Layer 5 (reasoning) → Lever 1 (parametric, if pattern is pervasive)
+  4. Apply targeted lever, record as EvolutionNode with lever_type: {1|2|3}
+  5. Next round: verify if attribution was correct (DHE fix-prediction precision)
+  6. Metacognitive self-model updated: what attribution patterns are reliable?
+```
+
+**The self-model store** lives in `memd.semantic` under the key prefix `mhe::`. Entries:
+```rust
+MetacognitiveEntry {
+    round: u32,
+    task_type: TaskType,
+    predicted_layer: u8,          // DHE attribution
+    predicted_lever: u8,          // 1, 2, or 3
+    actual_improvement: f32,      // delta F_i(H_{k+1} - H_k) for this task type
+    attribution_correct: bool,    // predicted_layer matched actual fix location
+    confidence: f32,              // DHE confidence score at prediction time
+}
+```
+
+The system can ask itself: "When I attributed a failure to Layer 3 (tool dispatch) and applied a Lever 3 fix, how often did the relevant task type actually improve next round?" This is **MCA (Metacognitive Calibration Accuracy)** — the self-model's reliability metric.
+
+**Target:** Pearson r(MCA, IR) > 0.70 over 30 rounds. Interpretation: agents with more calibrated self-models improve faster.
+
+---
+
+*Compiled: 2026-05-23*
 *Status: Pre-implementation. No Rust files written yet.*
 *Next action: User reviews this document → switch to Linux machine → begin Week 1.*
-*Trifecta (Section 14) implemented in Week 5 after core system is stable.*
+*Trifecta (Section 14) + Three-Lever Framework (Section 15) implemented in Week 5 after core system is stable.*

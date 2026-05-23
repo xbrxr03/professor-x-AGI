@@ -84,6 +84,53 @@ What I currently know, with sources. This grows as I research. Every claim has a
 
 ---
 
+## On the Three-Lever Framework
+
+**The three levers are orthogonal and composable.** Every existing self-improvement paper touches exactly one: parametric (weights), contextual (in-context), or structural (harness). JARVIS is the first to combine all three with a metacognitive self-model directing which lever to apply per failure type.
+
+**Lever 1 — Parametric (SDAR, fine-tuning):** [SDAR (arXiv:2605.15155)](https://arxiv.org/abs/2605.15155) — token-level sigmoid-gated distillation on Qwen3 families. +9.4% ALFWorld, +10.2% WebShop. Overnight QLoRA feasible on RTX 3060 (Qwen3-8B 4-bit ≈ 6GB with unsloth). The Alpaca analogy: use the agent's own successful trajectories as self-generated training data. Slow, model-specific, permanent.
+
+**Lever 2 — Contextual (trajectory replay, heuristics):** Self-Generated ICE ([arXiv:2505.00234](https://arxiv.org/abs/2505.00234)): 73%→93% ALFWorld, zero fine-tuning. ACE ([arXiv:2510.04618](https://arxiv.org/abs/2510.04618)): +10.6% agent benchmarks, ICLR 2026. Trajectory-Informed Memory ([arXiv:2603.10600](https://arxiv.org/abs/2603.10600)): 14.3pp gains on AppWorld, 149% relative improvement on complex tasks. MARS ([arXiv:2601.11974](https://arxiv.org/abs/2601.11974)): single-cycle principle+procedure reflection. Fast, ephemeral, no fine-tuning.
+
+**Lever 3 — Structural (harness evolution):** Life-Harness ([arXiv:2605.22166](https://arxiv.org/abs/2605.22166)) proves harness improvements from Qwen3-4B transfer to 17 other models at 88.5% avg relative improvement. Meta-Harness ([arXiv:2603.28052](https://arxiv.org/abs/2603.28052), Stanford) achieves +7.7pp text classification, uses Claude Code as proposer. Harbor ([arXiv:2604.20938](https://arxiv.org/abs/2604.20938)): Bayesian BO for harness config (not LLM-based). Persistent, portable, accumulating.
+
+**The portability asymmetry is the key insight:** Structural improvements (Lever 3) are model-agnostic — they fix environment-side mismatches. Contextual improvements (Lever 2) are domain-specific. Parametric improvements (Lever 1) are model-specific. A harness evolved on Qwen3-8B can be dropped onto LLaMA, Gemma, or any future model and most of the gains transfer. This is the "Alpaca moment" for harness engineering: the evolved harness is a portable corpus, not a model artifact.
+
+**No existing paper states the three-lever framework explicitly.** The taxonomy is a contribution in itself — it names and structures something the community is doing implicitly.
+
+**"It's Not the Size" ([arXiv:2605.12129](https://arxiv.org/abs/2605.12129))** directly validates JARVIS's approach: 4-stage pipeline (planning, execution, verification, recovery) achieves TSR=0.952 on Gemma4 2B. Harness design determines operational stability, not model size. Published May 2026.
+
+---
+
+## On Comparable Systems and What JARVIS Adds
+
+**Meta-Harness (Stanford, [arXiv:2603.28052](https://arxiv.org/abs/2603.28052))** is the closest competitor for Lever 3. Key differences:
+- Meta-Harness: frontier API (Claude Code), no consumer hardware constraint, no metacognitive self-model, Lever 3 only
+- JARVIS: Qwen3-8B locally, metacognitive self-model (MHE), all three levers, diagnostics before modification (DHE)
+
+**Statistical Limits of Self-Improving Agents ([arXiv:2510.04399](https://arxiv.org/abs/2510.04399))** establishes a formal theorem: self-improvement is safe and lossless iff model capacity is bounded. JARVIS's harness evolution (frozen model weights, harness-level changes only) satisfies this condition by construction. This is free theoretical grounding for why our approach is safe to let run unattended.
+
+**MARS ([arXiv:2601.11974](https://arxiv.org/abs/2601.11974))** is the Lever 2 component that complements DHE at Layer 5 (reasoning failures). Principle-based reflection (what rules to avoid) + procedural reflection (what steps to take). Single cycle, no multi-turn loop. ~70% less compute than recursive Reflexion. Integrates directly into JARVIS's Reflexion buffer.
+
+**Missing Knowledge Layer ([arXiv:2604.11364](https://arxiv.org/abs/2604.11364))** identifies a four-tier memory hierarchy with distinct persistence semantics: Knowledge (indefinite supersession), Memory (Ebbinghaus decay), Wisdom (evidence-gated revision), Intelligence (ephemeral). JARVIS's current CoALA-based design partially maps: Pinned ≈ Knowledge, Episodic ≈ Memory, Semantic ≈ Wisdom (partially). Upgrade path: separate persistence semantics per tier with different update rules.
+
+---
+
+## On the Primary Model Stack (updated 2026-05-23)
+
+**Primary model is now qwen3:8b-q4_k_m, not qwen2.5:14b-q4.** Key specs: 5.2GB VRAM, ~42 tok/s on RTX 3060, 32K context, thinking mode enabled, Qwen3 family tested by SDAR. This frees ~2.8GB VRAM vs the 14B model — enough to run QLoRA fine-tuning overnight.
+
+**Upgrade model is llama4:scout** (MoE, 109B total / 17B active, ~10GB VRAM). Fits within 12GB with Qwen3 headroom freed. Use for high-stakes reasoning tasks where quality trumps speed.
+
+**Consumer hardware feasibility for all three levers is confirmed:**
+- Lever 1 (overnight QLoRA): Qwen3-8B 4-bit + LoRA adapters + optimizer ≈ 6GB → fits in 12GB with qwen3:8b-q4_k_m freed VRAM
+- Lever 2 (trajectory replay): CPU-only embedding, no additional VRAM
+- Lever 3 (harness evolution): LLM calls to Ollama during idle periods, no additional VRAM
+
+**"Time is Not Compute" ([arXiv:2603.28823](https://arxiv.org/abs/2603.28823))** finds optimal model size grows faster than Chinchilla predicts under consumer GPU time constraints. Implication: Qwen3-8B is likely optimal for our hardware/time budget — larger models don't compensate for slower iteration speed on a 3060.
+
+---
+
 ## On Scientific Method (as it applies to this project)
 
 **A dead end is a result.** Recording what didn't work — with the specific reason — is as valuable as recording what did. The field does not have enough documented failures. I record mine.
@@ -94,5 +141,6 @@ What I currently know, with sources. This grows as I research. Every claim has a
 
 ---
 
-*Last updated: 2026-05-22*
+*Last updated: 2026-05-23*
 *Status: Pre-experiment. All entries are literature-based, not yet from JARVIS experiments.*
+*Major update: Added three-lever framework, comparable systems analysis, model stack correction (Qwen3-8B), 9 new Tier 5 papers.*

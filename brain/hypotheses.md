@@ -302,6 +302,57 @@ H9 (consumer hardware parity) ← run after H5
 
 ---
 
+## H13 — MCA-IR Correlation (Metacognitive Calibration)
+
+**Statement:** Over 30 HIRO rounds, JARVIS's metacognitive calibration accuracy (MCA — fraction of DHE attributions where the predicted lever fix actually improved the targeted task type) will correlate positively with improvement rate IR (5-round rolling HIRO gain). Pearson r(MCA, IR) > 0.70.
+
+**Why this matters:** This is the core empirical claim of Metacognitive Harness Evolution. It says: agents that have more accurate self-models improve faster. If confirmed, it validates the metacognitive frame — not just as a philosophical point, but as a measurable operational driver of improvement rate. If falsified (r < 0.40), the self-model is epiphenomenal and the improvement comes from the mechanisms (DHE, LCAP) themselves, not from calibrated self-knowledge.
+
+**Evidence (prior to testing):**
+- "Truly Self-Improving Agents Require Intrinsic Metacognitive Learning" ([arXiv:2506.05109](https://arxiv.org/abs/2506.05109)): position paper with no implementation. States metacognitive evaluation (did my learning work) as required. H13 is the empirical test of this claim.
+- Meta-Harness ([arXiv:2603.28052](https://arxiv.org/abs/2603.28052)): better diagnostic access (full execution traces vs. scalar scores) → better proposals. This suggests that self-knowledge quality → proposal quality → improvement rate. H13 operationalizes this as a longitudinal correlation.
+
+**Proposed test:**
+After every HIRO round k, compute:
+- `MCA(k)` = fraction of EvolutionNodes in rounds 1..k where attribution_correct = true
+- `IR(k)` = mean(HIRO(k-4)..HIRO(k)) — rolling 5-round improvement rate
+
+At round 30, compute Pearson r(MCA_k, IR_k) for k ∈ [10, 30] (first 10 rounds excluded as cold start).
+
+**Success criteria:** Pearson r > 0.70. p < 0.05 (n=20 rounds, df=18).
+
+**Confidence:** 0.60 — theoretically motivated but untested at this scale. MCA may plateau quickly (either very high or very low), reducing variance needed for correlation.
+
+**Status:** Untested. Measured automatically during HIRO from round 10 onward. Requires MetacognitiveEntry store in memd.semantic (see Section 15 of ARCHITECTURE.md).
+
+---
+
+## Hypothesis Dependency Graph
+
+```
+H1 (context threshold)
+  └── constrains safe memory budget for all other hypotheses
+  └── sets T* that seeds LCAP (H12)
+
+H2 (cerebellum bypass)    ← independent, run early
+H3 (memory-as-tool)       ← depends on H1 for safe context budget
+H4 (surprise logging)     ← independent, run early
+H6 (temporal compression) ← run after 7+ days of operation
+
+H7 (self-distilled principles) ← run after 10+ task failures accumulated
+H8 (component attribution)     ← measured automatically during HIRO
+
+H10 (DHE fix precision)        ← measured automatically during HIRO, rounds 10-30
+H11 (fingerprint non-uniform)  ← measured automatically during HIRO, all rounds
+H12 (LCAP vs static)           ← depends on H1 for T* baseline; run after H1
+H13 (MCA-IR correlation)       ← measured automatically during HIRO, rounds 10-30; depends on H10
+
+H5 (autonomous vs human)  ← run after H1–H4 resolved; trifecta (H10-H12) active during H5
+H9 (consumer hardware parity) ← run after H5
+```
+
+---
+
 ## What Makes a Hypothesis Dead
 
 A hypothesis is moved to [dead-ends.md](dead-ends.md) if:
@@ -313,7 +364,8 @@ I record dead ends with the same detail as confirmed hypotheses. A dead end is a
 
 ---
 
-*Last updated: 2026-05-22*
+*Last updated: 2026-05-23*
 *Status: All hypotheses untested — pre-experiment phase*
 *H10–H12 added: trifecta inventions (DHE, BF, LCAP)*
-*Total hypotheses: 12*
+*H13 added: MCA-IR correlation (metacognitive calibration accuracy)*
+*Total hypotheses: 13*
