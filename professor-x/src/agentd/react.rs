@@ -47,12 +47,6 @@ struct ParsedStep {
     params: Value,
 }
 
-enum LoopSignal {
-    Continue,
-    TaskComplete(String),
-    TaskFailed(String),
-}
-
 pub struct ReactLoop {
     ollama:   Arc<OllamaClient>,
     registry: Arc<std::sync::RwLock<ToolRegistry>>,
@@ -157,7 +151,9 @@ impl ReactLoop {
         cognition_context: &[String],
     ) -> Result<bool> {
         const MAX_STEPS: usize = 20;
-        let executor = ToolExecutor::new(Arc::clone(&self.registry));
+        let executor = ToolExecutor::new(Arc::clone(&self.registry))
+            .with_memory(Arc::clone(&self.memory))
+            .with_ollama(Arc::clone(&self.ollama));
         let scope    = PermissionScope::default_autonomous();
         let audit    = AuditStore::new(Arc::clone(&self.memory.db));
         let session_id = Uuid::new_v4();

@@ -17,9 +17,45 @@ use agentd::{TaskNode, TaskQueue, TaskType};
 use agentd::react::ReactLoop;
 use evolved::CognitionStore;
 use evolved::cognition_base::CognitionItem;
+use evolved::tracker::{OutcomeTracker, TaskOutcome};
+use evolved::{HiroRunner};
 use memd::MemoryManager;
 use policyd::{AuditStore, PolicyEngine};
 use toolbridge::ToolRegistry;
+
+// ── CLI args ──────────────────────────────────────────────────────────────────
+
+struct CliArgs {
+    /// Run a single task immediately and exit.
+    task: Option<String>,
+    /// Fire the daily cron job immediately (for testing).
+    run_now: bool,
+    /// Run HIRO benchmark for the given round number and exit.
+    hiro_round: Option<u32>,
+}
+
+fn parse_args() -> CliArgs {
+    let args: Vec<String> = std::env::args().collect();
+    let mut cli = CliArgs { task: None, run_now: false, hiro_round: None };
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--task" if i + 1 < args.len() => {
+                cli.task = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--run-now" => { cli.run_now = true; i += 1; }
+            "--hiro" if i + 1 < args.len() => {
+                cli.hiro_round = args[i + 1].parse::<u32>().ok();
+                i += 2;
+            }
+            _ => { i += 1; }
+        }
+    }
+    cli
+}
+
+// ── Entry point ───────────────────────────────────────────────────────────────
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -29,6 +65,8 @@ async fn main() -> Result<()> {
                 .unwrap_or_else(|_| EnvFilter::new("professor_x=info,warn"))
         )
         .init();
+
+    let cli = parse_args();
 
     info!("Professor X starting — single binary, five modules");
 
@@ -56,7 +94,7 @@ async fn main() -> Result<()> {
 
     // ── policyd ───────────────────────────────────────────────────────────
     let policy = Arc::new(PolicyEngine::new(cancel.clone()));
-    info!("policyd: initialized (approval_threshold=50, timeout=300s)");
+    info!("policyd: initialized (approval_threshold=65, timeout=300s)");
 
     {
         let audit = AuditStore::new(Arc::clone(&memory.db));
@@ -85,25 +123,53 @@ async fn main() -> Result<()> {
         Err(e)    => warn!("ollama: not reachable ({e}) — tasks will fail until Ollama starts"),
     }
 
-    // ── agentd: task queue + scheduler ───────────────────────────────────
-    let _task_queue = Arc::new(std::sync::Mutex::new(TaskQueue::new()));
-    let scheduler  = agentd::CronScheduler::new(Arc::clone(&memory.db));
+    // ── one-shot --task mode ──────────────────────────────────────────────
+    if let Some(task_desc) = cli.task {
+        return run_single_task(
+            task_desc,
+            Arc::clone(&ollama),
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            cancel,
+        ).await;
+    }
 
-    // ── task dispatch channel ─────────────────────────────────────────────
+    // ── HIRO benchmark mode ───────────────────────────────────────────────
+    if let Some(round) = cli.hiro_round {
+        return run_hiro_benchmark(
+            round,
+            Arc::clone(&ollama),
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            cancel,
+        ).await;
+    }
+
+    // ── daemon mode ───────────────────────────────────────────────────────
+    let _task_queue = Arc::new(std::sync::Mutex::new(TaskQueue::new()));
+    let scheduler   = agentd::CronScheduler::new(Arc::clone(&memory.db));
+
+    // Outcome tracking — feeds the evolution cycle
+    let (outcome_tx, mut outcome_rx) = mpsc::channel::<TaskOutcome>(256);
+    let mut tracker = OutcomeTracker::new();
+
     let (task_tx, mut task_rx) = mpsc::channel::<TaskNode>(64);
 
-    // Seed the daily autonomous cycle (runs every 7 hours)
-    seed_daily_schedule(&scheduler)?;
+    seed_daily_schedule(&scheduler, cli.run_now)?;
 
     info!("Professor X ready — autonomous cycle active");
     info!("Kill switch: SIGUSR2 or Ctrl+C");
+    if cli.run_now {
+        info!("--run-now: firing daily cron immediately");
+    }
 
     // ── main event loop ───────────────────────────────────────────────────
     let mut scheduler_interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
 
     loop {
         tokio::select! {
-            // Scheduler tick every 60 seconds
             _ = scheduler_interval.tick() => {
                 match scheduler.tick() {
                     Ok(due_jobs) => {
@@ -118,13 +184,13 @@ async fn main() -> Result<()> {
                 }
             }
 
-            // Execute incoming tasks via ReAct loop
             Some(mut task) = task_rx.recv() => {
-                let memory_ref  = Arc::clone(&memory);
+                let memory_ref   = Arc::clone(&memory);
                 let registry_ref = Arc::clone(&registry);
-                let policy_ref  = Arc::clone(&policy);
-                let ollama_ref  = Arc::clone(&ollama);
-                let cancel_ref  = cancel.clone();
+                let policy_ref   = Arc::clone(&policy);
+                let ollama_ref   = Arc::clone(&ollama);
+                let cancel_ref   = cancel.clone();
+                let outcome_tx   = outcome_tx.clone();
 
                 tokio::spawn(async move {
                     let react = ReactLoop::new(
@@ -135,15 +201,25 @@ async fn main() -> Result<()> {
                         cancel_ref,
                     );
                     match react.run(&mut task).await {
-                        Ok(outcome) => info!(
-                            "task '{}' {} (score={:.2})",
-                            task.description,
-                            if outcome.success { "succeeded" } else { "failed" },
-                            outcome.score,
-                        ),
+                        Ok(outcome) => {
+                            info!(
+                                "task '{}' {} (score={:.2})",
+                                task.description,
+                                if outcome.success { "succeeded" } else { "failed" },
+                                outcome.score,
+                            );
+                            let _ = outcome_tx.send(outcome).await;
+                        }
                         Err(e) => warn!("task '{}' error: {e}", task.description),
                     }
                 });
+            }
+
+            // Collect outcomes from spawned tasks into the tracker
+            Some(outcome) = outcome_rx.recv() => {
+                tracker.record(outcome);
+                let rate = tracker.success_rate(20);
+                info!("tracker: {} outcomes, success_rate(20)={:.1}%", tracker.len(), rate * 100.0);
             }
 
             _ = cancel.cancelled() => {
@@ -161,6 +237,61 @@ async fn main() -> Result<()> {
     info!("Professor X stopped");
     Ok(())
 }
+
+// ── One-shot task mode ────────────────────────────────────────────────────────
+
+async fn run_single_task(
+    description: String,
+    ollama:   Arc<ollama::OllamaClient>,
+    registry: Arc<std::sync::RwLock<ToolRegistry>>,
+    policy:   Arc<PolicyEngine>,
+    memory:   Arc<MemoryManager>,
+    cancel:   CancellationToken,
+) -> Result<()> {
+    info!("one-shot task: {description}");
+    let react = ReactLoop::new(ollama, registry, policy, memory, cancel);
+    let mut task = TaskNode::new(description, TaskType::UserRequest, 100);
+    let outcome = react.run(&mut task).await?;
+    info!(
+        "task {}: score={:.2} steps={} attempts={}",
+        if outcome.success { "SUCCEEDED" } else { "FAILED" },
+        outcome.score,
+        outcome.steps_taken,
+        task.attempt_count,
+    );
+    if let Some(ref fm) = outcome.failure_mode {
+        info!("failure_mode: {fm}");
+    }
+    Ok(())
+}
+
+// ── HIRO benchmark mode ───────────────────────────────────────────────────────
+
+async fn run_hiro_benchmark(
+    round:    u32,
+    ollama:   Arc<ollama::OllamaClient>,
+    registry: Arc<std::sync::RwLock<ToolRegistry>>,
+    policy:   Arc<PolicyEngine>,
+    memory:   Arc<MemoryManager>,
+    cancel:   CancellationToken,
+) -> Result<()> {
+    info!("HIRO benchmark — round {round}");
+    let runner = HiroRunner::new(ollama, registry, policy, memory, cancel);
+    let result = runner.run_benchmark(round).await?;
+
+    info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    info!("HIRO round {} results:", result.round);
+    info!("  tasks:     {}/{}", result.successes, result.task_count);
+    info!("  p_tool:    {:.3}", result.p_tool);
+    info!("  p_plan:    {:.3}", result.p_plan);
+    info!("  p_correct: {:.3}", result.p_correct);
+    info!("  pass@3:    {:.3}", result.pass_at_3);
+    info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+    Ok(())
+}
+
+// ── Signal handlers ───────────────────────────────────────────────────────────
 
 fn setup_signal_handlers(cancel: CancellationToken) {
     #[cfg(unix)]
@@ -184,7 +315,9 @@ fn setup_signal_handlers(cancel: CancellationToken) {
     }
 }
 
-fn seed_daily_schedule(scheduler: &agentd::CronScheduler) -> Result<()> {
+// ── Scheduler ────────────────────────────────────────────────────────────────
+
+fn seed_daily_schedule(scheduler: &agentd::CronScheduler, fire_now: bool) -> Result<()> {
     use agentd::scheduler::{CronJob, JobState, ScheduleType};
     use chrono::Utc;
 
@@ -198,9 +331,13 @@ fn seed_daily_schedule(scheduler: &agentd::CronScheduler) -> Result<()> {
                  (4) If results are significant, update brain/knowledge-base.md. \
                  (5) Commit all changes to git with a descriptive message.".to_string(),
         schedule_type: ScheduleType::Cron,
-        schedule_value: "0 22 * * *".to_string(), // 10 PM daily
-        next_run_at: Utc::now() + chrono::Duration::minutes(1),
-        enabled: false, // disabled until user activates
+        schedule_value: "0 22 * * *".to_string(),
+        next_run_at: if fire_now {
+            Utc::now() // fire on next tick (~60s)
+        } else {
+            Utc::now() + chrono::Duration::minutes(1)
+        },
+        enabled: fire_now,
         state: JobState::Scheduled,
         repeat_limit: None,
         repeat_completed: 0,
@@ -210,9 +347,11 @@ fn seed_daily_schedule(scheduler: &agentd::CronScheduler) -> Result<()> {
     };
 
     scheduler.register(&cycle_job)?;
-    info!("scheduler: daily cycle job registered (disabled until activated)");
+    info!("scheduler: daily cycle job registered (enabled={})", fire_now);
     Ok(())
 }
+
+// ── Cognition base ────────────────────────────────────────────────────────────
 
 fn seed_cognition_base() -> Vec<CognitionItem> {
     let seeds = [

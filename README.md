@@ -69,19 +69,36 @@ Everything Professor X learns is documented here in real time.
 
 ## Status
 
-**Week 2 complete. Compiles clean. First autonomous run pending.**
+**Week 3 ready. Compiles clean. Install Ollama to run.**
 
 ```
 Week 1  ✅ memd (5-layer SQLite), toolbridge skeleton, policyd skeleton
 Week 2  ✅ Ollama HTTP client, ReAct loop, MARS+ICE, credential vault,
             kill switch (SIGUSR1/2), DHE+BF+LCAP stubs, Researcher/Engineer/Analyzer loop
-Week 3  → first full 7-hour autonomous cycle
-Week 4  → HIRO baseline (null condition, 10 frozen-harness rounds)
+Week 3  ✅ HIRO 60-task benchmark suite, outcome tracker wired, --task/--run-now/--hiro CLI
+Week 3  → install Ollama + qwen3:8b-q4_k_m, run first autonomous cycle
+Week 4  → HIRO baseline (null condition, 10 frozen-harness rounds): cargo run -- --hiro 0
 Week 5  → DHE+BF+LCAP active (after round 10), metacognitive self-model
 Week 6+ → 30 HIRO rounds, data collection, paper
 ```
 
-The binary is at `professor-x/`. Run with `cargo run` (requires Ollama + qwen3:8b-q4_k_m).
+```bash
+# Install Ollama (requires sudo)
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull qwen3:8b-q4_k_m
+
+# One-shot test
+PROFESSOR_X_DATA_DIR=~/.professor-x cargo run -- --task "List all .rs files in src/evolved/"
+
+# Daemon (fires cron at 22:00 daily)
+PROFESSOR_X_DATA_DIR=~/.professor-x cargo run
+
+# Immediate daemon run (fires in ~60s)
+PROFESSOR_X_DATA_DIR=~/.professor-x cargo run -- --run-now
+
+# HIRO benchmark round 0 (null-condition baseline)
+PROFESSOR_X_DATA_DIR=~/.professor-x cargo run -- --hiro 0
+```
 
 ---
 

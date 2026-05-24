@@ -69,6 +69,10 @@ impl OutcomeTracker {
             .collect()
     }
 
+    pub fn len(&self) -> usize {
+        self.outcomes.len()
+    }
+
     pub fn success_rate(&self, window: usize) -> f32 {
         let recent: Vec<_> = self.outcomes.iter().rev().take(window).collect();
         if recent.is_empty() { return 0.0; }

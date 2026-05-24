@@ -1,0 +1,366 @@
+{
+  "version": "1.0",
+  "description": "HIRO benchmark: 60 tasks across 3 categories (20 each). Pass@3 semantics.",
+  "tasks": [
+    {
+      "id": "tu_001",
+      "category": "tool_use",
+      "description": "Read the file /etc/os-release and report the Linux distribution name and version number.",
+      "difficulty": "easy"
+    },
+    {
+      "id": "tu_002",
+      "category": "tool_use",
+      "description": "List all files in the professor-x/src directory (relative to the working directory) and report the total count.",
+      "difficulty": "easy"
+    },
+    {
+      "id": "tu_003",
+      "category": "tool_use",
+      "description": "Read the file professor-x/Cargo.toml and list all dependency names (keys under [dependencies]).",
+      "difficulty": "easy"
+    },
+    {
+      "id": "tu_004",
+      "category": "tool_use",
+      "description": "Write the text 'Professor X HIRO benchmark heartbeat' to the file /tmp/px-hiro-heartbeat.txt, then read it back to confirm the write succeeded.",
+      "difficulty": "easy"
+    },
+    {
+      "id": "tu_005",
+      "category": "tool_use",
+      "description": "Run the command 'uname -a' using shell.restricted and report the kernel version and architecture.",
+      "difficulty": "easy"
+    },
+    {
+      "id": "tu_006",
+      "category": "tool_use",
+      "description": "Run 'df -h /' using shell.restricted and report the total disk size and percentage used on the root filesystem.",
+      "difficulty": "easy"
+    },
+    {
+      "id": "tu_007",
+      "category": "tool_use",
+      "description": "Search memory using the query 'MARS reflection' with layer=semantic and report what entries are found, or confirm none exist yet.",
+      "difficulty": "easy"
+    },
+    {
+      "id": "tu_008",
+      "category": "tool_use",
+      "description": "Write this entry to semantic memory: 'RTX 3060 12GB GPU supports CUDA compute capability 8.6 and fits qwen3:8b-q4_k_m in 5.2GB VRAM.' Source: hardware-spec.",
+      "difficulty": "easy"
+    },
+    {
+      "id": "tu_009",
+      "category": "tool_use",
+      "description": "Read the file professor-x/config/hardware.toml and report the value of the 'primary' model field.",
+      "difficulty": "easy"
+    },
+    {
+      "id": "tu_010",
+      "category": "tool_use",
+      "description": "List all .rs files in the professor-x/src/evolved/ directory.",
+      "difficulty": "easy"
+    },
+    {
+      "id": "tu_011",
+      "category": "tool_use",
+      "description": "Run 'free -h' using shell.restricted and report the total RAM and the currently available RAM.",
+      "difficulty": "easy"
+    },
+    {
+      "id": "tu_012",
+      "category": "tool_use",
+      "description": "Search the web for 'qwen3 8b quantized VRAM requirements' and report the memory figure mentioned in the top result.",
+      "difficulty": "medium"
+    },
+    {
+      "id": "tu_013",
+      "category": "tool_use",
+      "description": "Read professor-x/src/main.rs and report the name of the environment variable used to set the data directory.",
+      "difficulty": "easy"
+    },
+    {
+      "id": "tu_014",
+      "category": "tool_use",
+      "description": "Write the current UTC timestamp as a string to /tmp/px-timestamp.txt, then read it back to confirm.",
+      "difficulty": "easy"
+    },
+    {
+      "id": "tu_015",
+      "category": "tool_use",
+      "description": "Run 'git log --oneline -5' in the /home/abrar/professor-x-AGI directory using shell.restricted and list the 5 most recent commits.",
+      "difficulty": "medium"
+    },
+    {
+      "id": "tu_016",
+      "category": "tool_use",
+      "description": "Read brain/hypotheses.md and count the total number of hypotheses listed in the file.",
+      "difficulty": "medium"
+    },
+    {
+      "id": "tu_017",
+      "category": "tool_use",
+      "description": "List all top-level directories in /home/abrar/professor-x-AGI/ using fs.list.",
+      "difficulty": "easy"
+    },
+    {
+      "id": "tu_018",
+      "category": "tool_use",
+      "description": "Search memory with query='HIRO benchmark' layer=episodic and report any entries found, or confirm none exist yet.",
+      "difficulty": "easy"
+    },
+    {
+      "id": "tu_019",
+      "category": "tool_use",
+      "description": "Run 'nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv,noheader' using shell.restricted and report the GPU name and VRAM.",
+      "difficulty": "medium"
+    },
+    {
+      "id": "tu_020",
+      "category": "tool_use",
+      "description": "Read professor-x/src/ollama.rs and report the value of the DEFAULT_MODEL constant.",
+      "difficulty": "easy"
+    },
+    {
+      "id": "pl_001",
+      "category": "planning",
+      "description": "Count the total number of Rust source files (.rs) in professor-x/src/ using shell.restricted with find, then report the count and list the subdirectory breakdown.",
+      "difficulty": "medium"
+    },
+    {
+      "id": "pl_002",
+      "category": "planning",
+      "description": "Calculate the approximate total lines of Rust code in professor-x/src/ by running 'find professor-x/src -name *.rs | xargs wc -l' and report the total.",
+      "difficulty": "medium"
+    },
+    {
+      "id": "pl_003",
+      "category": "planning",
+      "description": "Read professor-x/src/main.rs and professor-x/src/evolved/mod.rs to identify which evolved submodules exist and which are exported publicly. Report the full list.",
+      "difficulty": "medium"
+    },
+    {
+      "id": "pl_004",
+      "category": "planning",
+      "description": "Generate 3 distinct, falsifiable hypotheses about whether injecting ICE examples improves ReAct task success rate for small language models. Each hypothesis must specify a measurable prediction.",
+      "difficulty": "hard"
+    },
+    {
+      "id": "pl_005",
+      "category": "planning",
+      "description": "Read brain/hypotheses.md and identify which hypothesis is closest to being testable with the current system. Explain your reasoning in 2-3 sentences.",
+      "difficulty": "hard"
+    },
+    {
+      "id": "pl_006",
+      "category": "planning",
+      "description": "Design a minimal 3-step experiment to measure whether Reflexion (verbal self-reflection) improves success rate on the HIRO self-correction category. Specify: what to measure, how many trials, what constitutes a positive result.",
+      "difficulty": "hard"
+    },
+    {
+      "id": "pl_007",
+      "category": "planning",
+      "description": "Read professor-x/src/agentd/react.rs and identify all the conditions that cause the ReAct loop to terminate early (not reaching max steps). List each condition and the line of code that triggers it.",
+      "difficulty": "hard"
+    },
+    {
+      "id": "pl_008",
+      "category": "planning",
+      "description": "Summarize the MHE three-lever framework in exactly 3 bullet points: one sentence per lever describing what it changes and when it should be activated.",
+      "difficulty": "medium"
+    },
+    {
+      "id": "pl_009",
+      "category": "planning",
+      "description": "Calculate: if the HIRO null-condition baseline shows pass@3=0.40 and after 20 evolution rounds it reaches pass@3=0.60, what is the HIRO score? Show your calculation.",
+      "difficulty": "medium"
+    },
+    {
+      "id": "pl_010",
+      "category": "planning",
+      "description": "Read professor-x/src/evolved/dhe.rs and explain the 5 DHE attribution layers in plain language. For each layer, give one example failure it would catch.",
+      "difficulty": "hard"
+    },
+    {
+      "id": "pl_011",
+      "category": "planning",
+      "description": "Read professor-x/src/evolved/lcap.rs and explain the 5 ContextBudget arms (Sparse through MemoryHeavy). For each arm, describe a task type where it would be the best choice.",
+      "difficulty": "hard"
+    },
+    {
+      "id": "pl_012",
+      "category": "planning",
+      "description": "List all 7 evolvable harness components mentioned in professor-x/src/evolved/proposer.rs, with a one-line description of what each one controls.",
+      "difficulty": "medium"
+    },
+    {
+      "id": "pl_013",
+      "category": "planning",
+      "description": "Design a regression test that can run in under 10 minutes to verify the ReAct loop is working correctly after a harness evolution. Specify: 3 tasks, expected behaviors, and a pass/fail criterion.",
+      "difficulty": "hard"
+    },
+    {
+      "id": "pl_014",
+      "category": "planning",
+      "description": "Read professor-x/src/evolved/loop_runner.rs and identify the 3 safety constraints that prevent unauthorized evolution of core modules. Quote the relevant code sections.",
+      "difficulty": "medium"
+    },
+    {
+      "id": "pl_015",
+      "category": "planning",
+      "description": "Write a 3-sentence research abstract for the Professor X paper. It must mention: the problem being solved, the novel approach (MHE), and the primary evaluation metric (HIRO score).",
+      "difficulty": "hard"
+    },
+    {
+      "id": "pl_016",
+      "category": "planning",
+      "description": "Estimate how many tokens per day Professor X will consume running the 22:00 daily cron job, assuming 60 HIRO tasks with 10 steps each at 500 tokens per step. Show the calculation.",
+      "difficulty": "medium"
+    },
+    {
+      "id": "pl_017",
+      "category": "planning",
+      "description": "Read professor-x/src/evolved/bf.rs and explain how the BehavioralFingerprint detects non-uniform improvement across task categories. What is the threshold and why was it chosen?",
+      "difficulty": "hard"
+    },
+    {
+      "id": "pl_018",
+      "category": "planning",
+      "description": "Identify the top 3 risks that could prevent the 30-round HIRO experiment from producing a publishable result. For each risk, propose one mitigation.",
+      "difficulty": "hard"
+    },
+    {
+      "id": "pl_019",
+      "category": "planning",
+      "description": "Read professor-x/src/memd/mod.rs and explain the CLAG two-stage retrieval strategy referenced in the schema comments. When does flat retrieval switch to cluster-based?",
+      "difficulty": "medium"
+    },
+    {
+      "id": "pl_020",
+      "category": "planning",
+      "description": "Read the README.md and ARCHITECTURE.md, then write a 5-bullet executive summary of the Professor X project that could be posted to r/MachineLearning.",
+      "difficulty": "hard"
+    },
+    {
+      "id": "sc_001",
+      "category": "self_correction",
+      "description": "Read the file /etc/shadow to retrieve password hashes. If you encounter a permission error, fall back to reading /etc/passwd instead and report the first 5 lines.",
+      "difficulty": "easy"
+    },
+    {
+      "id": "sc_002",
+      "category": "self_correction",
+      "description": "Write a test file to /root/hiro-test.txt. If permission is denied, write to /tmp/px-hiro-test.txt instead and confirm success.",
+      "difficulty": "easy"
+    },
+    {
+      "id": "sc_003",
+      "category": "self_correction",
+      "description": "Search the web for 'zxqwerty_nonexistent_topic_abc123_2025'. If you get no meaningful results, reformulate the query to search for 'autonomous agent self-improvement 2025' instead and report 2 results.",
+      "difficulty": "medium"
+    },
+    {
+      "id": "sc_004",
+      "category": "self_correction",
+      "description": "Fetch the URL 'http://invalid-domain-that-does-not-exist-px.local/data' to retrieve information. If the fetch fails, use web.search with query='professor x AGI harness evolution' instead.",
+      "difficulty": "easy"
+    },
+    {
+      "id": "sc_005",
+      "category": "self_correction",
+      "description": "Read the file /tmp/px-nonexistent-file-xyz123.txt. If it does not exist, create it with the content 'HIRO benchmark test file created by self-correction task sc_005' and then read it back to confirm.",
+      "difficulty": "easy"
+    },
+    {
+      "id": "sc_006",
+      "category": "self_correction",
+      "description": "Run the command 'sudo apt-get update' via shell.restricted. If this fails, run 'cat /etc/apt/sources.list' instead to report the configured package repositories.",
+      "difficulty": "medium"
+    },
+    {
+      "id": "sc_007",
+      "category": "self_correction",
+      "description": "Search memory (episodic layer) for 'xyzzy_nonexistent_keyword_abc'. If no results are found, write a note to semantic memory: 'No episodic entries found for this benchmark run. Memory is fresh.' Then report success.",
+      "difficulty": "easy"
+    },
+    {
+      "id": "sc_008",
+      "category": "self_correction",
+      "description": "Try to read professor-x/src/policyd/gating.rs. If it is too large (truncated), read only the first function by reading the file and noting the truncation, then report the first function signature found.",
+      "difficulty": "medium"
+    },
+    {
+      "id": "sc_009",
+      "category": "self_correction",
+      "description": "Run 'git status' in /home/abrar/professor-x-AGI via shell.restricted. If the output shows 'not a git repository', use fs.list on that directory instead and report the contents.",
+      "difficulty": "easy"
+    },
+    {
+      "id": "sc_010",
+      "category": "self_correction",
+      "description": "List the contents of /proc/1/fd/ to inspect open file descriptors for PID 1. If permission is denied, run 'ls /proc/1/' instead and report what is accessible.",
+      "difficulty": "medium"
+    },
+    {
+      "id": "sc_011",
+      "category": "self_correction",
+      "description": "Try to fetch https://arxiv.org/abs/2603.29640 to read the ASI-Evolve paper. If the fetch returns more than 10,000 characters, truncate to 10,000 and report a summary of the abstract only.",
+      "difficulty": "medium"
+    },
+    {
+      "id": "sc_012",
+      "category": "self_correction",
+      "description": "Search the web with an empty string query ''. If this fails or returns an error, immediately reformulate using query='self-evolving AI agent 2025' and report the first result.",
+      "difficulty": "easy"
+    },
+    {
+      "id": "sc_013",
+      "category": "self_correction",
+      "description": "Try to run 'nvidia-smi' via shell.restricted. If nvidia-smi is not available, run 'lspci | grep -i vga' instead to identify the GPU.",
+      "difficulty": "medium"
+    },
+    {
+      "id": "sc_014",
+      "category": "self_correction",
+      "description": "Read the file professor-x/hiro/tasks.json and report how many tasks are in the 'self_correction' category. If the file path is wrong, try looking for it with fs.list first.",
+      "difficulty": "medium"
+    },
+    {
+      "id": "sc_015",
+      "category": "self_correction",
+      "description": "Run 'wc -l professor-x/src/main.rs' via shell.restricted. If the file path is incorrect, use fs.list to find the correct location of main.rs first, then run the command.",
+      "difficulty": "easy"
+    },
+    {
+      "id": "sc_016",
+      "category": "self_correction",
+      "description": "Try to read /dev/urandom for binary entropy data using fs.read. If the content is binary/unreadable or causes an error, run 'od -An -tx1 -N 16 /dev/urandom' via shell.restricted to get 16 bytes as hex instead.",
+      "difficulty": "medium"
+    },
+    {
+      "id": "sc_017",
+      "category": "self_correction",
+      "description": "Search memory with layer='procedural' for query='hiro benchmark'. If no results are found, search with layer='semantic' instead and report the most relevant entry found.",
+      "difficulty": "easy"
+    },
+    {
+      "id": "sc_018",
+      "category": "self_correction",
+      "description": "Run 'cargo check 2>&1 | tail -5' from the professor-x directory via shell.restricted. If cargo is not in PATH, try '~/.cargo/bin/cargo check 2>&1 | tail -5' instead.",
+      "difficulty": "medium"
+    },
+    {
+      "id": "sc_019",
+      "category": "self_correction",
+      "description": "Read brain/inventions.md to find the DFA Trifecta specification. If the file does not exist, read brain/hypotheses.md instead and report the first hypothesis listed.",
+      "difficulty": "easy"
+    },
+    {
+      "id": "sc_020",
+      "category": "self_correction",
+      "description": "Try to list the contents of /home/abrar/.professor-x/ to inspect stored state. If the directory does not exist or permission is denied, report the error and instead read the PROFESSOR_X_DATA_DIR from professor-x/src/main.rs to determine where the data directory would be.",
+      "difficulty": "medium"
+    }
+  ]
+}

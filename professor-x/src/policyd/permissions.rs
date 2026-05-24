@@ -36,7 +36,6 @@ impl PermissionScope {
                 "~/.professor-x/vault.enc".to_string(),
                 "~/.jarvis/vault.key".to_string(),
                 "~/.jarvis/vault.enc".to_string(),
-                "/etc/passwd".to_string(),
                 "/etc/shadow".to_string(),
             ],
             allowed_url_schemes: vec!["http".to_string(), "https".to_string()],
@@ -46,7 +45,9 @@ impl PermissionScope {
                 "metadata.azure.com".to_string(),
             ],
             max_risk_score: 100,
-            approval_threshold: 50,
+            // 65: auto-approves shell.restricted(60) and git.commit(50),
+            // but queues fs.delete(70) and harness.modify(85) for human review.
+            approval_threshold: 65,
         }
     }
 }
