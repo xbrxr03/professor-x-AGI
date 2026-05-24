@@ -4,8 +4,9 @@ ram_gb = 32
 gpu = "rtx3060"
 
 [model]
-primary = "qwen3:8b-q4_k_m"
-fallback = "qwen3:8b"
+primary  = "qwen3:8b-q4_k_m"    # 5.2GB VRAM, 42 tok/s, thinking mode
+upgrade  = "llama4:scout"         # when tasks need more headroom
+fallback = "qwen3:14b-q4_k_m"    # if primary fails; ~8.5GB VRAM
 inference = "ollama"
 ollama_url = "http://localhost:11434"
 
