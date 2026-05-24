@@ -1,12 +1,1 @@
-# Professor X — Research Hypotheses
-
-Hypotheses are numbered H1–H20 per ARCHITECTURE.md Section 12. Status: Untested | Testing | Confirmed | Rejected
-
----
-## MHE Lever Effectiveness
-
-**H1** — MHE collectively raises HIRO pass@3 above the null-condition baseline by round 30. Status: Confirmed | Priority: Critical
-
-**H2** — Lever 2 (ICE+MARS contextual) is responsible for the majority of gains in rounds 1–10. Status: Confirmed | Priority: High
-
-**H3** — DHE structural evolution significantly improves pass@3 and reward_curve_slope in rounds 1–10. Status: Confirmed | Priority: Critical
+# Professor X — Research Hypotheses\n\n## MHE Lever Effectiveness\n\n**H1** — MHE collectively raises HIRO pass@3 above the null-condition baseline by round 30. Status: Confirmed | Priority: Critical\n\n**H2** — Lever 2 (ICE+MARS contextual) is responsible for the majority of gains in rounds 1–10. Status: Confirmed | Priority: High\n\n**H3** — DHE structural evolution significantly improves performance stability. Status: Testing | Priority: Critical\n\n**Experiment Design**: Baseline = current_DHE_structure; Focus = DHE structural evolution; Metrics = performance_gain, stability; Methodology = iterative perturbation analysis over 50 rounds.
