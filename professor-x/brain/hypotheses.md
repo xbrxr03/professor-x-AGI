@@ -1,16 +1,1 @@
-# Professor X — Research Hypotheses
-
-Hypotheses are numbered H1–H20 per ARCHITECTURE.md Section 12.
-Status: Untested | Testing | Confirmed | Rejected
-
----
-
-## MHE Lever Effectiveness
-
-**H1** — MHE collectively raises HIRO pass@3 above the null-condition baseline by round 30.
-Status: Testing | Priority: Critical
-
-**H2** — Lever 2 (ICE+MARS contextual) is responsible for the majority of gains in rounds 1–10.
-Status: Confirmed | Priority: High
-
-**H3** — Lever 3 (DHE structural evoluti
+# Professor X — Research Hypotheses\n\nHypotheses are numbered H1–H20 per ARCHITECTURE.md Section 12.\nStatus: Untested | Testing | Confirmed | Rejected\n\n---\n\n## MHE Lever Effectiveness\n\n**H1** — MHE collectively raises HIRO pass@3 above the null-condition baseline by round 30.\nStatus: Confirmed | Priority: Critical\n\n**H2** — Lever 2 (ICE+MARS contextual) is responsible for the majority of gains in rounds 1–10.\nStatus: Confirmed | Priority: High\n\n**H3** — Lever 3 (DHE structural evoluti

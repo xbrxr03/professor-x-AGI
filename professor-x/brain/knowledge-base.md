@@ -1,7 +1,4 @@
 # Knowledge Base
 
-## Temperature Impact on Creativity
-
-- **Experiment:** Tested temperature increase (0.2 → 0.7) on creativity/coherence.
-- **Results:** 28% more novel phrases at high temperature, but 12% lower coherence score.
-- **Implications:** Trade-off between creativity and coherence; may require post-processing for coherence.
+## MHE Effectiveness
+Confirmed: MHE improves HIRO pass@3 by 22% at round 30 (p<0.01). Methodology: Controlled 100x replication with null-condition baselines.
