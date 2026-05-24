@@ -18,7 +18,7 @@ use agentd::react::ReactLoop;
 use evolved::CognitionStore;
 use evolved::cognition_base::CognitionItem;
 use evolved::tracker::{OutcomeTracker, TaskOutcome};
-use evolved::{HiroRunner};
+use evolved::{EvolvedLoop, HiroRunner};
 use memd::MemoryManager;
 use policyd::{AuditStore, PolicyEngine};
 use toolbridge::ToolRegistry;
@@ -220,6 +220,21 @@ async fn main() -> Result<()> {
                 tracker.record(outcome);
                 let rate = tracker.success_rate(20);
                 info!("tracker: {} outcomes, success_rate(20)={:.1}%", tracker.len(), rate * 100.0);
+
+                // Trigger one evolution cycle every 20 outcomes
+                if tracker.len() % 20 == 0 {
+                    let snap      = tracker.clone();
+                    let ollama_e  = Arc::clone(&ollama);
+                    let memory_e  = Arc::clone(&memory);
+                    tokio::spawn(async move {
+                        let evo = EvolvedLoop::new(ollama_e, memory_e);
+                        match evo.run_cycle(&snap).await {
+                            Ok(true)  => info!("evolved: cycle applied a change"),
+                            Ok(false) => info!("evolved: cycle — no change this round"),
+                            Err(e)    => warn!("evolved: cycle error: {e}"),
+                        }
+                    });
+                }
             }
 
             _ = cancel.cancelled() => {

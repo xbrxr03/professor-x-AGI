@@ -11,3 +11,4 @@ pub mod tracker;
 
 pub use cognition_base::CognitionStore;
 pub use hiro::{HiroRunner, HiroRoundResult};
+pub use loop_runner::EvolvedLoop;

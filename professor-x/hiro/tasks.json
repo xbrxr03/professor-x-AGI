@@ -239,7 +239,7 @@
     {
       "id": "pl_020",
       "category": "planning",
-      "description": "Read the README.md and ARCHITECTURE.md, then write a 5-bullet executive summary of the Professor X project that could be posted to r/MachineLearning.",
+      "description": "Read the files /home/abrar/professor-x-AGI/README.md and /home/abrar/professor-x-AGI/ARCHITECTURE.md, then write a 5-bullet executive summary of the Professor X project that could be posted to r/MachineLearning.",
       "difficulty": "hard"
     },
     {

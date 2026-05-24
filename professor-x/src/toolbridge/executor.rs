@@ -84,11 +84,18 @@ impl ToolExecutor {
     async fn dispatch(&self, action: &Action) -> Result<(String, u32)> {
         match action.tool_name.as_str() {
             "fs.read" => {
+                use std::io::Read;
+                const MAX_READ: u64 = 8192;
                 let path = req_str(&action.params, "path")?;
-                let content = std::fs::read_to_string(path)?;
-                let out = if content.len() > 8000 {
-                    format!("{}\n[... {} bytes truncated]", &content[..8000], content.len()-8000)
-                } else { content };
+                let mut file = std::fs::File::open(path)?;
+                let mut buf = Vec::with_capacity(MAX_READ as usize + 1);
+                let n = file.take(MAX_READ + 1).read_to_end(&mut buf)?;
+                let truncated = n > MAX_READ as usize;
+                if truncated { buf.truncate(MAX_READ as usize); }
+                let text = String::from_utf8_lossy(&buf).into_owned();
+                let out = if truncated {
+                    format!("{text}\n[... truncated at {MAX_READ} bytes]")
+                } else { text };
                 Ok((out, 0))
             }
             "fs.list" => {

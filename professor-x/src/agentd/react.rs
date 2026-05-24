@@ -123,8 +123,11 @@ impl ReactLoop {
             }
         }
 
-        // All attempts exhausted — MARS reflection before giving up
-        let failure_mode = self.generate_mars_reflection(task).await;
+        // All attempts exhausted — MARS reflection + DHE attribution
+        let mars = self.generate_mars_reflection(task).await;
+        let dhe  = crate::evolved::dhe::Dhe::diagnose(task);
+        let failure_mode = format!("{mars} [DHE:layer={},lever={}]",
+            dhe.failed_layer, dhe.recommended_lever);
 
         task.status       = TaskStatus::Failed;
         task.completed_at = Some(Utc::now());

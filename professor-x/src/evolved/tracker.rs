@@ -17,6 +17,7 @@ pub struct TaskOutcome {
     pub timestamp: DateTime<Utc>,
 }
 
+#[derive(Clone)]
 pub struct OutcomeTracker {
     /// Bounded ring buffer — last 100 outcomes kept in memory.
     outcomes: VecDeque<TaskOutcome>,

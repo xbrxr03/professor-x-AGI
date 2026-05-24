@@ -23,6 +23,24 @@ use crate::evolved::tracker::OutcomeTracker;
 use crate::memd::MemoryManager;
 use crate::ollama::{ChatMessage, ModelOptions, OllamaClient};
 
+// Parse "[DHE:layer=X,lever=Y]" from failure pattern strings.
+// Returns (layer, lever) from the most common DHE annotation found, or (0, 3) as default.
+fn parse_dhe_from_patterns(patterns: &[String]) -> (u8, u8) {
+    for p in patterns {
+        if let Some(start) = p.find("[DHE:layer=") {
+            let rest = &p[start + 11..];
+            if let Some(comma) = rest.find(',') {
+                let layer_str = &rest[..comma];
+                let lever_str = rest.get(comma + 7..).unwrap_or("3").split(']').next().unwrap_or("3");
+                let layer = layer_str.parse::<u8>().unwrap_or(0);
+                let lever = lever_str.parse::<u8>().unwrap_or(3);
+                return (layer, lever);
+            }
+        }
+    }
+    (0, 3)
+}
+
 pub struct EvolvedLoop {
     ollama:   Arc<OllamaClient>,
     memory:   Arc<MemoryManager>,
@@ -283,6 +301,30 @@ impl EvolvedLoop {
             let item = Analyzer::to_cognition_item(&lesson, node_id);
             self.cognition.insert(&item)?;
             info!("evolved: Analyzer wrote new cognition item");
+        }
+
+        // Write DHE attribution accuracy to metacognitive table (H10 tracking)
+        let failure_patterns = tracker.failure_patterns(20);
+        let (pred_layer, pred_lever) = parse_dhe_from_patterns(&failure_patterns);
+        let component_name = format!("{:?}", node.target_component);
+        {
+            let db = self.memory.db.lock().unwrap();
+            let _ = db.execute(
+                "INSERT INTO metacognitive \
+                 (round, task_type, predicted_layer, predicted_lever, \
+                  actual_improvement, attribution_correct, confidence, recorded_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                rusqlite::params![
+                    0i64,
+                    component_name,
+                    pred_layer as i64,
+                    pred_lever as i64,
+                    recent_success as f64,
+                    improved as i64,
+                    node.score as f64,
+                    Utc::now().to_rfc3339(),
+                ],
+            );
         }
 
         // Save node to DB
