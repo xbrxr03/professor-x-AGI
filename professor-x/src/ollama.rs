@@ -67,7 +67,7 @@ impl ModelOptions {
             num_ctx: Some(16384),
             top_p: Some(0.9),
             stop: Some(vec!["Observation:".to_string()]),
-            think: None,
+            think: Some(false), // disable thinking — hurts format compliance in tight ReAct loop
         }
     }
 

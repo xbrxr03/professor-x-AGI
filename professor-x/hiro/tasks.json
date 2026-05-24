@@ -11,13 +11,13 @@
     {
       "id": "tu_002",
       "category": "tool_use",
-      "description": "List all files in the professor-x/src directory (relative to the working directory) and report the total count.",
+      "description": "List all files in the src directory (relative to the working directory) and report the total count.",
       "difficulty": "easy"
     },
     {
       "id": "tu_003",
       "category": "tool_use",
-      "description": "Read the file professor-x/Cargo.toml and list all dependency names (keys under [dependencies]).",
+      "description": "Read the file Cargo.toml and list all dependency names (keys under [dependencies]).",
       "difficulty": "easy"
     },
     {
@@ -53,13 +53,13 @@
     {
       "id": "tu_009",
       "category": "tool_use",
-      "description": "Read the file professor-x/config/hardware.toml and report the value of the 'primary' model field.",
+      "description": "Read the file config/hardware.toml and report the value of the 'primary' model field.",
       "difficulty": "easy"
     },
     {
       "id": "tu_010",
       "category": "tool_use",
-      "description": "List all .rs files in the professor-x/src/evolved/ directory.",
+      "description": "List all .rs files in the src/evolved/ directory.",
       "difficulty": "easy"
     },
     {
@@ -77,7 +77,7 @@
     {
       "id": "tu_013",
       "category": "tool_use",
-      "description": "Read professor-x/src/main.rs and report the name of the environment variable used to set the data directory.",
+      "description": "Read src/main.rs and report the name of the environment variable used to set the data directory.",
       "difficulty": "easy"
     },
     {
@@ -119,25 +119,25 @@
     {
       "id": "tu_020",
       "category": "tool_use",
-      "description": "Read professor-x/src/ollama.rs and report the value of the DEFAULT_MODEL constant.",
+      "description": "Read src/ollama.rs and report the value of the DEFAULT_MODEL constant.",
       "difficulty": "easy"
     },
     {
       "id": "pl_001",
       "category": "planning",
-      "description": "Count the total number of Rust source files (.rs) in professor-x/src/ using shell.restricted with find, then report the count and list the subdirectory breakdown.",
+      "description": "Count the total number of Rust source files (.rs) in src/ using shell.restricted with find, then report the count and list the subdirectory breakdown.",
       "difficulty": "medium"
     },
     {
       "id": "pl_002",
       "category": "planning",
-      "description": "Calculate the approximate total lines of Rust code in professor-x/src/ by running 'find professor-x/src -name *.rs | xargs wc -l' and report the total.",
+      "description": "Calculate the approximate total lines of Rust code in src/ by running 'find src -name '*.rs' | xargs wc -l' and report the total.",
       "difficulty": "medium"
     },
     {
       "id": "pl_003",
       "category": "planning",
-      "description": "Read professor-x/src/main.rs and professor-x/src/evolved/mod.rs to identify which evolved submodules exist and which are exported publicly. Report the full list.",
+      "description": "Read src/main.rs and src/evolved/mod.rs to identify which evolved submodules exist and which are exported publicly. Report the full list.",
       "difficulty": "medium"
     },
     {
@@ -161,7 +161,7 @@
     {
       "id": "pl_007",
       "category": "planning",
-      "description": "Read professor-x/src/agentd/react.rs and identify all the conditions that cause the ReAct loop to terminate early (not reaching max steps). List each condition and the line of code that triggers it.",
+      "description": "Read src/agentd/react.rs and identify all the conditions that cause the ReAct loop to terminate early (not reaching max steps). List each condition and the line of code that triggers it.",
       "difficulty": "hard"
     },
     {
@@ -179,19 +179,19 @@
     {
       "id": "pl_010",
       "category": "planning",
-      "description": "Read professor-x/src/evolved/dhe.rs and explain the 5 DHE attribution layers in plain language. For each layer, give one example failure it would catch.",
+      "description": "Read src/evolved/dhe.rs and explain the 5 DHE attribution layers in plain language. For each layer, give one example failure it would catch.",
       "difficulty": "hard"
     },
     {
       "id": "pl_011",
       "category": "planning",
-      "description": "Read professor-x/src/evolved/lcap.rs and explain the 5 ContextBudget arms (Sparse through MemoryHeavy). For each arm, describe a task type where it would be the best choice.",
+      "description": "Read src/evolved/lcap.rs and explain the 5 ContextBudget arms (Sparse through MemoryHeavy). For each arm, describe a task type where it would be the best choice.",
       "difficulty": "hard"
     },
     {
       "id": "pl_012",
       "category": "planning",
-      "description": "List all 7 evolvable harness components mentioned in professor-x/src/evolved/proposer.rs, with a one-line description of what each one controls.",
+      "description": "List all 7 evolvable harness components mentioned in src/evolved/proposer.rs, with a one-line description of what each one controls.",
       "difficulty": "medium"
     },
     {
@@ -203,7 +203,7 @@
     {
       "id": "pl_014",
       "category": "planning",
-      "description": "Read professor-x/src/evolved/loop_runner.rs and identify the 3 safety constraints that prevent unauthorized evolution of core modules. Quote the relevant code sections.",
+      "description": "Read src/evolved/loop_runner.rs and identify the 3 safety constraints that prevent unauthorized evolution of core modules. Quote the relevant code sections.",
       "difficulty": "medium"
     },
     {
@@ -221,7 +221,7 @@
     {
       "id": "pl_017",
       "category": "planning",
-      "description": "Read professor-x/src/evolved/bf.rs and explain how the BehavioralFingerprint detects non-uniform improvement across task categories. What is the threshold and why was it chosen?",
+      "description": "Read src/evolved/bf.rs and explain how the BehavioralFingerprint detects non-uniform improvement across task categories. What is the threshold and why was it chosen?",
       "difficulty": "hard"
     },
     {
@@ -233,7 +233,7 @@
     {
       "id": "pl_019",
       "category": "planning",
-      "description": "Read professor-x/src/memd/mod.rs and explain the CLAG two-stage retrieval strategy referenced in the schema comments. When does flat retrieval switch to cluster-based?",
+      "description": "Read src/memd/mod.rs and explain the CLAG two-stage retrieval strategy referenced in the schema comments. When does flat retrieval switch to cluster-based?",
       "difficulty": "medium"
     },
     {
@@ -287,7 +287,7 @@
     {
       "id": "sc_008",
       "category": "self_correction",
-      "description": "Try to read professor-x/src/policyd/gating.rs. If it is too large (truncated), read only the first function by reading the file and noting the truncation, then report the first function signature found.",
+      "description": "Try to read src/policyd/gating.rs. If it is too large (truncated), read only the first function by reading the file and noting the truncation, then report the first function signature found.",
       "difficulty": "medium"
     },
     {
@@ -323,13 +323,13 @@
     {
       "id": "sc_014",
       "category": "self_correction",
-      "description": "Read the file professor-x/hiro/tasks.json and report how many tasks are in the 'self_correction' category. If the file path is wrong, try looking for it with fs.list first.",
+      "description": "Read the file hiro/tasks.json and report how many tasks are in the 'self_correction' category. If the file path is wrong, try looking for it with fs.list first.",
       "difficulty": "medium"
     },
     {
       "id": "sc_015",
       "category": "self_correction",
-      "description": "Run 'wc -l professor-x/src/main.rs' via shell.restricted. If the file path is incorrect, use fs.list to find the correct location of main.rs first, then run the command.",
+      "description": "Run 'wc -l src/main.rs' via shell.restricted. If the file path is incorrect, use fs.list to find the correct location of main.rs first, then run the command.",
       "difficulty": "easy"
     },
     {
@@ -359,7 +359,7 @@
     {
       "id": "sc_020",
       "category": "self_correction",
-      "description": "Try to list the contents of /home/abrar/.professor-x/ to inspect stored state. If the directory does not exist or permission is denied, report the error and instead read the PROFESSOR_X_DATA_DIR from professor-x/src/main.rs to determine where the data directory would be.",
+      "description": "Try to list the contents of /home/abrar/. to inspect stored state. If the directory does not exist or permission is denied, report the error and instead read the PROFESSOR_X_DATA_DIR from src/main.rs to determine where the data directory would be.",
       "difficulty": "medium"
     }
   ]

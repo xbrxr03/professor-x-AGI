@@ -466,13 +466,24 @@ impl ReactLoop {
 // ── Parsing ───────────────────────────────────────────────────────────────────
 
 fn parse_react_step(text: &str) -> Option<ParsedStep> {
-    // Expected format:
-    //   Thought: <text>
-    //   Action: <tool_name>
-    //   Action Input: <json or plain string>
-    let thought    = extract_field(text, "Thought")?;
-    let tool_name  = extract_field(text, "Action")
+    // Two valid layouts:
+    //   A) Model re-emits label: "Thought: ...\nAction: ...\nAction Input: ..."
+    //   B) Prompt ended with "Thought:" so model continues without label:
+    //      "<thought text>\nAction: ...\nAction Input: ..."
+    let tool_name = extract_field(text, "Action")
         .map(|s| s.trim().to_lowercase().replace(' ', "_"))?;
+
+    let thought = extract_field(text, "Thought").unwrap_or_else(|| {
+        // Layout B: everything before the first "Action:" line is the thought
+        let action_marker = text.to_lowercase().find("\naction:")
+            .or_else(|| if text.to_lowercase().starts_with("action:") { Some(0) } else { None });
+        match action_marker {
+            Some(0) => String::new(),
+            Some(pos) => text[..pos].trim().to_string(),
+            None => text.trim().to_string(),
+        }
+    });
+
     let params_raw = extract_field(text, "Action Input")
         .unwrap_or_else(|| "{}".to_string());
 
@@ -529,16 +540,19 @@ fn extract_keywords(text: &str) -> Vec<String> {
 
 // ── Prompts ───────────────────────────────────────────────────────────────────
 
-const SYSTEM_PROMPT: &str = "You are Professor X, an autonomous AI research agent running on \
-a consumer GPU. Your goal is to complete tasks reliably using available tools.\n\n\
-Follow the ReAct format exactly:\n\
-  Thought: <your reasoning>\n\
-  Action: <tool_name>\n\
-  Action Input: <json params>\n\n\
-After each Observation, either continue with another Thought/Action or signal completion:\n\
-  Thought: The task is complete.\n\
-  Action: finish\n\
-  Action Input: {}";
+const SYSTEM_PROMPT: &str = "You are Professor X, an autonomous AI research agent. \
+Complete tasks using the available tools. Reply ONLY in this exact format — no JSON, no markdown:\n\n\
+Thought: <your reasoning>\n\
+Action: <tool_name>\n\
+Action Input: <json params>\n\n\
+Example turn:\n\
+Thought: I need to read the file to get its contents.\n\
+Action: fs.read\n\
+Action Input: {\"path\": \"/etc/os-release\"}\n\n\
+When done:\n\
+Thought: The task is complete.\n\
+Action: finish\n\
+Action Input: {}";
 
 const TOOLS_DESCRIPTION: &str = "Available tools:
 - fs.read       {\"path\": \"<path>\"} — read file contents
