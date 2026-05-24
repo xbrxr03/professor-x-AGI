@@ -34,7 +34,6 @@ async fn main() -> Result<()> {
 
     let data_dir = PathBuf::from(
         std::env::var("PROFESSOR_X_DATA_DIR")
-            .or_else(|_| std::env::var("JARVIS_DATA_DIR"))
             .unwrap_or_else(|_| format!("{}/.professor-x", std::env::var("HOME").unwrap_or_default()))
     );
 

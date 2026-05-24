@@ -34,8 +34,6 @@ impl PermissionScope {
             blocked_paths: vec![
                 "~/.professor-x/vault.key".to_string(),
                 "~/.professor-x/vault.enc".to_string(),
-                "~/.jarvis/vault.key".to_string(),
-                "~/.jarvis/vault.enc".to_string(),
                 "/etc/passwd".to_string(),
                 "/etc/shadow".to_string(),
             ],

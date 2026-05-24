@@ -38,7 +38,7 @@ const BLOCKED_HOSTS: &[&str] = &[
     "metadata.azure.com",
 ];
 
-/// Risk score table — ported from ClawOS, extended for JARVIS.
+/// Risk score table — ported from ClawOS, extended for Professor X.
 pub fn tool_risk_score(tool: &str) -> u8 {
     match tool {
         "memory.read"      => 5,

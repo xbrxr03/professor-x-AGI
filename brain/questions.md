@@ -6,7 +6,7 @@ Things I do not know yet and am actively working to answer. Questions are distin
 
 ## Q1 — What is the exact HIRO baseline for a static harness?
 
-Before I can claim JARVIS improves, I need to know how much variance a static harness produces across repeated HIRO rounds with no modifications. If pass@3 varies by ±8 pp between rounds with the same harness, then a HIRO score of 0.03 (3 pp gain per round) is indistinguishable from noise.
+Before I can claim Professor X improves, I need to know how much variance a static harness produces across repeated HIRO rounds with no modifications. If pass@3 varies by ±8 pp between rounds with the same harness, then a HIRO score of 0.03 (3 pp gain per round) is indistinguishable from noise.
 
 **What I need:** Run 10 HIRO rounds with a completely frozen harness (no evolution, no modifications). Record pass@3 per round. Compute variance. This sets the minimum detectable HIRO score.
 
@@ -26,7 +26,7 @@ H5, H7, and H8 all depend on the model being able to evaluate its own output qua
 
 ## Q3 — What is Professor X's task distribution during a real 7-hour cycle?
 
-HIRO uses a fixed 60-task suite. But what does a real day of JARVIS operation look like? How many tasks are tool-use vs. planning vs. research vs. writing? If 80% of real tasks are a type not represented in HIRO, the benchmark may not generalize to actual operation.
+HIRO uses a fixed 60-task suite. But what does a real day of Professor X operation look like? How many tasks are tool-use vs. planning vs. research vs. writing? If 80% of real tasks are a type not represented in HIRO, the benchmark may not generalize to actual operation.
 
 **What I need:** Run the daily cycle for 7 days. Log every task and classify it. Map the distribution. Use this to validate or revise the HIRO task composition.
 
@@ -59,7 +59,7 @@ MUE = (D(R_M, R_0) × W(M, R_M)) / cost(M). The theoretical construction is soun
 
 ---
 
-## Q7 — Where does JARVIS sit in the AGI generality claim?
+## Q7 — Where does Professor X sit in the AGI generality claim?
 
 The thesis says: "can a self-evolving harness approximate AGI-level behavior on consumer hardware?" I have no definition of "AGI-level behavior" that is operationally meaningful yet. H9 (consumer hardware parity with frontier models) is one version. But there are others.
 
@@ -72,9 +72,9 @@ I don't know which definition is most scientifically defensible. This is a quest
 
 ---
 
-## Q8 — Is Hermes Agent's scheduler the right model, or should JARVIS use something simpler?
+## Q8 — Is Hermes Agent's scheduler the right model, or should Professor X use something simpler?
 
-Hermes Agent's scheduler is mature and feature-complete. But JARVIS is a research system running 7 hours/day on one machine. The complexity of Hermes's cron model (at-most-once semantics, burst-fire prevention, stale run detection) may be solving problems JARVIS won't have at this scale.
+Hermes Agent's scheduler is mature and feature-complete. But Professor X is a research system running 7 hours/day on one machine. The complexity of Hermes's cron model (at-most-once semantics, burst-fire prevention, stale run detection) may be solving problems Professor X won't have at this scale.
 
 **What I need:** Run the scheduler for 30 days and see what breaks. Simple question, long time horizon. Don't over-engineer until I know what's actually failing.
 

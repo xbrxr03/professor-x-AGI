@@ -1,4 +1,4 @@
-# JARVIS — Memory Architecture Research Document
+# Professor X — Memory Architecture Research Document
 > Status: Pre-implementation research. Ideas to study before Week 3 build.
 > This document captures the memory design rethink from the May 2026 session.
 > Feed to Professor X on activation — this is part of his research agenda.
@@ -47,7 +47,7 @@ Some inference backends (not Ollama default) support KV cache reuse across calls
 ### Sparse activation
 ~86 billion neurons. Only a tiny fraction fire at any moment. The brain does not recall everything when thinking — specific memories activate on cue via associative triggering, then return to latency. Activation is the exception, not the default state.
 
-**Implication:** Most of JARVIS's memory should be latent (encoded, searchable) not active (in context). Active memory should be small, sparse, and task-specific.
+**Implication:** Most of Professor X's memory should be latent (encoded, searchable) not active (in context). Active memory should be small, sparse, and task-specific.
 
 ### Predictive coding
 The brain does not react to inputs equally. It constantly predicts what is coming and only updates when there is a prediction error (surprise). You do not consciously process the feeling of your shirt against your skin right now — it is filtered out because it matches expectation. Only surprises reach awareness.
@@ -62,14 +62,14 @@ Riding a bike bypasses conscious thought entirely. Procedural memory runs *below
 ### Working memory: 4 slots, not a list
 Human working memory capacity is approximately 4 chunks (Cowan, 2001 — updated from Miller's famous "7±2"). Critically, each slot holds a *chunk* — a compressed, high-level abstraction — not a raw item. "The meeting I had yesterday" occupies one slot, not a 10,000-word transcript of it.
 
-**Implication:** Working memory in JARVIS should be 4 high-level chunks, not 20 raw ReAct triples. Before each LLM call, recent steps get compressed into chunks first.
+**Implication:** Working memory in Professor X should be 4 high-level chunks, not 20 raw ReAct triples. Before each LLM call, recent steps get compressed into chunks first.
 
 ### Forgetting is a feature
 Jorge Luis Borges wrote *Funes the Memorious* (1942): a man who could not forget anything. He was cognitively disabled — he could not generalize, could not abstract, could not think efficiently. Every leaf he had ever seen existed as a separate discrete memory. He could not group them into the concept "leaf."
 
 Forgetting enables abstraction. Without forgetting there is no compression. Without compression there is no generalization. Without generalization there is no intelligence — only lookup.
 
-**Implication:** JARVIS must actively forget. Not as a failure mode — as a design decision. Episodic memory should compress and eventually discard. Only patterns survive.
+**Implication:** Professor X must actively forget. Not as a failure mode — as a design decision. Episodic memory should compress and eventually discard. Only patterns survive.
 
 ### Associative retrieval (not key-value)
 Human memories are not stored with primary keys. They are accessed via association — a smell, an emotion, a context. One activated memory spreads activation to related memories through a network. Retrieval is graph traversal, not database lookup.
@@ -189,7 +189,7 @@ Last month's entries:   keywords + outcome score only
 Older:                  discarded unless flagged as permanently significant
 ```
 
-This runs during JARVIS's off-hours (after the 14:00 daily commit, before the next 06:00 start).
+This runs during Professor X's off-hours (after the 14:00 daily commit, before the next 06:00 start).
 
 The compression itself uses the LLM — but a cheap, short call. One summary call per session-cluster costs far less than injecting thousands of raw entries across hundreds of future calls.
 
@@ -273,7 +273,7 @@ The rationale: if we've injected this memory 10 times and the model keeps produc
 
 None of the existing self-evolving agent systems study how their memory management strategy performs over time and evolve it.
 
-**The proposed contribution:** JARVIS's `evolved` module monitors memory system performance and proposes changes to the memory management strategy itself as harness-level evolution proposals.
+**The proposed contribution:** Professor X's `evolved` module monitors memory system performance and proposes changes to the memory management strategy itself as harness-level evolution proposals.
 
 Metrics to track:
 - Which retrieved memories are actually referenced in model outputs (requires attention tracing or output parsing)
