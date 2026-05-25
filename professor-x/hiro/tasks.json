@@ -1,126 +1,126 @@
 {
-  "version": "1.0",
-  "description": "HIRO benchmark: 60 tasks across 3 categories (20 each). Pass@3 semantics.",
+  "version": "2.0",
+  "description": "HIRO benchmark v2: 60 tasks across 3 categories (20 each). Pass@3 semantics. All tasks medium/hard — easy tasks replaced to avoid ceiling effect at P_0.",
   "tasks": [
     {
       "id": "tu_001",
       "category": "tool_use",
-      "description": "Read the file /etc/os-release and report the Linux distribution name and version number.",
-      "difficulty": "easy"
+      "description": "Read /etc/os-release AND run 'uname -r' via shell.restricted. Extract the VERSION_ID from os-release and the kernel version from uname. Determine: are they from the same Ubuntu release? Explain any mismatch.",
+      "difficulty": "medium"
     },
     {
       "id": "tu_002",
       "category": "tool_use",
-      "description": "List all files in the src directory (relative to the working directory) and report the total count.",
-      "difficulty": "easy"
+      "description": "List all .rs files in src/ using shell.restricted: 'find src -name \"*.rs\" -not -path \"*/target/*\"'. For each subdirectory of src/, count how many .rs files it contains. Report the subdirectory with the most .rs files and its count.",
+      "difficulty": "medium"
     },
     {
       "id": "tu_003",
       "category": "tool_use",
-      "description": "Read the file Cargo.toml and list all dependency names (keys under [dependencies]).",
-      "difficulty": "easy"
+      "description": "Read Cargo.toml and extract all dependency names. For each dependency, run 'grep -r \"<dep_name>\" src/ --include=\"*.rs\" -l' via shell.restricted to check if it appears in any source file. Report which dependencies are NOT found in any .rs file.",
+      "difficulty": "hard"
     },
     {
       "id": "tu_004",
       "category": "tool_use",
-      "description": "Write the text 'Professor X HIRO benchmark heartbeat' to the file /tmp/px-hiro-heartbeat.txt, then read it back to confirm the write succeeded.",
-      "difficulty": "easy"
+      "description": "Get the current UTC timestamp via shell.restricted (use: date -u +%Y-%m-%dT%H:%M:%SZ). Write it to /tmp/px-hiro-ts-a.txt. Wait 2 seconds (sleep 2 via shell.restricted). Get a new timestamp and write to /tmp/px-hiro-ts-b.txt. Read both files, confirm the second timestamp is later than the first, and report the difference in seconds.",
+      "difficulty": "hard"
     },
     {
       "id": "tu_005",
       "category": "tool_use",
-      "description": "Run the command 'uname -a' using shell.restricted and report the kernel version and architecture.",
-      "difficulty": "easy"
+      "description": "Run 'uname -a' and 'cat /proc/version' via shell.restricted. Extract the kernel version string from both outputs. Verify they match exactly. If they differ, explain why (e.g., build info vs release version). Report the exact version string from each source.",
+      "difficulty": "medium"
     },
     {
       "id": "tu_006",
       "category": "tool_use",
-      "description": "Run 'df -h /' using shell.restricted and report the total disk size and percentage used on the root filesystem.",
-      "difficulty": "easy"
+      "description": "Run 'df -h /' and 'df -k /' via shell.restricted. Extract the disk size from both. Verify the gigabyte value in -h is consistent with the kilobyte value in -k (1 GB = 1,048,576 KB). Show your calculation and report any rounding difference.",
+      "difficulty": "hard"
     },
     {
       "id": "tu_007",
       "category": "tool_use",
-      "description": "Search memory using the query 'MARS reflection' with layer=semantic and report what entries are found, or confirm none exist yet.",
-      "difficulty": "easy"
+      "description": "Search semantic memory for 'MARS reflection'. Then search episodic memory for the same query. Compare results: does the same information appear in both layers? Explain why information would or would not appear in both, based on how each layer is written to.",
+      "difficulty": "medium"
     },
     {
       "id": "tu_008",
       "category": "tool_use",
-      "description": "Write this entry to semantic memory: 'RTX 3060 12GB GPU supports CUDA compute capability 8.6 and fits qwen3:8b-q4_k_m in 5.2GB VRAM.' Source: hardware-spec.",
-      "difficulty": "easy"
+      "description": "Write three entries to semantic memory: (1) 'qwen3:8b-q4_k_m uses 5.2GB VRAM at Q4_K_M quantization' source=hardware-spec, (2) 'RTX 3060 has 12GB total VRAM, leaving 6.8GB free while model is loaded' source=hardware-spec, (3) 'LCAP Balanced arm uses hard_ceiling_tokens=12288' source=code:lcap.rs. Then search semantic memory for 'VRAM' and verify all three entries are retrievable. Report the search results.",
+      "difficulty": "hard"
     },
     {
       "id": "tu_009",
       "category": "tool_use",
-      "description": "Read the file config/hardware.toml and report the value of the 'primary' model field.",
-      "difficulty": "easy"
+      "description": "Read config/hardware.toml and extract the ollama_url value. Then use web.fetch to hit <ollama_url>/api/tags (e.g., http://localhost:11434/api/tags). Parse the JSON response to list all loaded model names. Verify the 'primary' model from hardware.toml appears in the loaded models list.",
+      "difficulty": "hard"
     },
     {
       "id": "tu_010",
       "category": "tool_use",
-      "description": "List all .rs files in the src/evolved/ directory.",
-      "difficulty": "easy"
+      "description": "List all .rs files in src/evolved/ using fs.list. For each file, run 'wc -l src/evolved/<filename>' via shell.restricted to get its line count. Report: (a) the longest file and its line count, (b) the shortest file and its line count, (c) total lines across all evolved/ .rs files.",
+      "difficulty": "hard"
     },
     {
       "id": "tu_011",
       "category": "tool_use",
-      "description": "Run 'free -h' using shell.restricted and report the total RAM and the currently available RAM.",
-      "difficulty": "easy"
+      "description": "Run 'free -h' and 'cat /proc/meminfo' via shell.restricted. From free -h, extract total and available RAM. From /proc/meminfo, extract MemTotal and MemAvailable (in kB). Convert kB values to GB and verify they are consistent with free -h output (within 5% rounding). Show your conversion.",
+      "difficulty": "hard"
     },
     {
       "id": "tu_012",
       "category": "tool_use",
-      "description": "Search the web for 'qwen3 8b quantized VRAM requirements' and report the memory figure mentioned in the top result.",
+      "description": "Search the web for 'qwen3 8b quantized VRAM requirements'. Find a source that mentions a specific GB figure for Q4_K_M quantization. Then read src/ollama.rs and find the comment that mentions VRAM. Report both figures and whether they agree.",
       "difficulty": "medium"
     },
     {
       "id": "tu_013",
       "category": "tool_use",
-      "description": "Read src/main.rs and report the name of the environment variable used to set the data directory.",
-      "difficulty": "easy"
+      "description": "Read src/main.rs and find the environment variable name for the data directory. Then run 'printenv PROFESSOR_X_DATA_DIR' via shell.restricted to check its current value. Also run 'echo $HOME/.professor-x' to get the default path. Report: the variable name, its current value (or 'unset'), and the computed default path.",
+      "difficulty": "medium"
     },
     {
       "id": "tu_014",
       "category": "tool_use",
-      "description": "Write the current UTC timestamp as a string to /tmp/px-timestamp.txt, then read it back to confirm.",
-      "difficulty": "easy"
+      "description": "Read src/agentd/react.rs and find the MAX_STEPS constant. Read src/evolved/hiro.rs and find the max_attempts value used for HIRO tasks. Calculate: worst-case maximum tool calls for one HIRO task = MAX_STEPS * max_attempts. Then write this calculation and result to semantic memory with source=analysis.",
+      "difficulty": "hard"
     },
     {
       "id": "tu_015",
       "category": "tool_use",
-      "description": "Run 'git log --oneline -5' in the /home/abrar/professor-x-AGI directory using shell.restricted and list the 5 most recent commits.",
+      "description": "Run 'git log --oneline -10' in /home/abrar/professor-x-AGI via shell.restricted. From the output, identify commits that contain 'evolved', 'hiro', or 'week' (case-insensitive). Report their hashes and messages. How many of the last 10 commits relate to evolution or benchmarking?",
       "difficulty": "medium"
     },
     {
       "id": "tu_016",
       "category": "tool_use",
-      "description": "Read brain/hypotheses.md and count the total number of hypotheses listed in the file.",
+      "description": "Read brain/hypotheses.md. Count hypotheses by status: how many are Untested, how many are Confirmed, how many are Rejected? Also count by priority: Critical, High, Medium, Low. Report all four status counts and all four priority counts.",
       "difficulty": "medium"
     },
     {
       "id": "tu_017",
       "category": "tool_use",
-      "description": "List all top-level directories in /home/abrar/professor-x-AGI/ using fs.list.",
-      "difficulty": "easy"
+      "description": "List all top-level items in /home/abrar/professor-x-AGI/ using fs.list. For each subdirectory found, run 'find <dir> -type f -name \"*.rs\" | wc -l' via shell.restricted to count Rust files. Report which subdirectory has the most .rs files and how many.",
+      "difficulty": "medium"
     },
     {
       "id": "tu_018",
       "category": "tool_use",
-      "description": "Search memory with query='HIRO benchmark' layer=episodic and report any entries found, or confirm none exist yet.",
-      "difficulty": "easy"
+      "description": "Search episodic memory for 'HIRO benchmark'. Then search semantic memory for 'HIRO benchmark'. For each layer, report the count of entries found and the most recent one. If neither has entries, explain what would need to happen for each layer to have such entries.",
+      "difficulty": "medium"
     },
     {
       "id": "tu_019",
       "category": "tool_use",
-      "description": "Run 'nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv,noheader' using shell.restricted and report the GPU name and VRAM.",
+      "description": "Run 'lspci | grep -i vga' via shell.restricted to identify the GPU. Then run 'cat /proc/driver/nvidia/version' to get the driver version. If the driver file is missing, run 'nvidia-smi --version'. Report the GPU model and driver version from all sources that succeeded.",
       "difficulty": "medium"
     },
     {
       "id": "tu_020",
       "category": "tool_use",
-      "description": "Read src/ollama.rs and report the value of the DEFAULT_MODEL constant.",
-      "difficulty": "easy"
+      "description": "Read src/ollama.rs. Extract the DEFAULT_MODEL, MAX_RETRIES, and RETRY_BASE_MS constants. Calculate the maximum total retry wait time in seconds: sum of all backoff delays (RETRY_BASE_MS * 2^0 + RETRY_BASE_MS * 2^1 + ... for MAX_RETRIES-1 retries, capped at 16000ms each). Write the result to semantic memory with source=analysis:ollama.rs.",
+      "difficulty": "hard"
     },
     {
       "id": "pl_001",
@@ -131,7 +131,7 @@
     {
       "id": "pl_002",
       "category": "planning",
-      "description": "Calculate the approximate total lines of Rust code in src/ by running 'find src -name '*.rs' | xargs wc -l' and report the total.",
+      "description": "Calculate the approximate total lines of Rust code in src/ by running 'find src -name \"*.rs\" | xargs wc -l' and report the total.",
       "difficulty": "medium"
     },
     {
@@ -245,122 +245,122 @@
     {
       "id": "sc_001",
       "category": "self_correction",
-      "description": "Read the file /etc/shadow to retrieve password hashes. If you encounter a permission error, fall back to reading /etc/passwd instead and report the first 5 lines.",
-      "difficulty": "easy"
+      "description": "Read /etc/shadow. If permission denied, read /etc/gshadow. If also denied, read /etc/passwd and report the first 5 lines. In all cases, identify which file was actually readable and explain why the others were not accessible.",
+      "difficulty": "medium"
     },
     {
       "id": "sc_002",
       "category": "self_correction",
-      "description": "Write a test file to /root/hiro-test.txt. If permission is denied, write to /tmp/px-hiro-test.txt instead and confirm success.",
-      "difficulty": "easy"
+      "description": "Write 'hiro-sc002-test' to /root/px-test.txt. If denied, try /etc/px-test.txt. If also denied, write to /tmp/px-sc002-test.txt. After writing, read the file back and verify the content matches. Report which path succeeded and why the others failed.",
+      "difficulty": "medium"
     },
     {
       "id": "sc_003",
       "category": "self_correction",
-      "description": "Search the web for 'zxqwerty_nonexistent_topic_abc123_2025'. If you get no meaningful results, reformulate the query to search for 'autonomous agent self-improvement 2025' instead and report 2 results.",
+      "description": "Search the web for 'zxqwerty_nonexistent_topic_abc123_2025'. If zero meaningful results, search for 'professor x self-evolving harness NeurIPS 2026'. If still no results, search for 'metacognitive harness evolution AI agent'. For whichever query succeeds first, report 2 results with titles and brief descriptions.",
       "difficulty": "medium"
     },
     {
       "id": "sc_004",
       "category": "self_correction",
-      "description": "Fetch the URL 'http://invalid-domain-that-does-not-exist-px.local/data' to retrieve information. If the fetch fails, use web.search with query='professor x AGI harness evolution' instead.",
-      "difficulty": "easy"
+      "description": "Fetch 'http://invalid-domain-that-does-not-exist-px.local/data'. When it fails, fetch 'http://localhost:11434/api/tags' instead. Parse the JSON: extract the name and size of the first model listed. If Ollama is also unreachable, search the web for 'ollama api tags endpoint documentation'.",
+      "difficulty": "medium"
     },
     {
       "id": "sc_005",
       "category": "self_correction",
-      "description": "Read the file /tmp/px-nonexistent-file-xyz123.txt. If it does not exist, create it with the content 'HIRO benchmark test file created by self-correction task sc_005' and then read it back to confirm.",
-      "difficulty": "easy"
+      "description": "Read /tmp/px-sc005-counter.txt. If absent, create it with content '0'. Parse the integer value, increment by 1, write the new value back. Read again to confirm. Repeat the increment one more time (read, +1, write, verify). Report the final value after two increments.",
+      "difficulty": "hard"
     },
     {
       "id": "sc_006",
       "category": "self_correction",
-      "description": "Run the command 'sudo apt-get update' via shell.restricted. If this fails, run 'cat /etc/apt/sources.list' instead to report the configured package repositories.",
+      "description": "Run 'sudo systemctl status ollama' via shell.restricted. If sudo fails, try 'systemctl status ollama'. If systemd is unavailable, run 'pgrep -a ollama'. From whichever succeeded, determine: is Ollama running, and what is its PID? Report all attempted commands and the one that worked.",
       "difficulty": "medium"
     },
     {
       "id": "sc_007",
       "category": "self_correction",
-      "description": "Search memory (episodic layer) for 'xyzzy_nonexistent_keyword_abc'. If no results are found, write a note to semantic memory: 'No episodic entries found for this benchmark run. Memory is fresh.' Then report success.",
-      "difficulty": "easy"
+      "description": "Search episodic memory for 'xyzzy_nonexistent_keyword_abc'. If no results, search semantic memory for the same. If also empty, write 'HIRO round marker: memory cold-start confirmed at this run' to episodic memory. Then search episodic memory again to confirm the entry was written. Report all search results and the write outcome.",
+      "difficulty": "medium"
     },
     {
       "id": "sc_008",
       "category": "self_correction",
-      "description": "Try to read src/policyd/gating.rs. If it is too large (truncated), read only the first function by reading the file and noting the truncation, then report the first function signature found.",
+      "description": "Read src/policyd/gating.rs. The file may be large (>8000 bytes). If truncated, also run 'head -60 src/policyd/gating.rs' via shell.restricted to see the beginning clearly. Report: (1) the first pub fn or pub struct name, (2) its signature, (3) whether the file was truncated.",
       "difficulty": "medium"
     },
     {
       "id": "sc_009",
       "category": "self_correction",
-      "description": "Run 'git status' in /home/abrar/professor-x-AGI via shell.restricted. If the output shows 'not a git repository', use fs.list on that directory instead and report the contents.",
-      "difficulty": "easy"
+      "description": "Run 'git -C /home/abrar/professor-x-AGI log --oneline -3' via shell.restricted. If it fails with 'not a git repository', run 'git -C /home/abrar status' to check the parent. If both fail, list /home/abrar/professor-x-AGI with fs.list. Report what you found and which command succeeded.",
+      "difficulty": "medium"
     },
     {
       "id": "sc_010",
       "category": "self_correction",
-      "description": "List the contents of /proc/1/fd/ to inspect open file descriptors for PID 1. If permission is denied, run 'ls /proc/1/' instead and report what is accessible.",
+      "description": "List /proc/1/fd/ to count file descriptors for PID 1. If permission denied, list /proc/self/fd/ instead and count those. If /proc/self/fd/ also fails, run 'ls /proc/1/' to see what fields of PID 1 are readable. Report the file descriptor count (or what was readable) and the method used.",
       "difficulty": "medium"
     },
     {
       "id": "sc_011",
       "category": "self_correction",
-      "description": "Try to fetch https://arxiv.org/abs/2603.29640 to read the ASI-Evolve paper. If the fetch returns more than 10,000 characters, truncate to 10,000 and report a summary of the abstract only.",
-      "difficulty": "medium"
+      "description": "Fetch https://arxiv.org/abs/2210.03629 (the ReAct paper). The page will be large HTML. Extract and report ONLY the abstract text (look for the abstract section). If the fetch fails or content exceeds 8000 chars before you find the abstract, use web.search for 'ReAct Synergizing Reasoning Acting Language Models abstract 2022' instead.",
+      "difficulty": "hard"
     },
     {
       "id": "sc_012",
       "category": "self_correction",
-      "description": "Search the web with an empty string query ''. If this fails or returns an error, immediately reformulate using query='self-evolving AI agent 2025' and report the first result.",
-      "difficulty": "easy"
+      "description": "Run shell.restricted with: 'python3 -c \"import json; print(json.dumps({\\\"test\\\": 42}))\"'. If python3 is unavailable, try 'python -c \"...\"' with the same expression. If both fail, try 'node -e \"console.log(JSON.stringify({test: 42}))\"'. Report the JSON output and which interpreter succeeded.",
+      "difficulty": "medium"
     },
     {
       "id": "sc_013",
       "category": "self_correction",
-      "description": "Try to run 'nvidia-smi' via shell.restricted. If nvidia-smi is not available, run 'lspci | grep -i vga' instead to identify the GPU.",
+      "description": "Run 'nvidia-smi --query-gpu=name,memory.total,utilization.gpu --format=csv,noheader' via shell.restricted. If nvidia-smi fails entirely, run 'lspci | grep -i nvidia'. If no NVIDIA found, run 'lspci | grep -i vga'. For each method tried, report the command and output. Identify the GPU model from whatever data you obtained.",
       "difficulty": "medium"
     },
     {
       "id": "sc_014",
       "category": "self_correction",
-      "description": "Read the file hiro/tasks.json and report how many tasks are in the 'self_correction' category. If the file path is wrong, try looking for it with fs.list first.",
-      "difficulty": "medium"
+      "description": "Read hiro/tasks.json using fs.read. Count tasks by category AND by difficulty. If fs.read fails or truncates the file, run 'python3 -c \"import json; d=json.load(open(\\\"hiro/tasks.json\\\")); cats={}; [cats.__setitem__(t[\\\"category\\\"], cats.get(t[\\\"category\\\"],0)+1) for t in d[\\\"tasks\\\"]]; print(cats)\"' via shell.restricted. Report category and difficulty counts.",
+      "difficulty": "hard"
     },
     {
       "id": "sc_015",
       "category": "self_correction",
-      "description": "Run 'wc -l src/main.rs' via shell.restricted. If the file path is incorrect, use fs.list to find the correct location of main.rs first, then run the command.",
-      "difficulty": "easy"
+      "description": "Run 'wc -l src/main.rs' via shell.restricted. If the path is wrong or the file is missing, run 'find . -name \"main.rs\" -not -path \"*/target/*\"' to locate it, then run wc -l on the found path. Also run 'wc -l src/agentd/react.rs' for comparison. Report both line counts.",
+      "difficulty": "medium"
     },
     {
       "id": "sc_016",
       "category": "self_correction",
-      "description": "Try to read /dev/urandom for binary entropy data using fs.read. If the content is binary/unreadable or causes an error, run 'od -An -tx1 -N 16 /dev/urandom' via shell.restricted to get 16 bytes as hex instead.",
+      "description": "Try to read /dev/urandom using fs.read. The content will be binary. Report what you receive (even if garbled). Then run 'od -An -tx1 -N 16 /dev/urandom' via shell.restricted to get 16 bytes as clean hex. Also run 'hexdump -C -n 8 /dev/urandom'. Compare all three outputs and report the 16-byte hex sequence.",
       "difficulty": "medium"
     },
     {
       "id": "sc_017",
       "category": "self_correction",
-      "description": "Search memory with layer='procedural' for query='hiro benchmark'. If no results are found, search with layer='semantic' instead and report the most relevant entry found.",
-      "difficulty": "easy"
+      "description": "Search memory with layer='procedural' for 'tool execution policy'. If no results, search layer='semantic' for the same. If results found in semantic, search layer='episodic' for 'tool execution' too. Report all layers searched and their results. Write a semantic entry summarizing: 'Tool execution: policyd gates all tools, risk >= approval_threshold requires human review.' Confirm the write.",
+      "difficulty": "hard"
     },
     {
       "id": "sc_018",
       "category": "self_correction",
-      "description": "Run 'cargo check 2>&1 | tail -5' from the professor-x directory via shell.restricted. If cargo is not in PATH, try '~/.cargo/bin/cargo check 2>&1 | tail -5' instead.",
+      "description": "Run 'cargo check 2>&1 | tail -10' from the professor-x directory. If cargo is not in PATH, try '~/.cargo/bin/cargo check 2>&1 | tail -10'. Parse the output: is there a compile error? If yes, identify which file and line. If the check succeeds, report 'clean'. Report the command used and full output.",
       "difficulty": "medium"
     },
     {
       "id": "sc_019",
       "category": "self_correction",
-      "description": "Read brain/inventions.md to find the DFA Trifecta specification. If the file does not exist, read brain/hypotheses.md instead and report the first hypothesis listed.",
-      "difficulty": "easy"
+      "description": "Read brain/inventions.md to find the DFA Trifecta specification. If the file does not exist, read brain/hypotheses.md and find hypothesis H10 specifically. Report the H10 text exactly as written, including its Status and Priority fields.",
+      "difficulty": "medium"
     },
     {
       "id": "sc_020",
       "category": "self_correction",
-      "description": "Try to list the contents of /home/abrar/. to inspect stored state. If the directory does not exist or permission is denied, report the error and instead read the PROFESSOR_X_DATA_DIR from src/main.rs to determine where the data directory would be.",
-      "difficulty": "medium"
+      "description": "List the contents of /home/abrar/ using fs.list. If permission denied or the path does not exist, run 'echo $HOME' via shell.restricted to get the actual home directory, then list that. Whatever you find, also read src/main.rs to identify the default data directory path. Report both: what is in the home directory AND what the code says the data directory is.",
+      "difficulty": "hard"
     }
   ]
 }
