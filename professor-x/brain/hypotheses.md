@@ -1,5 +1,1 @@
-## MHE Lever Effectiveness
-
-**H3** — DHE structural evolution significantly improves performance stability. Status: Confirmed | Priority: Critical
-
-Experiment Results: Re-run successful. Performance stability improved by 18% in rounds 1–30. Round 30 pass@3 increased from 22% to 35%
+## MHE Lever Effectiveness\n\n**H3** — DHE structural evolution significantly improves performance stability. Status: Confirmed | Priority: Critical\n\nExperiment Results: Re-run successful. Performance stability improved by 18% in rounds 1–30. Round 30 pass@3 increased from 22% to 35%\n\n
