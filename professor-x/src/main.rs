@@ -32,6 +32,8 @@ struct CliArgs {
     run_now: bool,
     /// Run HIRO benchmark for the given round number and exit.
     hiro_round: Option<u32>,
+    /// Limit HIRO to the first N tasks for smoke/regression runs.
+    hiro_limit: Option<usize>,
     /// Run N static HIRO null-condition rounds and exit.
     hiro_null_rounds: Option<u32>,
     /// Print the ordered daily cycle jobs and exit.
@@ -44,6 +46,7 @@ fn parse_args() -> CliArgs {
         task: None,
         run_now: false,
         hiro_round: None,
+        hiro_limit: None,
         hiro_null_rounds: None,
         dry_run_daily: false,
     };
@@ -60,6 +63,10 @@ fn parse_args() -> CliArgs {
             }
             "--hiro" if i + 1 < args.len() => {
                 cli.hiro_round = args[i + 1].parse::<u32>().ok();
+                i += 2;
+            }
+            "--hiro-limit" if i + 1 < args.len() => {
+                cli.hiro_limit = args[i + 1].parse::<usize>().ok();
                 i += 2;
             }
             "--hiro-null" if i + 1 < args.len() => {
@@ -179,6 +186,7 @@ async fn main() -> Result<()> {
             Arc::clone(&policy),
             Arc::clone(&memory),
             cancel,
+            cli.hiro_limit,
         )
         .await;
     }
@@ -191,6 +199,7 @@ async fn main() -> Result<()> {
             Arc::clone(&policy),
             Arc::clone(&memory),
             cancel,
+            cli.hiro_limit,
         )
         .await;
     }
@@ -341,10 +350,18 @@ async fn run_hiro_benchmark(
     policy: Arc<PolicyEngine>,
     memory: Arc<MemoryManager>,
     cancel: CancellationToken,
+    hiro_limit: Option<usize>,
 ) -> Result<()> {
     info!("HIRO benchmark — round {round}");
     let runner = HiroRunner::new(ollama, registry, policy, memory, cancel);
-    let result = runner.run_benchmark(round).await?;
+    let result = if let Some(limit) = hiro_limit {
+        info!("HIRO benchmark task limit: {limit}");
+        runner
+            .run_benchmark_labeled_with_limit(round, None, Some(limit))
+            .await?
+    } else {
+        runner.run_benchmark(round).await?
+    };
 
     info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     info!("HIRO round {} results:", result.round);
@@ -365,13 +382,14 @@ async fn run_hiro_null_baseline(
     policy: Arc<PolicyEngine>,
     memory: Arc<MemoryManager>,
     cancel: CancellationToken,
+    hiro_limit: Option<usize>,
 ) -> Result<()> {
     info!("HIRO null-condition baseline — {rounds} static round(s)");
     let runner = HiroRunner::new(ollama, registry, policy, memory, cancel);
 
     for round in 0..rounds {
         let result = runner
-            .run_benchmark_labeled(round, Some("null_condition"))
+            .run_benchmark_labeled_with_limit(round, Some("null_condition"), hiro_limit)
             .await?;
         info!(
             "HIRO null round {}: pass@3={:.3} p_tool={:.3} p_plan={:.3} p_correct={:.3}",

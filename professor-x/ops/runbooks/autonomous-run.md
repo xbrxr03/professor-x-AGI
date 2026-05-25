@@ -19,12 +19,21 @@ The readiness script verifies:
 
 ## Static Baseline
 
-Run a null-condition baseline before crediting any autonomous change:
+Run a fast smoke baseline first:
+
+```bash
+cd professor-x
+PROFESSOR_X_DATA_DIR=/tmp/px-hiro-smoke cargo run -- --hiro 0 --hiro-limit 1
+```
+
+Then run a null-condition baseline before crediting any autonomous change:
 
 ```bash
 cd professor-x
 PROFESSOR_X_DATA_DIR="$PWD/.px-data-null" cargo run -- --hiro-null 3
 ```
+
+For a faster null-condition smoke run, add `--hiro-limit N`.
 
 Record the resulting run id, harness commit, and HIRO metrics before starting evolution.
 
@@ -50,4 +59,3 @@ Autonomous evolution is allowed to proceed only when:
 - Compile and selected HIRO checks pass.
 - Reward-hacking checks do not flag the diff.
 - Rejected or failed proposals are rolled back.
-

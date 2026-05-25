@@ -120,7 +120,20 @@ impl HiroRunner {
         round: u32,
         component_modified: Option<&str>,
     ) -> Result<HiroRoundResult> {
-        let tasks = load_tasks()?;
+        self.run_benchmark_labeled_with_limit(round, component_modified, None)
+            .await
+    }
+
+    pub async fn run_benchmark_labeled_with_limit(
+        &self,
+        round: u32,
+        component_modified: Option<&str>,
+        task_limit: Option<usize>,
+    ) -> Result<HiroRoundResult> {
+        let mut tasks = load_tasks()?;
+        if let Some(limit) = task_limit {
+            tasks.truncate(limit);
+        }
         let harness_commit = current_harness_commit().unwrap_or_else(|e| {
             warn!("hiro: failed to read harness commit: {e}");
             "unknown".to_string()
