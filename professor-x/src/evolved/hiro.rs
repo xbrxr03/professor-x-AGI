@@ -20,6 +20,7 @@ use tracing::{info, warn};
 use crate::agentd::graph::{TaskNode, TaskType};
 use crate::agentd::react::ReactLoop;
 use crate::evolved::bf::BfTracker;
+use crate::evolved::lcap::LcapPolicy;
 use crate::memd::MemoryManager;
 use crate::ollama::OllamaClient;
 use crate::policyd::PolicyEngine;
@@ -69,6 +70,8 @@ pub struct HiroRunner {
     policy:   Arc<PolicyEngine>,
     memory:   Arc<MemoryManager>,
     cancel:   CancellationToken,
+    /// Shared LCAP policy across all tasks in a round — UCB1 state accumulates per round.
+    lcap:     Arc<std::sync::Mutex<LcapPolicy>>,
 }
 
 impl HiroRunner {
@@ -79,7 +82,10 @@ impl HiroRunner {
         memory:   Arc<MemoryManager>,
         cancel:   CancellationToken,
     ) -> Self {
-        Self { ollama, registry, policy, memory, cancel }
+        Self {
+            ollama, registry, policy, memory, cancel,
+            lcap: Arc::new(std::sync::Mutex::new(LcapPolicy::new())),
+        }
     }
 
     /// Run the full 60-task benchmark for a given round.
@@ -109,7 +115,7 @@ impl HiroRunner {
                 &task.description.chars().take(60).collect::<String>()
             );
 
-            let success = self.run_task(task).await.unwrap_or_else(|e| {
+            let success = self.run_task(task, round).await.unwrap_or_else(|e| {
                 warn!("hiro: task {} error: {e}", task.id);
                 false
             });
@@ -159,14 +165,15 @@ impl HiroRunner {
         })
     }
 
-    async fn run_task(&self, hiro_task: &HiroTask) -> Result<bool> {
+    async fn run_task(&self, hiro_task: &HiroTask, round: u32) -> Result<bool> {
         let react = ReactLoop::new(
             Arc::clone(&self.ollama),
             Arc::clone(&self.registry),
             Arc::clone(&self.policy),
             Arc::clone(&self.memory),
             self.cancel.clone(),
-        );
+        ).with_lcap(Arc::clone(&self.lcap), round);
+
         let mut task = TaskNode::new(
             hiro_task.description.clone(),
             TaskType::Research,

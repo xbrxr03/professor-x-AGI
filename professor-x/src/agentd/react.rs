@@ -31,6 +31,7 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::agentd::graph::{ExecutionStep, TaskNode, TaskStatus};
+use crate::evolved::lcap::{LcapPolicy, TaskCategory};
 use crate::evolved::tracker::TaskOutcome;
 use crate::memd::MemoryManager;
 use crate::memd::episodic::EpisodicEntry;
@@ -48,11 +49,13 @@ struct ParsedStep {
 }
 
 pub struct ReactLoop {
-    ollama:   Arc<OllamaClient>,
-    registry: Arc<std::sync::RwLock<ToolRegistry>>,
-    policy:   Arc<PolicyEngine>,
-    memory:   Arc<MemoryManager>,
-    cancel:   CancellationToken,
+    ollama:        Arc<OllamaClient>,
+    registry:      Arc<std::sync::RwLock<ToolRegistry>>,
+    policy:        Arc<PolicyEngine>,
+    memory:        Arc<MemoryManager>,
+    cancel:        CancellationToken,
+    lcap:          Arc<std::sync::Mutex<LcapPolicy>>,
+    current_round: u32,
 }
 
 impl ReactLoop {
@@ -63,7 +66,17 @@ impl ReactLoop {
         memory:   Arc<MemoryManager>,
         cancel:   CancellationToken,
     ) -> Self {
-        Self { ollama, registry, policy, memory, cancel }
+        Self {
+            ollama, registry, policy, memory, cancel,
+            lcap: Arc::new(std::sync::Mutex::new(LcapPolicy::new())),
+            current_round: 0,
+        }
+    }
+
+    pub fn with_lcap(mut self, lcap: Arc<std::sync::Mutex<LcapPolicy>>, round: u32) -> Self {
+        self.lcap = lcap;
+        self.current_round = round;
+        self
     }
 
     /// Run a task to completion or exhaustion. Returns outcome for the tracker.
@@ -77,11 +90,18 @@ impl ReactLoop {
         // Cognition context: relevant items from cognition base
         let cognition_context = self.retrieve_cognition(&task.description);
 
+        // LCAP: select context budget (Balanced before round 10, UCB1 after)
+        let category = LcapPolicy::classify(&task.description);
+        let num_ctx = {
+            let lc = self.lcap.lock().unwrap();
+            lc.select(&category, self.current_round).hard_ceiling_tokens
+        };
+
         for attempt in 0..task.max_attempts {
             task.attempt_count = attempt + 1;
             info!("react: task '{}' attempt {}/{}", task.description, attempt + 1, task.max_attempts);
 
-            let outcome = self.run_attempt(task, &ice_examples, &cognition_context).await;
+            let outcome = self.run_attempt(task, &ice_examples, &cognition_context, num_ctx).await;
 
             match outcome {
                 Ok(true) => {
@@ -89,8 +109,14 @@ impl ReactLoop {
                     task.completed_at = Some(Utc::now());
                     task.outcome_score = Some(1.0);
 
-                    // Persist this task as a successful episodic memory
                     self.write_episodic(task, true).await;
+
+                    // LCAP: reward successful budget selection
+                    {
+                        let mut lc = self.lcap.lock().unwrap();
+                        let arm = arm_for_ctx(num_ctx);
+                        lc.update(&category, &arm, 1.0);
+                    }
 
                     return Ok(TaskOutcome {
                         task_id:      task.id,
@@ -103,11 +129,10 @@ impl ReactLoop {
                     });
                 }
                 Ok(false) => {
-                    // Failed this attempt — generate Reflexion and retry
                     if attempt + 1 < task.max_attempts {
                         let reflection = self.generate_reflection(task).await;
                         task.push_reflection(reflection);
-                        task.steps.clear(); // fresh attempt, prior steps preserved in reflections
+                        task.steps.clear();
                     }
                 }
                 Err(e) => {
@@ -135,6 +160,13 @@ impl ReactLoop {
 
         self.write_episodic(task, false).await;
 
+        // LCAP: penalize failed budget selection
+        {
+            let mut lc = self.lcap.lock().unwrap();
+            let arm = arm_for_ctx(num_ctx);
+            lc.update(&category, &arm, 0.0);
+        }
+
         Ok(TaskOutcome {
             task_id:      task.id,
             description:  task.description.clone(),
@@ -152,6 +184,7 @@ impl ReactLoop {
         task:             &mut TaskNode,
         ice_examples:     &[String],
         cognition_context: &[String],
+        num_ctx:          u32,
     ) -> Result<bool> {
         const MAX_STEPS: usize = 20;
         let executor = ToolExecutor::new(Arc::clone(&self.registry))
@@ -163,6 +196,10 @@ impl ReactLoop {
 
         // Circuit breaker: pause after 3 consecutive tool failures
         let mut consecutive_failures: u8 = 0;
+
+        // LCAP: apply context budget
+        let mut react_opts = ModelOptions::for_react();
+        react_opts.num_ctx = Some(num_ctx);
 
         for step_idx in 0..MAX_STEPS {
             if self.cancel.is_cancelled() {
@@ -176,7 +213,7 @@ impl ReactLoop {
             let resp = self.ollama.generate(
                 &prompt,
                 Some(SYSTEM_PROMPT),
-                Some(ModelOptions::for_react()),
+                Some(react_opts.clone()),
             ).await?;
 
             let (_, answer) = resp.split_thinking();
@@ -539,6 +576,18 @@ fn extract_keywords(text: &str) -> Vec<String> {
     words.dedup();
     words.truncate(10);
     words
+}
+
+/// Map a num_ctx token ceiling back to the nearest BudgetArm for LCAP reward tracking.
+fn arm_for_ctx(num_ctx: u32) -> crate::evolved::lcap::BudgetArm {
+    use crate::evolved::lcap::BudgetArm;
+    match num_ctx {
+        0..=4096  => BudgetArm::Sparse,
+        4097..=8192  => BudgetArm::Conservative,
+        8193..=12288 => BudgetArm::Balanced,
+        12289..=16384 => BudgetArm::Rich,
+        _ => BudgetArm::MemoryHeavy,
+    }
 }
 
 // ── Prompts ───────────────────────────────────────────────────────────────────
