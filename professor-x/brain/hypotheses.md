@@ -6,6 +6,6 @@
 
 **H2** — Lever 2 (ICE+MARS contextual) is responsible for the majority of gains in rounds 1–10. Status: Confirmed | Priority: High
 
-**H3** — DHE structural evolution significantly improves performance stability. Status: Experiment Running | Priority: Critical
+**H3** — DHE structural evolution significantly improves performance stability. Status: Failed | Priority: Critical
 
-Experiment Results: DHE structural evolution achieved 92% stability in round 30, surpassing the baseline of 78%.
+Experiment Results: Experiment failed due to missing benchmark_tool dependency.
