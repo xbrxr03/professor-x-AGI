@@ -22,7 +22,6 @@
 ///   Thought: <your reasoning>
 ///   Action: <tool_name>
 ///   Action Input: <json>
-
 use anyhow::Result;
 use chrono::Utc;
 use serde_json::Value;
@@ -31,14 +30,14 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::agentd::graph::{ExecutionStep, TaskNode, TaskStatus};
-use crate::evolved::lcap::{LcapPolicy, TaskCategory};
+use crate::evolved::lcap::LcapPolicy;
 use crate::evolved::tracker::TaskOutcome;
-use crate::memd::MemoryManager;
 use crate::memd::episodic::EpisodicEntry;
+use crate::memd::MemoryManager;
 use crate::ollama::{ModelOptions, OllamaClient};
 use crate::policyd::{AuditStore, Decision, PermissionScope, PolicyEngine};
-use crate::toolbridge::{ToolExecutor, ToolRegistry};
 use crate::toolbridge::executor::{Action, Observation};
+use crate::toolbridge::{ToolExecutor, ToolRegistry};
 use tokio_util::sync::CancellationToken;
 
 // Parsed from the LLM's output
@@ -49,25 +48,29 @@ struct ParsedStep {
 }
 
 pub struct ReactLoop {
-    ollama:        Arc<OllamaClient>,
-    registry:      Arc<std::sync::RwLock<ToolRegistry>>,
-    policy:        Arc<PolicyEngine>,
-    memory:        Arc<MemoryManager>,
-    cancel:        CancellationToken,
-    lcap:          Arc<std::sync::Mutex<LcapPolicy>>,
+    ollama: Arc<OllamaClient>,
+    registry: Arc<std::sync::RwLock<ToolRegistry>>,
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    cancel: CancellationToken,
+    lcap: Arc<std::sync::Mutex<LcapPolicy>>,
     current_round: u32,
 }
 
 impl ReactLoop {
     pub fn new(
-        ollama:   Arc<OllamaClient>,
+        ollama: Arc<OllamaClient>,
         registry: Arc<std::sync::RwLock<ToolRegistry>>,
-        policy:   Arc<PolicyEngine>,
-        memory:   Arc<MemoryManager>,
-        cancel:   CancellationToken,
+        policy: Arc<PolicyEngine>,
+        memory: Arc<MemoryManager>,
+        cancel: CancellationToken,
     ) -> Self {
         Self {
-            ollama, registry, policy, memory, cancel,
+            ollama,
+            registry,
+            policy,
+            memory,
+            cancel,
             lcap: Arc::new(std::sync::Mutex::new(LcapPolicy::new())),
             current_round: 0,
         }
@@ -81,7 +84,7 @@ impl ReactLoop {
 
     /// Run a task to completion or exhaustion. Returns outcome for the tracker.
     pub async fn run(&self, task: &mut TaskNode) -> Result<TaskOutcome> {
-        task.status     = TaskStatus::Running;
+        task.status = TaskStatus::Running;
         task.started_at = Some(Utc::now());
 
         // ICE: retrieve similar past tasks from episodic memory
@@ -99,13 +102,20 @@ impl ReactLoop {
 
         for attempt in 0..task.max_attempts {
             task.attempt_count = attempt + 1;
-            info!("react: task '{}' attempt {}/{}", task.description, attempt + 1, task.max_attempts);
+            info!(
+                "react: task '{}' attempt {}/{}",
+                task.description,
+                attempt + 1,
+                task.max_attempts
+            );
 
-            let outcome = self.run_attempt(task, &ice_examples, &cognition_context, num_ctx).await;
+            let outcome = self
+                .run_attempt(task, &ice_examples, &cognition_context, num_ctx)
+                .await;
 
             match outcome {
                 Ok(true) => {
-                    task.status       = TaskStatus::Complete;
+                    task.status = TaskStatus::Complete;
                     task.completed_at = Some(Utc::now());
                     task.outcome_score = Some(1.0);
 
@@ -119,13 +129,13 @@ impl ReactLoop {
                     }
 
                     return Ok(TaskOutcome {
-                        task_id:      task.id,
-                        description:  task.description.clone(),
-                        success:      true,
-                        score:        1.0,
+                        task_id: task.id,
+                        description: task.description.clone(),
+                        success: true,
+                        score: 1.0,
                         failure_mode: None,
-                        steps_taken:  task.steps.len() as u32,
-                        timestamp:    Utc::now(),
+                        steps_taken: task.steps.len() as u32,
+                        timestamp: Utc::now(),
                     });
                 }
                 Ok(false) => {
@@ -150,11 +160,13 @@ impl ReactLoop {
 
         // All attempts exhausted — MARS reflection + DHE attribution
         let mars = self.generate_mars_reflection(task).await;
-        let dhe  = crate::evolved::dhe::Dhe::diagnose(task);
-        let failure_mode = format!("{mars} [DHE:layer={},lever={}]",
-            dhe.failed_layer, dhe.recommended_lever);
+        let dhe = crate::evolved::dhe::Dhe::diagnose(task);
+        let failure_mode = format!(
+            "{mars} [DHE:layer={},lever={}]",
+            dhe.failed_layer, dhe.recommended_lever
+        );
 
-        task.status       = TaskStatus::Failed;
+        task.status = TaskStatus::Failed;
         task.completed_at = Some(Utc::now());
         task.outcome_score = Some(0.0);
 
@@ -168,31 +180,31 @@ impl ReactLoop {
         }
 
         Ok(TaskOutcome {
-            task_id:      task.id,
-            description:  task.description.clone(),
-            success:      false,
-            score:        0.0,
+            task_id: task.id,
+            description: task.description.clone(),
+            success: false,
+            score: 0.0,
             failure_mode: Some(failure_mode),
-            steps_taken:  task.steps.len() as u32,
-            timestamp:    Utc::now(),
+            steps_taken: task.steps.len() as u32,
+            timestamp: Utc::now(),
         })
     }
 
     /// Run one attempt. Returns Ok(true) on success, Ok(false) on failure.
     async fn run_attempt(
         &self,
-        task:             &mut TaskNode,
-        ice_examples:     &[String],
+        task: &mut TaskNode,
+        ice_examples: &[String],
         cognition_context: &[String],
-        num_ctx:          u32,
+        num_ctx: u32,
     ) -> Result<bool> {
         const MAX_STEPS: usize = 20;
-        let scope    = PermissionScope::default_autonomous();
+        let scope = PermissionScope::default_autonomous();
         let executor = ToolExecutor::new(Arc::clone(&self.registry))
             .with_workspace_root(scope.workspace_root.clone())
             .with_memory(Arc::clone(&self.memory))
             .with_ollama(Arc::clone(&self.ollama));
-        let audit    = AuditStore::new(Arc::clone(&self.memory.db));
+        let audit = AuditStore::new(Arc::clone(&self.memory.db));
         let session_id = Uuid::new_v4();
 
         // Circuit breaker: pause after 3 consecutive tool failures
@@ -211,15 +223,18 @@ impl ReactLoop {
             let prompt = self.build_step_prompt(task, ice_examples, cognition_context);
 
             // Ask the model for the next Thought + Action
-            let resp = self.ollama.generate(
-                &prompt,
-                Some(SYSTEM_PROMPT),
-                Some(react_opts.clone()),
-            ).await?;
+            let resp = self
+                .ollama
+                .generate(&prompt, Some(SYSTEM_PROMPT), Some(react_opts.clone()))
+                .await?;
 
             let (_, answer) = resp.split_thinking();
 
-            debug!("react step {}: raw response length={}", step_idx + 1, answer.len());
+            debug!(
+                "react step {}: raw response length={}",
+                step_idx + 1,
+                answer.len()
+            );
 
             // Parse Thought / Action / Action Input
             match parse_react_step(&answer) {
@@ -245,12 +260,10 @@ impl ReactLoop {
                     }
 
                     // Gate the action through policyd
-                    let gate = self.policy.gate(
-                        &parsed.tool_name,
-                        &parsed.params,
-                        session_id,
-                        &scope,
-                    ).await;
+                    let gate = self
+                        .policy
+                        .gate(&parsed.tool_name, &parsed.params, session_id, &scope)
+                        .await;
 
                     // Write audit entry
                     let _ = audit.append(
@@ -279,8 +292,8 @@ impl ReactLoop {
                         }
                         Decision::Allow => {
                             let action = Action {
-                                tool_name:  parsed.tool_name.clone(),
-                                params:     parsed.params.clone(),
+                                tool_name: parsed.tool_name.clone(),
+                                params: parsed.params.clone(),
                                 risk_score: gate.risk_score,
                             };
                             let obs = executor.execute(&action).await;
@@ -316,15 +329,15 @@ impl ReactLoop {
 
                     // Record the step
                     let step = ExecutionStep {
-                        index:       (step_idx + 1) as u32,
-                        thought:     parsed.thought,
-                        action:      Action {
-                            tool_name:  parsed.tool_name,
-                            params:     parsed.params,
+                        index: (step_idx + 1) as u32,
+                        thought: parsed.thought,
+                        action: Action {
+                            tool_name: parsed.tool_name,
+                            params: parsed.params,
                             risk_score: gate.risk_score,
                         },
                         observation: observation.clone(),
-                        timestamp:   Utc::now(),
+                        timestamp: Utc::now(),
                     };
                     task.steps.push(step);
 
@@ -337,20 +350,25 @@ impl ReactLoop {
         }
 
         // MAX_STEPS reached without finishing
-        warn!("react: max steps ({MAX_STEPS}) reached for task '{}'", task.description);
+        warn!(
+            "react: max steps ({MAX_STEPS}) reached for task '{}'",
+            task.description
+        );
         Ok(false)
     }
 
     fn build_step_prompt(
         &self,
-        task:              &TaskNode,
-        ice_examples:      &[String],
+        task: &TaskNode,
+        ice_examples: &[String],
         cognition_context: &[String],
     ) -> String {
         let mut parts = Vec::new();
 
         // Pinned identity + working memory from memd
-        let ctx_prefix = self.memory.build_context_prefix("current")
+        let ctx_prefix = self
+            .memory
+            .build_context_prefix("current")
             .unwrap_or_default();
         if !ctx_prefix.is_empty() {
             parts.push(ctx_prefix);
@@ -358,7 +376,8 @@ impl ReactLoop {
 
         // ICE: similar past tasks
         if !ice_examples.is_empty() {
-            let examples = ice_examples.iter()
+            let examples = ice_examples
+                .iter()
                 .enumerate()
                 .map(|(i, ex)| format!("Example {}: {ex}", i + 1))
                 .collect::<Vec<_>>()
@@ -396,10 +415,15 @@ impl ReactLoop {
 
     async fn retrieve_ice(&self, task_desc: &str) -> Vec<String> {
         match self.memory.episodic.search_fts(task_desc, 3) {
-            Ok(entries) => entries.iter()
+            Ok(entries) => entries
+                .iter()
                 .filter(|e| e.importance > 0.3)
                 .map(|e| {
-                    let outcome = if e.importance >= 0.7 { "succeeded" } else { "failed" };
+                    let outcome = if e.importance >= 0.7 {
+                        "succeeded"
+                    } else {
+                        "failed"
+                    };
                     format!("Past task ({outcome}): {}", e.content)
                 })
                 .collect(),
@@ -411,7 +435,8 @@ impl ReactLoop {
         use crate::evolved::CognitionStore;
         let store = CognitionStore::new(Arc::clone(&self.memory.db));
         match store.query_top_k(query, 5) {
-            Ok(items) => items.iter()
+            Ok(items) => items
+                .iter()
                 .filter(|i| i.quality > 0.4)
                 .map(|i| i.content.clone())
                 .collect(),
@@ -422,11 +447,15 @@ impl ReactLoop {
     async fn generate_reflection(&self, task: &TaskNode) -> String {
         use crate::evolved::reflector::Reflector;
         let prompt = Reflector::build_prompt(task);
-        match self.ollama.generate(
-            &prompt,
-            Some("You are a self-reflecting AI agent. Be concise and specific."),
-            Some(ModelOptions::for_reflection()),
-        ).await {
+        match self
+            .ollama
+            .generate(
+                &prompt,
+                Some("You are a self-reflecting AI agent. Be concise and specific."),
+                Some(ModelOptions::for_reflection()),
+            )
+            .await
+        {
             Ok(resp) => {
                 let (_, answer) = resp.split_thinking();
                 answer
@@ -452,11 +481,15 @@ impl ReactLoop {
             task.steps_text(),
         );
 
-        let resp = match self.ollama.generate(
-            &prompt,
-            Some("You are a metacognitive AI agent. Extract actionable lessons from failure."),
-            Some(ModelOptions::for_reflection()),
-        ).await {
+        let resp = match self
+            .ollama
+            .generate(
+                &prompt,
+                Some("You are a metacognitive AI agent. Extract actionable lessons from failure."),
+                Some(ModelOptions::for_reflection()),
+            )
+            .await
+        {
             Ok(r) => r,
             Err(e) => return format!("reflection failed: {e}"),
         };
@@ -465,7 +498,7 @@ impl ReactLoop {
 
         // Parse PRINCIPLE and PROCEDURE
         let principle = extract_field(&answer, "PRINCIPLE");
-        let procedure  = extract_field(&answer, "PROCEDURE");
+        let procedure = extract_field(&answer, "PROCEDURE");
 
         // Write to semantic memory as lessons
         if let Some(ref p) = principle {
@@ -501,15 +534,15 @@ impl ReactLoop {
         );
 
         let entry = EpisodicEntry {
-            id:           Uuid::new_v4(),
-            session_id:   None,
-            task_id:      Some(task.id),
-            timestamp:    Utc::now(),
-            content:      summary,
-            keywords:     extract_keywords(&task.description),
+            id: Uuid::new_v4(),
+            session_id: None,
+            task_id: Some(task.id),
+            timestamp: Utc::now(),
+            content: summary,
+            keywords: extract_keywords(&task.description),
             importance,
             embedding_id: None,
-            cluster_id:   None,
+            cluster_id: None,
         };
 
         let _ = self.memory.episodic.insert(&entry);
@@ -523,13 +556,18 @@ fn parse_react_step(text: &str) -> Option<ParsedStep> {
     //   A) Model re-emits label: "Thought: ...\nAction: ...\nAction Input: ..."
     //   B) Prompt ended with "Thought:" so model continues without label:
     //      "<thought text>\nAction: ...\nAction Input: ..."
-    let tool_name = extract_field(text, "Action")
-        .map(|s| s.trim().to_lowercase().replace(' ', "_"))?;
+    let tool_name =
+        extract_field(text, "Action").map(|s| s.trim().to_lowercase().replace(' ', "_"))?;
 
     let thought = extract_field(text, "Thought").unwrap_or_else(|| {
         // Layout B: everything before the first "Action:" line is the thought
-        let action_marker = text.to_lowercase().find("\naction:")
-            .or_else(|| if text.to_lowercase().starts_with("action:") { Some(0) } else { None });
+        let action_marker = text.to_lowercase().find("\naction:").or_else(|| {
+            if text.to_lowercase().starts_with("action:") {
+                Some(0)
+            } else {
+                None
+            }
+        });
         match action_marker {
             Some(0) => String::new(),
             Some(pos) => text[..pos].trim().to_string(),
@@ -537,13 +575,16 @@ fn parse_react_step(text: &str) -> Option<ParsedStep> {
         }
     });
 
-    let params_raw = extract_field(text, "Action Input")
-        .unwrap_or_else(|| "{}".to_string());
+    let params_raw = extract_field(text, "Action Input").unwrap_or_else(|| "{}".to_string());
 
     let params = serde_json::from_str(&params_raw)
         .unwrap_or_else(|_| serde_json::json!({ "input": params_raw }));
 
-    Some(ParsedStep { thought, tool_name, params })
+    Some(ParsedStep {
+        thought,
+        tool_name,
+        params,
+    })
 }
 
 fn extract_field(text: &str, field: &str) -> Option<String> {
@@ -558,7 +599,8 @@ fn extract_field(text: &str, field: &str) -> Option<String> {
     let prefix_lower = prefix.to_lowercase();
     if let Some(start) = lower.find(&prefix_lower) {
         let after = &text[start + prefix.len()..];
-        let end = FIELD_KEYWORDS.iter()
+        let end = FIELD_KEYWORDS
+            .iter()
             .filter_map(|kw| {
                 let kw_l = format!("\n{kw}:");
                 after.to_lowercase().find(&kw_l.to_lowercase())
@@ -570,20 +612,33 @@ fn extract_field(text: &str, field: &str) -> Option<String> {
     None
 }
 
-const FIELD_KEYWORDS: &[&str] = &["Thought", "Action", "Action Input", "Observation",
-                                   "PRINCIPLE", "PROCEDURE"];
+const FIELD_KEYWORDS: &[&str] = &[
+    "Thought",
+    "Action",
+    "Action Input",
+    "Observation",
+    "PRINCIPLE",
+    "PROCEDURE",
+];
 
 fn is_completion_signal(obs: &Observation) -> bool {
-    if !obs.success { return false; }
+    if !obs.success {
+        return false;
+    }
     let lower = obs.output.to_lowercase();
     lower.contains("task complete") || lower.contains("finished") || lower.contains("done")
 }
 
 fn extract_keywords(text: &str) -> Vec<String> {
     // Naive keyword extraction: split on whitespace, keep words > 4 chars, dedup
-    let mut words: Vec<String> = text.split_whitespace()
+    let mut words: Vec<String> = text
+        .split_whitespace()
         .filter(|w| w.len() > 4)
-        .map(|w| w.to_lowercase().trim_matches(|c: char| !c.is_alphanumeric()).to_string())
+        .map(|w| {
+            w.to_lowercase()
+                .trim_matches(|c: char| !c.is_alphanumeric())
+                .to_string()
+        })
         .filter(|w| !w.is_empty())
         .collect();
     words.dedup();
@@ -595,8 +650,8 @@ fn extract_keywords(text: &str) -> Vec<String> {
 fn arm_for_ctx(num_ctx: u32) -> crate::evolved::lcap::BudgetArm {
     use crate::evolved::lcap::BudgetArm;
     match num_ctx {
-        0..=4096  => BudgetArm::Sparse,
-        4097..=8192  => BudgetArm::Conservative,
+        0..=4096 => BudgetArm::Sparse,
+        4097..=8192 => BudgetArm::Conservative,
         8193..=12288 => BudgetArm::Balanced,
         12289..=16384 => BudgetArm::Rich,
         _ => BudgetArm::MemoryHeavy,

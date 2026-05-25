@@ -1,0 +1,44 @@
+# Ordered local-first daily cycle. Times are relative offsets used by dry-run
+# and future scheduler expansion; network-dependent jobs must degrade cleanly.
+
+[[jobs]]
+id = "daily-update-morning"
+skill = "px-daily-update"
+offset_minutes = 0
+network_required = false
+
+[[jobs]]
+id = "literature-search"
+skill = "px-literature-search"
+offset_minutes = 15
+network_required = false
+
+[[jobs]]
+id = "synthesis"
+skill = "px-synthesize"
+offset_minutes = 90
+network_required = false
+
+[[jobs]]
+id = "write-section"
+skill = "px-write-section"
+offset_minutes = 150
+network_required = false
+
+[[jobs]]
+id = "experiment-runner"
+skill = "px-experiment-runner"
+offset_minutes = 240
+network_required = false
+
+[[jobs]]
+id = "self-review"
+skill = "px-self-review"
+offset_minutes = 360
+network_required = false
+
+[[jobs]]
+id = "daily-update-evening"
+skill = "px-daily-update"
+offset_minutes = 405
+network_required = false

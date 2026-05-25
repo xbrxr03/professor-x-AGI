@@ -1,1 +1,1 @@
-## DHE Structural Evolution Impact\n\n**Findings**: DHE structural evolution improved performance stability by 18% (rounds 1–30) and increased round 30 pass@3 from 22% to 35%.\n\n**Implications**: This validates H3 and suggests structural evolution is critical for stability.\n\n
+DHE structural evolution improves performance stability by 18% in rounds 1–30. Round 30 pass@3 increased from 22% to 35%.

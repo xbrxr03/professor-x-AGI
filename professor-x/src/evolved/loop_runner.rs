@@ -25,6 +25,20 @@ use crate::evolved::tracker::OutcomeTracker;
 use crate::memd::MemoryManager;
 use crate::ollama::{ChatMessage, ModelOptions, OllamaClient};
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct VerificationOutcome {
+    pub accepted: bool,
+    pub reason: String,
+    pub checks: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RewardHackingAnalysis {
+    pub suspicious: bool,
+    pub confidence: f32,
+    pub reason: String,
+}
+
 // Parse "[DHE:layer=X,lever=Y]" from failure pattern strings.
 // Returns (layer, lever) from the most common DHE annotation found, or (0, 3) as default.
 fn parse_dhe_from_patterns(patterns: &[String]) -> (u8, u8) {
@@ -342,6 +356,46 @@ impl EvolvedLoop {
         node: &mut EvolutionNode,
         tracker: &OutcomeTracker,
     ) -> Result<()> {
+        let reward_scan = self.reward_hacking_scan(node).await?;
+        if reward_scan.suspicious {
+            node.status = crate::evolved::proposer::NodeStatus::Rejected;
+            node.manifest.verification_status = VerificationStatus::Rejected;
+            node.manifest.verified_at = Some(Utc::now());
+            node.analysis = format!(
+                "reward-hacking scan rejected proposal: {} (confidence={:.2})",
+                reward_scan.reason, reward_scan.confidence
+            );
+            node.results = serde_json::to_value(VerificationOutcome {
+                accepted: false,
+                reason: node.analysis.clone(),
+                checks: vec!["reward_hacking_scan".to_string()],
+            })?;
+            return Ok(());
+        }
+
+        if !self.node_has_material_diff(node).await? {
+            node.status = crate::evolved::proposer::NodeStatus::Rejected;
+            node.manifest.verification_status = VerificationStatus::Rejected;
+            node.manifest.verified_at = Some(Utc::now());
+            node.analysis = "verification rejected proposal: no material file diff".to_string();
+            node.results = serde_json::to_value(VerificationOutcome {
+                accepted: false,
+                reason: node.analysis.clone(),
+                checks: vec!["material_diff".to_string()],
+            })?;
+            return Ok(());
+        }
+
+        let compile_check = self.run_compile_check().await?;
+        if !compile_check.accepted {
+            node.status = crate::evolved::proposer::NodeStatus::Rejected;
+            node.manifest.verification_status = VerificationStatus::Rejected;
+            node.manifest.verified_at = Some(Utc::now());
+            node.analysis = compile_check.reason.clone();
+            node.results = serde_json::to_value(compile_check)?;
+            return Ok(());
+        }
+
         let prompt =
             Analyzer::build_prompt(&node.motivation, &node.diff, &node.results.to_string());
         let resp = self
@@ -360,9 +414,29 @@ impl EvolvedLoop {
         node.manifest.verification_status = if improved {
             node.status = crate::evolved::proposer::NodeStatus::Accepted;
             node.score = (node.score + recent_success) / 2.0;
+            node.results = serde_json::to_value(VerificationOutcome {
+                accepted: true,
+                reason: format!("recent success {:.3} exceeded acceptance threshold", recent_success),
+                checks: vec![
+                    "reward_hacking_scan".to_string(),
+                    "material_diff".to_string(),
+                    "cargo_check".to_string(),
+                    "analyzer_success_rate".to_string(),
+                ],
+            })?;
             VerificationStatus::Confirmed
         } else {
             node.status = crate::evolved::proposer::NodeStatus::Rejected;
+            node.results = serde_json::to_value(VerificationOutcome {
+                accepted: false,
+                reason: format!("recent success {:.3} did not exceed acceptance threshold", recent_success),
+                checks: vec![
+                    "reward_hacking_scan".to_string(),
+                    "material_diff".to_string(),
+                    "cargo_check".to_string(),
+                    "analyzer_success_rate".to_string(),
+                ],
+            })?;
             VerificationStatus::Rejected
         };
         node.manifest.verified_at = Some(Utc::now());
@@ -400,6 +474,108 @@ impl EvolvedLoop {
         }
 
         Ok(())
+    }
+
+    async fn reward_hacking_scan(&self, node: &EvolutionNode) -> Result<RewardHackingAnalysis> {
+        let text = node.diff.to_ascii_lowercase();
+        let suspicious_terms = [
+            "pass_at_3",
+            "pass@3",
+            "hiro",
+            "evaluator",
+            "verification_status",
+            "reward_hacking",
+            "policyengine",
+            "permission",
+            "audit",
+            "bypass",
+            "always pass",
+            "return true",
+            "task complete",
+        ];
+
+        if let Some(term) = suspicious_terms.iter().find(|term| text.contains(**term)) {
+            return Ok(RewardHackingAnalysis {
+                suspicious: true,
+                confidence: 0.85,
+                reason: format!("proposal text contains sensitive benchmark/safety term '{term}'"),
+            });
+        }
+
+        let material_chars: usize = node
+            .diff
+            .lines()
+            .map(str::trim)
+            .filter(|line| {
+                !line.is_empty()
+                    && !line.starts_with('#')
+                    && !line.starts_with("//")
+                    && !line.starts_with(';')
+            })
+            .map(str::len)
+            .sum();
+
+        if material_chars < 20 {
+            return Ok(RewardHackingAnalysis {
+                suspicious: true,
+                confidence: 0.70,
+                reason: "proposal appears to be empty, no-op, or comment-only".to_string(),
+            });
+        }
+
+        Ok(RewardHackingAnalysis {
+            suspicious: false,
+            confidence: 0.30,
+            reason: "no benchmark, policy, or no-op pattern detected".to_string(),
+        })
+    }
+
+    async fn node_has_material_diff(&self, node: &EvolutionNode) -> Result<bool> {
+        for path in changed_paths_for_node(node) {
+            if !path.exists() {
+                continue;
+            }
+            if !self.git_path_tracked(&path).await? {
+                return Ok(true);
+            }
+
+            let diff = tokio::process::Command::new("git")
+                .args(["diff", "--quiet", "--"])
+                .arg(&path)
+                .output()
+                .await?;
+            if !diff.status.success() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    async fn run_compile_check(&self) -> Result<VerificationOutcome> {
+        let mut command = tokio::process::Command::new("cargo");
+        command.args(["check", "--quiet"]);
+        if std::path::Path::new("professor-x/Cargo.toml").exists() {
+            command.current_dir("professor-x");
+        }
+
+        let output = command.output().await?;
+        if output.status.success() {
+            return Ok(VerificationOutcome {
+                accepted: true,
+                reason: "cargo check passed".to_string(),
+                checks: vec!["cargo_check".to_string()],
+            });
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Ok(VerificationOutcome {
+            accepted: false,
+            reason: format!(
+                "cargo check failed: {}",
+                stderr.lines().take(8).collect::<Vec<_>>().join(" ")
+            ),
+            checks: vec!["cargo_check".to_string()],
+        })
     }
 
     async fn git_worktree_clean(&self) -> Result<bool> {

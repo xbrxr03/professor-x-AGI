@@ -1,0 +1,4 @@
+worktrees/*
+patches/*
+!worktrees/.gitkeep
+!patches/.gitkeep

@@ -1,9 +1,9 @@
+mod agentd;
+mod evolved;
 mod memd;
 mod ollama;
-mod toolbridge;
-mod agentd;
 mod policyd;
-mod evolved;
+mod toolbridge;
 
 use anyhow::Result;
 use std::path::PathBuf;
@@ -13,11 +13,11 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
-use agentd::{TaskNode, TaskQueue, TaskType};
 use agentd::react::ReactLoop;
-use evolved::CognitionStore;
+use agentd::{TaskNode, TaskQueue, TaskType};
 use evolved::cognition_base::CognitionItem;
 use evolved::tracker::{OutcomeTracker, TaskOutcome};
+use evolved::CognitionStore;
 use evolved::{EvolvedLoop, HiroRunner};
 use memd::MemoryManager;
 use policyd::{AuditStore, PolicyEngine};
@@ -34,11 +34,19 @@ struct CliArgs {
     hiro_round: Option<u32>,
     /// Run N static HIRO null-condition rounds and exit.
     hiro_null_rounds: Option<u32>,
+    /// Print the ordered daily cycle jobs and exit.
+    dry_run_daily: bool,
 }
 
 fn parse_args() -> CliArgs {
     let args: Vec<String> = std::env::args().collect();
-    let mut cli = CliArgs { task: None, run_now: false, hiro_round: None, hiro_null_rounds: None };
+    let mut cli = CliArgs {
+        task: None,
+        run_now: false,
+        hiro_round: None,
+        hiro_null_rounds: None,
+        dry_run_daily: false,
+    };
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -46,7 +54,10 @@ fn parse_args() -> CliArgs {
                 cli.task = Some(args[i + 1].clone());
                 i += 2;
             }
-            "--run-now" => { cli.run_now = true; i += 1; }
+            "--run-now" => {
+                cli.run_now = true;
+                i += 1;
+            }
             "--hiro" if i + 1 < args.len() => {
                 cli.hiro_round = args[i + 1].parse::<u32>().ok();
                 i += 2;
@@ -55,7 +66,13 @@ fn parse_args() -> CliArgs {
                 cli.hiro_null_rounds = args[i + 1].parse::<u32>().ok();
                 i += 2;
             }
-            _ => { i += 1; }
+            "--dry-run-daily" => {
+                cli.dry_run_daily = true;
+                i += 1;
+            }
+            _ => {
+                i += 1;
+            }
         }
     }
     cli
@@ -68,7 +85,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("professor_x=info,warn"))
+                .unwrap_or_else(|_| EnvFilter::new("professor_x=info,warn")),
         )
         .init();
 
@@ -76,10 +93,10 @@ async fn main() -> Result<()> {
 
     info!("Professor X starting — single binary, five modules");
 
-    let data_dir = PathBuf::from(
-        std::env::var("PROFESSOR_X_DATA_DIR")
-            .unwrap_or_else(|_| format!("{}/.professor-x", std::env::var("HOME").unwrap_or_default()))
-    );
+    let data_dir =
+        PathBuf::from(std::env::var("PROFESSOR_X_DATA_DIR").unwrap_or_else(|_| {
+            format!("{}/.professor-x", std::env::var("HOME").unwrap_or_default())
+        }));
 
     // ── memd ──────────────────────────────────────────────────────────────
     let memory = Arc::new(MemoryManager::open(&data_dir)?);
@@ -91,6 +108,18 @@ async fn main() -> Result<()> {
     if skills_dir.exists() {
         let skills = toolbridge::skill_loader::scan_skills_dir(&skills_dir);
         info!("toolbridge: loaded {} skill(s) from skills/", skills.len());
+        for (skill, path) in &skills {
+            info!(
+                "toolbridge: skill '{}' — {} ({})",
+                skill.name,
+                skill.description,
+                path.display()
+            );
+        }
+    }
+
+    if cli.dry_run_daily {
+        return dry_run_daily_cycle();
     }
 
     // ── kill switch ───────────────────────────────────────────────────────
@@ -104,7 +133,7 @@ async fn main() -> Result<()> {
     {
         let audit = AuditStore::new(Arc::clone(&memory.db));
         match audit.verify_chain() {
-            Ok(true)  => info!("policyd: audit chain intact"),
+            Ok(true) => info!("policyd: audit chain intact"),
             Ok(false) => {
                 error!("policyd: AUDIT CHAIN TAMPERED — halting");
                 std::process::exit(1);
@@ -123,9 +152,9 @@ async fn main() -> Result<()> {
     // ── ollama health check ───────────────────────────────────────────────
     let ollama = Arc::new(ollama::OllamaClient::new("http://localhost:11434"));
     match ollama.health_check().await {
-        Ok(true)  => info!("ollama: reachable, model qwen3:8b-q4_k_m ready"),
+        Ok(true) => info!("ollama: reachable, model qwen3:8b-q4_k_m ready"),
         Ok(false) => warn!("ollama: reachable but model may not be loaded"),
-        Err(e)    => warn!("ollama: not reachable ({e}) — tasks will fail until Ollama starts"),
+        Err(e) => warn!("ollama: not reachable ({e}) — tasks will fail until Ollama starts"),
     }
 
     // ── one-shot --task mode ──────────────────────────────────────────────
@@ -137,7 +166,8 @@ async fn main() -> Result<()> {
             Arc::clone(&policy),
             Arc::clone(&memory),
             cancel,
-        ).await;
+        )
+        .await;
     }
 
     // ── HIRO benchmark mode ───────────────────────────────────────────────
@@ -149,7 +179,8 @@ async fn main() -> Result<()> {
             Arc::clone(&policy),
             Arc::clone(&memory),
             cancel,
-        ).await;
+        )
+        .await;
     }
 
     if let Some(rounds) = cli.hiro_null_rounds {
@@ -160,12 +191,13 @@ async fn main() -> Result<()> {
             Arc::clone(&policy),
             Arc::clone(&memory),
             cancel,
-        ).await;
+        )
+        .await;
     }
 
     // ── daemon mode ───────────────────────────────────────────────────────
     let _task_queue = Arc::new(std::sync::Mutex::new(TaskQueue::new()));
-    let scheduler   = agentd::CronScheduler::new(Arc::clone(&memory.db));
+    let scheduler = agentd::CronScheduler::new(Arc::clone(&memory.db));
 
     // Outcome tracking — feeds the evolution cycle
     let (outcome_tx, mut outcome_rx) = mpsc::channel::<TaskOutcome>(256);
@@ -273,11 +305,11 @@ async fn main() -> Result<()> {
 
 async fn run_single_task(
     description: String,
-    ollama:   Arc<ollama::OllamaClient>,
+    ollama: Arc<ollama::OllamaClient>,
     registry: Arc<std::sync::RwLock<ToolRegistry>>,
-    policy:   Arc<PolicyEngine>,
-    memory:   Arc<MemoryManager>,
-    cancel:   CancellationToken,
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    cancel: CancellationToken,
 ) -> Result<()> {
     info!("one-shot task: {description}");
     let react = ReactLoop::new(ollama, registry, policy, memory, cancel);
@@ -285,7 +317,11 @@ async fn run_single_task(
     let outcome = react.run(&mut task).await?;
     info!(
         "task {}: score={:.2} steps={} attempts={}",
-        if outcome.success { "SUCCEEDED" } else { "FAILED" },
+        if outcome.success {
+            "SUCCEEDED"
+        } else {
+            "FAILED"
+        },
         outcome.score,
         outcome.steps_taken,
         task.attempt_count,
@@ -299,12 +335,12 @@ async fn run_single_task(
 // ── HIRO benchmark mode ───────────────────────────────────────────────────────
 
 async fn run_hiro_benchmark(
-    round:    u32,
-    ollama:   Arc<ollama::OllamaClient>,
+    round: u32,
+    ollama: Arc<ollama::OllamaClient>,
     registry: Arc<std::sync::RwLock<ToolRegistry>>,
-    policy:   Arc<PolicyEngine>,
-    memory:   Arc<MemoryManager>,
-    cancel:   CancellationToken,
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    cancel: CancellationToken,
 ) -> Result<()> {
     info!("HIRO benchmark — round {round}");
     let runner = HiroRunner::new(ollama, registry, policy, memory, cancel);
@@ -322,20 +358,21 @@ async fn run_hiro_benchmark(
     Ok(())
 }
 
-
 async fn run_hiro_null_baseline(
-    rounds:   u32,
-    ollama:   Arc<ollama::OllamaClient>,
+    rounds: u32,
+    ollama: Arc<ollama::OllamaClient>,
     registry: Arc<std::sync::RwLock<ToolRegistry>>,
-    policy:   Arc<PolicyEngine>,
-    memory:   Arc<MemoryManager>,
-    cancel:   CancellationToken,
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    cancel: CancellationToken,
 ) -> Result<()> {
     info!("HIRO null-condition baseline — {rounds} static round(s)");
     let runner = HiroRunner::new(ollama, registry, policy, memory, cancel);
 
     for round in 0..rounds {
-        let result = runner.run_benchmark_labeled(round, Some("null_condition")).await?;
+        let result = runner
+            .run_benchmark_labeled(round, Some("null_condition"))
+            .await?;
         info!(
             "HIRO null round {}: pass@3={:.3} p_tool={:.3} p_plan={:.3} p_correct={:.3}",
             result.round, result.pass_at_3, result.p_tool, result.p_plan, result.p_correct
@@ -343,6 +380,39 @@ async fn run_hiro_null_baseline(
     }
 
     Ok(())
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct DailyScheduleFile {
+    jobs: Vec<DailyScheduleJob>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct DailyScheduleJob {
+    id: String,
+    skill: String,
+    offset_minutes: u32,
+    network_required: bool,
+}
+
+fn dry_run_daily_cycle() -> Result<()> {
+    let schedule = load_daily_schedule()?;
+
+    info!("dry-run daily cycle: {} job(s)", schedule.jobs.len());
+    for job in schedule.jobs {
+        info!(
+            "dry-run daily cycle: +{:03}m {} via {} network_required={}",
+            job.offset_minutes, job.id, job.skill, job.network_required
+        );
+    }
+    Ok(())
+}
+
+fn load_daily_schedule() -> Result<DailyScheduleFile> {
+    let path = PathBuf::from("ops/schedules/daily-cycle.toml");
+    let raw = std::fs::read_to_string(&path)
+        .map_err(|e| anyhow::anyhow!("cannot read daily schedule '{}': {e}", path.display()))?;
+    Ok(toml::from_str(&raw)?)
 }
 
 // ── Signal handlers ───────────────────────────────────────────────────────────
@@ -375,33 +445,48 @@ fn seed_daily_schedule(scheduler: &agentd::CronScheduler, fire_now: bool) -> Res
     use agentd::scheduler::{CronJob, JobState, ScheduleType};
     use chrono::Utc;
 
-    let cycle_job = CronJob {
-        id: "daily-autonomous-cycle".to_string(),
-        name: "Daily research cycle".to_string(),
-        prompt: "Run the daily autonomous research cycle: \
-                 (1) Review brain/hypotheses.md and select the highest-priority untested hypothesis. \
-                 (2) Design and run the experiment. \
-                 (3) Record results in brain/hypotheses.md. \
-                 (4) If results are significant, update brain/knowledge-base.md. \
-                 (5) Commit all changes to git with a descriptive message.".to_string(),
-        schedule_type: ScheduleType::Cron,
-        schedule_value: "0 22 * * *".to_string(),
-        next_run_at: if fire_now {
-            Utc::now() // fire on next tick (~60s)
-        } else {
-            Utc::now() + chrono::Duration::minutes(1)
-        },
-        enabled: fire_now,
-        state: JobState::Scheduled,
-        repeat_limit: None,
-        repeat_completed: 0,
-        last_run_at: None,
-        last_status: None,
-        created_at: Utc::now(),
+    let schedule = load_daily_schedule()?;
+    let now = Utc::now();
+    let daily_start = if fire_now {
+        now
+    } else {
+        now.date_naive()
+            .and_hms_opt(22, 0, 0)
+            .map(|dt| dt.and_utc())
+            .filter(|dt| *dt > now)
+            .unwrap_or_else(|| {
+                (now + chrono::Duration::days(1))
+                    .date_naive()
+                    .and_hms_opt(22, 0, 0)
+                    .expect("valid daily cycle time")
+                    .and_utc()
+            })
     };
 
-    scheduler.register(&cycle_job)?;
-    info!("scheduler: daily cycle job registered (enabled={})", fire_now);
+    let job_count = schedule.jobs.len();
+    for job in schedule.jobs {
+        let cron_job = CronJob {
+            id: format!("daily-{}", job.id),
+            name: format!("Daily {}", job.id),
+            prompt: format!(
+                "Execute scheduled daily job '{}' using skill '{}'. Load the skill, follow its local-first workflow, classify the outcome, and write durable results to brain/ or artifacts/. network_required={}. Keep all file changes inside the repository and use only policy-approved tools.",
+                job.id, job.skill, job.network_required
+            ),
+            schedule_type: ScheduleType::Interval,
+            schedule_value: "86400".to_string(),
+            next_run_at: daily_start + chrono::Duration::minutes(job.offset_minutes as i64),
+            enabled: true,
+            state: JobState::Scheduled,
+            repeat_limit: None,
+            repeat_completed: 0,
+            last_run_at: None,
+            last_status: None,
+            created_at: now,
+        };
+        scheduler.register(&cron_job)?;
+    }
+
+    info!("scheduler: registered {job_count} daily job(s)");
     Ok(())
 }
 
@@ -441,7 +526,8 @@ fn seed_cognition_base() -> Vec<CognitionItem> {
         ("Professor X design: Core modules (policyd gate, memd) require human approval for modification. Never autonomous.", "design:professor-x"),
     ];
 
-    seeds.iter().map(|(content, source)| {
-        CognitionItem::new(content.to_string(), source.to_string())
-    }).collect()
+    seeds
+        .iter()
+        .map(|(content, source)| CognitionItem::new(content.to_string(), source.to_string()))
+        .collect()
 }
