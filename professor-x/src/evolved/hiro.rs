@@ -82,9 +82,11 @@ impl HiroRunner {
         memory:   Arc<MemoryManager>,
         cancel:   CancellationToken,
     ) -> Self {
+        let lcap = LcapPolicy::load_from_db(&memory.db)
+            .unwrap_or_else(|_| LcapPolicy::new());
         Self {
             ollama, registry, policy, memory, cancel,
-            lcap: Arc::new(std::sync::Mutex::new(LcapPolicy::new())),
+            lcap: Arc::new(std::sync::Mutex::new(lcap)),
         }
     }
 
@@ -152,6 +154,14 @@ impl HiroRunner {
         let bf = BfTracker::new(Arc::clone(&self.memory.db));
         if let Err(e) = bf.record_round(round, p_tool, p_plan, p_correct, None, None) {
             warn!("hiro: failed to record round {}: {e}", round);
+        }
+
+        // Persist LCAP arm state so UCB1 learning carries over to future rounds
+        {
+            let lc = self.lcap.lock().unwrap();
+            if let Err(e) = lc.save_to_db(&self.memory.db) {
+                warn!("hiro: failed to persist LCAP state: {e}");
+            }
         }
 
         Ok(HiroRoundResult {

@@ -8,8 +8,12 @@
 ///
 /// ARCHITECTURE.md Section 14.3
 
+use anyhow::Result;
+use chrono::Utc;
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 const UCB1_C: f64 = 1.414;
 
@@ -180,4 +184,81 @@ impl LcapPolicy {
 
 impl Default for LcapPolicy {
     fn default() -> Self { Self::new() }
+}
+
+impl LcapPolicy {
+    /// Load accumulated arm state from DB, merging into a fresh policy.
+    pub fn load_from_db(db: &Arc<Mutex<Connection>>) -> Result<Self> {
+        let mut policy = Self::new();
+        let conn = db.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT category, arm, pull_count, total_reward FROM lcap_arms"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, u32>(2)?,
+                row.get::<_, f32>(3)?,
+            ))
+        })?;
+        for row in rows.flatten() {
+            let (cat_str, arm_str, pulls, reward) = row;
+            let category = parse_category(&cat_str);
+            let arm = parse_arm(&arm_str);
+            if let Some(arms) = policy.arms.get_mut(&category) {
+                if let Some(state) = arms.iter_mut().find(|a| a.arm == arm) {
+                    state.pull_count   = pulls;
+                    state.total_reward = reward;
+                }
+            }
+        }
+        Ok(policy)
+    }
+
+    /// Persist all arm state to DB (upsert).
+    pub fn save_to_db(&self, db: &Arc<Mutex<Connection>>) -> Result<()> {
+        let conn = db.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        for (category, arms) in &self.arms {
+            let cat_str = format!("{category:?}");
+            for state in arms {
+                let arm_str = format!("{:?}", state.arm);
+                conn.execute(
+                    "INSERT INTO lcap_arms (category, arm, pull_count, total_reward, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5)
+                     ON CONFLICT(category, arm) DO UPDATE SET
+                         pull_count   = excluded.pull_count,
+                         total_reward = excluded.total_reward,
+                         updated_at   = excluded.updated_at",
+                    rusqlite::params![
+                        cat_str, arm_str,
+                        state.pull_count, state.total_reward as f64,
+                        now,
+                    ],
+                )?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn parse_category(s: &str) -> TaskCategory {
+    match s {
+        "ToolUse"        => TaskCategory::ToolUse,
+        "Planning"       => TaskCategory::Planning,
+        "SelfCorrection" => TaskCategory::SelfCorrection,
+        "Research"       => TaskCategory::Research,
+        _                => TaskCategory::Other,
+    }
+}
+
+fn parse_arm(s: &str) -> BudgetArm {
+    match s {
+        "Sparse"       => BudgetArm::Sparse,
+        "Conservative" => BudgetArm::Conservative,
+        "Balanced"     => BudgetArm::Balanced,
+        "Rich"         => BudgetArm::Rich,
+        _              => BudgetArm::MemoryHeavy,
+    }
 }

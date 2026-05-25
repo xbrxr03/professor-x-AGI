@@ -177,6 +177,17 @@ CREATE TABLE IF NOT EXISTS hiro_rounds (
     harness_commit TEXT,
     recorded_at TEXT NOT NULL
 );
+
+-- LCAP UCB1 arm state — persisted across runs so learning accumulates over rounds.
+CREATE TABLE IF NOT EXISTS lcap_arms (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    category TEXT NOT NULL,
+    arm TEXT NOT NULL,
+    pull_count INTEGER NOT NULL DEFAULT 0,
+    total_reward REAL NOT NULL DEFAULT 0.0,
+    updated_at TEXT NOT NULL,
+    UNIQUE(category, arm)
+);
 "#;
 
 pub struct MemoryManager {
