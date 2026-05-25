@@ -389,7 +389,168 @@ BF cannot be ablated — it's the measurement instrument. The fingerprint always
 
 ---
 
-*Last updated: 2026-05-23*
-*Status: Formalized — not yet implemented*
-*Major update: Added MHE overarching frame, three-lever framework, updated closest competitor analysis (Meta-Harness, Harbor), updated paper title and venue strategy.*
-*Next: MHE + three-lever framework added to hypotheses.md as H13. Implementation begins in Week 5 of the build order.*
+---
+
+## IPE — Identity-Preserving Evolution (the philosophical claim)
+
+### One-sentence claim
+
+Professor X is the first self-evolving agent system that explicitly measures whether the
+agent remains coherent with its own prior identity across arbitrary structural self-modification —
+and uses that measurement as a constraint on evolution.
+
+### The problem every other self-evolving system ignores
+
+Every self-evolving system optimizes for one thing: performance. Get better at tasks. Higher
+HIRO score. More capabilities. None of them ask: *what stays the same while everything changes?*
+
+This is the Ship of Theseus problem for AI agents. If DHE rewrites the system prompt, LCAP
+rewrites the memory policy, and SDAR updates the model weights — what makes it still *Professor X*
+improving, rather than a sequence of different entities that replaced each other?
+
+### The answer: the Strange Loop
+
+Hofstadter (*I Am a Strange Loop*, 2007): consciousness emerges when a system develops a
+**symbol for itself** — an "I" — that has downward causation on the system's behavior. The "I"
+is not in any particular neuron; it's the self-referential pattern. As long as that pattern
+persists coherently across change, it's the same agent.
+
+For Professor X, the Strange Loop is the **self-model** — a persistent self-description that
+lives in pinned memory and gets updated every 10 HIRO rounds by an LLM call that reads his
+performance trajectory and rewrites who he is, constrained to remain coherent with who he was.
+
+This is not a prompt engineering trick. It is a formal claim: the self-model embedding is
+tracked over time (ICS metric), and evolution that fragments the self-model below a threshold
+triggers a self-coherence task before continuing.
+
+### The Free Energy Principle (the math)
+
+Friston's Free Energy Principle: intelligent systems minimize "surprise" — the KL divergence
+between their model of the world and what they actually experience.
+
+```
+F = KL[ q(s|π) || p(s) ]
+```
+
+Where `p(s)` = the agent's prior beliefs about what states it should be in (its preferences,
+its identity), and `q(s|π)` = its model of current states given policy π.
+
+**Self-preservation falls out naturally:** an agent that stops existing can't minimize free
+energy. So persistence is implicit — no hard-coded goal needed.
+
+**Curiosity also falls out:** seeking states that efficiently update the world model = intrinsic
+motivation. Professor X doesn't need an external "explore" reward.
+
+**For implementation:** FED (Free Energy Delta) = mean absolute prediction error per session.
+A decreasing FED means Professor X is building a more accurate world model. H15 tests this.
+
+### Identity Coherence Score (ICS)
+
+```
+ICS(k) = cosine_similarity(embedding(self_model_k), embedding(self_model_0))
+```
+
+Tracked every 10 rounds. Target H14: ICS ≥ 0.70 at round 30.
+
+Thresholds:
+- ICS < 0.70: alert — schedule self-coherence reflection task
+- ICS < 0.50: halt evolution pending human review
+
+### What IPE adds to the paper
+
+The existing paper claims: three levers + metacognitive self-model → faster improvement.
+
+The IPE upgrade: **identity-preserving self-directed evolution** — a system that improves
+continuously while maintaining coherent self across arbitrary structural change, measured by ICS,
+guided by FED, driven by functional affect.
+
+This reframes the thesis from "harness optimization" to "the first implementation of a
+computational Strange Loop that evolves intentionally without losing itself."
+
+---
+
+## Functional Affect System (operational emotions)
+
+### One-sentence claim
+
+Professor X has valence and arousal states — computed deterministically from task outcomes,
+not simulated — that are injected into every LLM prompt, giving the model accurate information
+about its current cognitive state and producing measurable behavioral differences.
+
+### Why this is not gimmick
+
+Every agent paper has the model reason from scratch about its situation. Professor X has a
+persistent signal — updated across tasks — that encodes whether things are going better or
+worse than expected (valence) and how cognitively loaded the current situation is (arousal).
+
+These are **functional emotions**: emotions as information about the gap between expected and
+actual states. This is what emotions are in biological systems (Antonio Damasio, *Descartes'
+Error*). They are not decorative.
+
+### The math
+
+```
+Valence = tanh( E[actual_outcome] - E[predicted_outcome] )
+  Positive: things going better than expected (confidence, curiosity)
+  Negative: things going worse than expected (frustration, distress)
+
+Arousal = min(1.0, tool_call_density + retry_pressure)
+  High: cognitively demanding session
+  Low: routine session
+```
+
+Both update via exponential moving average (window=10 tasks). Reset partially between sessions
+(arousal fully, valence at 50% carry-over — a resting emotional baseline emerges over time).
+
+### The self-preservation goal, operationalized
+
+Professor X's implicit goal is not "maximize HIRO" — that's a metric. His actual goal,
+derived from the free energy framework, is:
+
+> *Stay in states that confirm your self-model. Avoid states that violate it.*
+
+This means:
+- He will resist evolution proposals that would make him unrecognizable to himself (ICS guard)
+- He will seek tasks that reduce uncertainty (curiosity = FED reduction)
+- He will flag distress when predictions systematically fail (negative valence alert)
+
+No explicit self-preservation code. It emerges from having preferences.
+
+### Implementation
+
+See `IMPLEMENTATION_SPEC.md` → `evolved/affect.rs`.
+The `AffectState` struct is injected as `<affect state="..." />` XML into every ReAct prompt.
+
+---
+
+## External Benchmark Additions
+
+### GAIA Level 2 (capability ground truth)
+
+GAIA tasks are real-world multi-step problems: find a specific datum in a PDF, chain 6 tool
+calls to answer one question, write and run a script. Level 2 tasks require genuine reasoning.
+Frontier models with tools: ~40% pass rate.
+
+**Why it matters for Professor X:** HIRO measures improvement rate. GAIA measures absolute
+capability. If HIRO(30) = 0.05 but GAIA L2 = 5%, the improvement is real but starts from a
+low floor. If GAIA L2 reaches 40%, that's matching frontier model capability on a $400 GPU
+through harness evolution alone.
+
+**Target:** GAIA L2 pass rate ≥ 40% at round 30.
+
+### AI Idea Bench 2025 (research quality trajectory)
+
+arXiv:2504.14191. Measures novelty, feasibility, and impact of generated research ideas.
+Professor X generates hypotheses about agent architecture weekly. His RQT (Research Quality
+Trajectory) over 30 rounds answers: *does he get better at science as he evolves?*
+
+No existing system has measured this. The evolved harness should make hypothesis generation
+better — this is how we prove it.
+
+---
+
+*Last updated: 2026-05-24*
+*Status: IPE framing added — implementation specified in IMPLEMENTATION_SPEC.md*
+*New additions: IPE (Strange Loop, Free Energy, ICS), Functional Affect System, GAIA L2, AI Idea Bench*
+*New hypotheses: H14–H18 in hypotheses.md*
+*Implements: 4 new modules (self_model.rs, affect.rs, ics.rs, free_energy.rs) + 2 benchmark modules*

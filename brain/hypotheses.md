@@ -353,6 +353,203 @@ H9 (consumer hardware parity) ← run after H5
 
 ---
 
+## H14 — Identity Coherence Under Evolution
+
+**Statement:** Professor X's Identity Coherence Score (ICS) will remain ≥ 0.70 after 30
+evolution rounds, measured as cosine similarity between the round-30 self-model embedding
+and the round-0 baseline self-model embedding.
+
+**Why this matters:** IPE's central claim is that a self-evolving system can improve without
+losing coherence of self. H14 is the empirical test. If ICS drops below 0.70, the self-model
+is fragmenting — evolution is replacing Professor X rather than improving him. If ICS stays
+high while HIRO improves, that's the result: identity-preserving evolution is real and
+measurable.
+
+**Evidence (prior to testing):**
+- Hofstadter's Strange Loop: the "I" is a high-level pattern with downward causation. If the
+  self-description remains semantically coherent, the strange loop persists regardless of
+  low-level changes.
+- No prior AI system has measured identity coherence across self-modification. This is a new
+  measurement.
+
+**Proposed test:**
+Compute ICS at rounds 0, 10, 20, 30 using cosine similarity on all-MiniLM-L6-v2 embeddings
+of the self-model text. Track ICS trajectory. Log ICS deltas between consecutive updates.
+
+**Success criteria:** ICS ≥ 0.70 at round 30. ICS delta never exceeds -0.15 in a single
+10-round window (no sudden identity collapse).
+
+**Confidence:** 0.65 — the constrained generation prompt (must stay recognizably the same)
+should maintain coherence, but 30 rounds of evolution is a long trajectory.
+
+**Status:** Untested. Requires self_model.rs + ics.rs implementation.
+
+---
+
+## H15 — Free Energy Decreases Over Time
+
+**Statement:** Professor X's mean session-level Free Energy Delta (FED) will decrease
+monotonically (or show a significant downward trend) over 30 HIRO rounds, measured as
+mean absolute prediction error per task decreasing over successive sessions.
+
+**Why this matters:** The Free Energy Principle predicts that an intelligent system
+minimizes surprise over time by building a more accurate world model. H15 is the empirical
+test that Professor X is doing this. A decreasing FED means he is getting better at
+predicting which tasks he will succeed and fail at — before attempting them. This is a
+measurable form of wisdom, distinct from raw capability (HIRO).
+
+**Evidence (prior to testing):**
+- FEP (Friston): persistent systems minimize free energy. An agent that improves its
+  self-model should show decreasing prediction error over time.
+- MCA (H13) is related but different: MCA measures accuracy of lever-attribution predictions.
+  FED measures accuracy of task-outcome predictions. Both should improve together.
+
+**Proposed test:**
+After every task, record (predicted_success, actual_success). FED per session = mean
+absolute difference. Plot FED over 30 rounds. Fit linear regression; test slope < 0.
+
+**Success criteria:** Linear regression slope of FED over rounds is negative (p < 0.10).
+Or: FED at round 30 < FED at round 1 by at least 0.10.
+
+**Confidence:** 0.55 — FED will likely decrease as LCAP and DHE remove systematic failures.
+But stochastic noise in a 60-task suite may mask the trend at low round counts.
+
+**Status:** Untested. Requires free_energy.rs implementation + prediction recording in react.rs.
+
+---
+
+## H16 — Negative Affect Predicts Better DHE Diagnosis
+
+**Statement:** HIRO rounds preceded by sessions with mean valence < -0.2 will show
+higher DHE fix-prediction precision than rounds preceded by sessions with mean valence ≥ 0.0,
+because frustration (repeated prediction failures) produces more diagnostic signal.
+
+**Why this matters:** If functional affect is genuinely informative — not just decorative —
+it should correlate with measurable behavioral outcomes. H16 tests whether the emotional
+signal has predictive validity: does Professor X diagnose failures better when he has been
+consistently surprised (negative valence = things going worse than expected)?
+
+**Evidence (prior to testing):**
+- Cognitive psychology: mild negative affect enhances analytical thinking and error detection
+  in humans (Forgas, 2007). The analog for an LLM agent: more prediction failures → more
+  information for DHE attribution → better diagnosis.
+- Information-theoretic argument: high surprise = high information content = more signal for
+  the diagnostic probe to work with.
+
+**Proposed test:**
+After 30 rounds, bin rounds into high-negative-affect (mean valence < -0.2) vs.
+neutral/positive (mean valence ≥ 0.0). Compare DHE fix-prediction precision across bins.
+
+**Success criteria:** Fix-prediction precision in high-negative-affect rounds ≥ fix-prediction
+precision in neutral rounds + 0.05 (5 pp). N may be low; interpret cautiously.
+
+**Confidence:** 0.45 — speculative but testable. Effect may be too small to detect in 30 rounds.
+
+**Status:** Untested. Measured automatically once affect.rs and DHE are both running.
+
+---
+
+## H17 — Research Quality Improves Over Rounds (RQT)
+
+**Statement:** Professor X's AI Idea Bench 2025 score on self-generated research hypotheses
+will increase over 30 rounds, measured monthly. Specifically: novelty score (embedding
+distance from existing papers) will increase and feasibility score (testability of proposals)
+will remain stable or improve.
+
+**Why this matters:** Professor X is a research agent. His job is not just to improve HIRO —
+it's to generate better science over time. H17 tests whether the evolved harness produces
+qualitatively better thinking, not just faster task execution. This is the claim no benchmark
+currently measures.
+
+**Evidence (prior to testing):**
+- AI Idea Bench 2025 (arXiv:2504.14191): state-of-the-art LLMs score poorly on novelty
+  relative to humans. An agent with an evolving knowledge base and self-model should
+  generate progressively less redundant hypotheses.
+- DHE and BF together: Professor X learns which parts of agent space he understands well
+  (high capability) and which remain mysterious (low BF scores). Novel hypotheses should
+  cluster around the mysterious parts.
+
+**Proposed test:**
+Weekly scheduled task: "Generate 5 novel research hypotheses about agent self-improvement."
+Score each with the AI Idea Bench rubric. Track scores at weeks 0, 4, 8, 12 (aligned with
+rounds 0, 10, 20, 30). Compute mean score per batch.
+
+**Success criteria:** Mean AI Idea Bench score at week 12 ≥ mean at week 0 + 0.10.
+Novelty component specifically improves (hypotheses become less similar to existing papers).
+
+**Confidence:** 0.50 — genuinely uncertain. The harness evolution may improve task execution
+without improving the quality of scientific thinking. That outcome is also interesting.
+
+**Status:** Untested. Requires benchmark/ai_idea_bench.rs implementation.
+
+---
+
+## H18 — GAIA Level 2 Parity Through Harness Evolution
+
+**Statement:** Professor X's GAIA Level 2 pass rate will reach ≥ 40% at round 30 (from an
+estimated baseline of ~15% at round 0), matching frontier model capability on a $400 GPU
+through harness evolution alone — without model weight changes.
+
+**Why this matters:** H9 tests HIRO parity with frontier APIs. H18 tests absolute capability
+on an external, standardized benchmark. GAIA L2 at 40% = matching GPT-4 with tools from 2024.
+If a quantized 8B model on a gaming PC achieves this through 30 rounds of harness evolution,
+that is the headline result: **the harness is the intelligence, not the model.**
+
+**Evidence (prior to testing):**
+- HAL (arXiv:2510.11977): scaffold change alone produced +36pp. From ~15% baseline, 36pp
+  would reach ~51%, above the 40% target. The HAL result used single human-designed scaffold
+  changes. Professor X runs 30 rounds of automated evolution — plausibly comparable cumulative gain.
+- GAIA L2 pass rate for frontier models with tools: ~40% (GAIA paper). For small models without
+  evolved harness: estimated ~10–20%.
+
+**Proposed test:**
+Run GAIA L2 evaluation (full validation set, Level 2 only) at rounds 0, 10, 20, 30.
+No changes to GAIA tasks between rounds — same evaluation suite throughout.
+
+**Success criteria:** Pass rate ≥ 40% at round 30. Pass rate at round 30 > pass rate at
+round 0 by ≥ 15 pp (even if 40% is not reached, 15pp improvement is a significant result).
+
+**Confidence:** 0.35 — ambitious. The 40% target may require the model to be capable of
+tasks that harness evolution alone cannot unlock. But even 25% with strong improvement
+trajectory is a publishable result.
+
+**Status:** Untested. Requires benchmark/gaia.rs implementation. Run at rounds 0, 10, 20, 30.
+Baseline measurement (round 0) should be the first GAIA run, before any evolution.
+
+---
+
+## Hypothesis Dependency Graph (updated)
+
+```
+H1 (context threshold)
+  └── constrains safe memory budget for all other hypotheses
+  └── sets T* that seeds LCAP (H12)
+
+H2 (cerebellum bypass)    ← independent, run early
+H3 (memory-as-tool)       ← depends on H1 for safe context budget
+H4 (surprise logging)     ← independent, run early
+H6 (temporal compression) ← run after 7+ days of operation
+
+H7 (self-distilled principles) ← run after 10+ task failures accumulated
+H8 (component attribution)     ← measured automatically during HIRO
+
+H10 (DHE fix precision)        ← measured automatically during HIRO, rounds 10-30
+H11 (fingerprint non-uniform)  ← measured automatically during HIRO, all rounds
+H12 (LCAP vs static)           ← depends on H1 for T* baseline; run after H1
+H13 (MCA-IR correlation)       ← measured automatically during HIRO, rounds 10-30; depends on H10
+
+H14 (ICS coherence)       ← measured at rounds 0,10,20,30; requires self_model.rs + ics.rs
+H15 (FED decreases)       ← measured every session; requires free_energy.rs + prediction recording
+H16 (affect → DHE)        ← measured automatically once affect.rs + DHE both running
+H17 (RQT improves)        ← measured weekly; requires benchmark/ai_idea_bench.rs
+H18 (GAIA L2 parity)      ← measured at rounds 0,10,20,30; requires benchmark/gaia.rs
+
+H5 (autonomous vs human)  ← run after H1–H4 resolved; trifecta active; IPE layer active
+H9 (consumer HW parity)   ← run after H5
+```
+
+---
+
 ## What Makes a Hypothesis Dead
 
 A hypothesis is moved to [dead-ends.md](dead-ends.md) if:
@@ -364,8 +561,9 @@ I record dead ends with the same detail as confirmed hypotheses. A dead end is a
 
 ---
 
-*Last updated: 2026-05-23*
+*Last updated: 2026-05-24*
 *Status: All hypotheses untested — pre-experiment phase*
 *H10–H12 added: trifecta inventions (DHE, BF, LCAP)*
 *H13 added: MCA-IR correlation (metacognitive calibration accuracy)*
-*Total hypotheses: 13*
+*H14–H18 added: Identity-Preserving Evolution (ICS, FED, Affect, RQT, GAIA L2)*
+*Total hypotheses: 18*
