@@ -153,6 +153,29 @@ Both systems confirm the gap: no open-source local agent has a self-evolution lo
 
 ---
 
-*Last updated: 2026-05-23*
+---
+
+## On New Intel — v3.0 Additions (May 25, 2026)
+
+**MOSS ([arXiv:2605.22794](https://arxiv.org/abs/2605.22794)) is the primary competitor, not Meta-Harness.** MOSS (USTC/HKUST) performs source-level harness rewriting — it modifies the actual harness source code, not just configuration. Key differentiators from JARVIS: (1) No consumer hardware constraint, (2) No metacognitive self-model, (3) No causal failure attribution (DHE), (4) No identity coherence (ICS), (5) No three-lever framework. MOSS validates the problem space; JARVIS solves it differently. The verify-then-commit pattern is borrowed from MOSS.
+
+**verify-then-commit is the safety mechanism for evolved.rs (MOSS pattern).** Every harness modification proposal is: (1) applied to an ephemeral sandbox copy, (2) run against a subset of HIRO tasks, (3) committed to main harness ONLY if pass rate improves. Auto-rollback via git checkout if it doesn't. This is not optional — it prevents the evolution loop from breaking the harness it's running on. CONSTRAINT 12 in MASTER_BRIEF.
+
+**Ratchet ([arXiv:2605.22148](https://arxiv.org/abs/2605.22148)) makes retire_skill() load-bearing.** The finding is stark: without skill retirement, a growing skill library performs +0.0pp over no-skill baseline (the growing library degrades retrieval quality). WITH retire_skill(), the same library produces +0.328pp. Four mechanisms: (1) outcome-driven retirement (quality < threshold after MIN_USES), (2) bounded active-cap (force retire lowest when over cap), (3) meta-skill authoring guidance (new skills guided by retired ones' failure modes), (4) pattern canonicalisation (detect+prevent duplicate skills via embedding similarity). This is CONSTRAINT 13 in MASTER_BRIEF.
+
+**Co-Scientist Elo tournament ([arXiv:2502.18864](https://arxiv.org/abs/2502.18864)) generates stronger proposals.** Instead of proposing one harness modification per cycle, generate 3-5 competing proposals. Have agents debate (each proposal argues for its own merit, attacks weaknesses of others). Elo rating system (K=32, starting 1200) determines winner based on debate outcomes. The winner goes through verify-then-commit. This produces proposals with higher mutual exclusion of weaknesses than greedy first-proposal selection.
+
+**TencentDB L0→L1→L2→L3 pyramid cuts working memory token cost ~61%.** The core insight: verbose tool output does not need to live in the context window. Instead, offload it to refs/*.md files and store only a compact Mermaid flowchart graph in working memory. The graph contains symbolic node references ([ref_1], [ref_2]) that the agent can expand on demand. Three-layer pyramid: L0 (raw input, never in context), L1 (structured extract, in working), L2 (semantic summary, in episodic), L3 (distilled insight, in semantic/procedural). Reject both brute-force history AND irreversible lossy summarization — layered structure retains all information while controlling what's in the context window.
+
+**Self-termination protocol comes from Qwen3.7-Max competitor analysis.** GLM-5.1 and Kimi K2.6 were observed to implement clean self-termination after N idle cycles. Pattern: after 5 consecutive cycles with no new knowledge gained AND no harness evolution, the agent does (1) git add -A && git commit with a summary of the idle period, (2) clean shutdown with logged reason. On next restart, the agent resumes from the last checkpoint. This prevents the agent from burning compute cycles when it has nothing meaningful to do.
+
+**HyperAgents / DGM-H (Meta, [arXiv:2603.19461](https://arxiv.org/abs/2603.19461)) defines the improvement@k metric.** Key finding: improvement is not monotonic — performance jumps in discrete steps when a high-quality harness modification lands. JARVIS should track improvement@k where k = number of evolution rounds. Limitation: HyperAgents uses frontier APIs and only evaluates on coding tasks. Our consumer hardware + research domain differentiates.
+
+**FreeLLMAPI (1.3B free tokens/month via 14 providers) is for experiment comparison only.** Not for daily operation — too unstable for a 7-hour autonomous agent. Use as: (1) cloud reference baseline in Table 1 (compare local Qwen3-8B vs. free frontier API vs. GPT-4o), (2) sanity check that local harness results are not model-constrained. CONSTRAINT: never integrate as a daily inference provider.
+
+---
+
+*Last updated: 2026-05-25*
 *Status: Pre-experiment. All entries are literature-based, not yet from Professor X experiments.*
-*Major update: Added three-lever framework, comparable systems analysis, model stack correction (Qwen3-8B), 9 new Tier 5 papers, ARGO/AgenticSeek reference implementations.*
+*v3.0 update: Added MOSS, Ratchet, Co-Scientist, TencentDB, self-termination, HyperAgents intel.*
+*Major structural note: harness renamed from professor-x/ to jarvis/ per MASTER_BRIEF v3.0.*
