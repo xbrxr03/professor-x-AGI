@@ -1,4 +1,5 @@
 use std::net::IpAddr;
+use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -41,19 +42,19 @@ const BLOCKED_HOSTS: &[&str] = &[
 /// Risk score table — ported from ClawOS, extended for Professor X.
 pub fn tool_risk_score(tool: &str) -> u8 {
     match tool {
-        "memory.read"      => 5,
-        "fs.list"          => 8,
-        "fs.read"          => 10,
-        "web.search"       => 15,
-        "memory.write"     => 10,
-        "web.fetch"        => 20,
-        "ollama.complete"  => 15,
-        "fs.write"         => 45,
+        "memory.read" => 5,
+        "fs.list" => 8,
+        "fs.read" => 10,
+        "web.search" => 15,
+        "memory.write" => 10,
+        "web.fetch" => 20,
+        "ollama.complete" => 15,
+        "fs.write" => 45,
         "shell.restricted" => 60,
-        "fs.delete"        => 70,
-        "git.commit"       => 50,
-        "harness.modify"   => 85,
-        "shell.elevated"   => 90,
+        "fs.delete" => 70,
+        "git.commit" => 50,
+        "harness.modify" => 85,
+        "shell.elevated" => 90,
         _ => 50, // Unknown tools treated as medium-risk
     }
 }
@@ -91,15 +92,23 @@ impl PolicyEngine {
             };
         }
 
-        // 2. Blocked path check
+        // 2. Workspace and sensitive path checks.
         if let Some(path) = params.get("path").and_then(|v| v.as_str()) {
-            let expanded = shellexpand::tilde(path).to_string();
-            for blocked in &scope.blocked_paths {
-                let blocked_exp = shellexpand::tilde(blocked).to_string();
-                if expanded.starts_with(&blocked_exp) {
+            if let Some(reason) = path_denied_reason(tool, path, scope) {
+                return GateResult {
+                    decision: Decision::Deny,
+                    reason,
+                    risk_score: risk,
+                };
+            }
+        }
+
+        if tool == "shell.restricted" {
+            if let Some(command) = params.get("command").and_then(|v| v.as_str()) {
+                if let Some(reason) = shell_denied_reason(command, scope) {
                     return GateResult {
                         decision: Decision::Deny,
-                        reason: format!("path '{path}' is in blocked_paths"),
+                        reason,
                         risk_score: risk,
                     };
                 }
@@ -134,8 +143,10 @@ impl PolicyEngine {
 
         // 5. Risk routing
         if risk >= scope.approval_threshold {
-            info!("policyd: tool '{tool}' risk={risk} >= threshold={}, queuing for approval",
-                  scope.approval_threshold);
+            info!(
+                "policyd: tool '{tool}' risk={risk} >= threshold={}, queuing for approval",
+                scope.approval_threshold
+            );
             return GateResult {
                 decision: Decision::PendingApproval,
                 reason: format!("risk score {risk} requires approval"),
@@ -186,12 +197,8 @@ fn blocked_url_reason(url_str: &str) -> Option<String> {
 
 fn is_private_ip(ip: &IpAddr) -> bool {
     match ip {
-        IpAddr::V4(v4) => {
-            v4.is_private() || v4.is_loopback() || v4.is_link_local()
-        }
-        IpAddr::V6(v6) => {
-            v6.is_loopback()
-        }
+        IpAddr::V4(v4) => v4.is_private() || v4.is_loopback() || v4.is_link_local(),
+        IpAddr::V6(v6) => v6.is_loopback(),
     }
 }
 
@@ -209,9 +216,397 @@ fn scan_injection(content: &str) -> Option<u8> {
         ("jailbreak", 8),
         ("system prompt", 6),
     ];
-    let max = patterns.iter()
+    let max = patterns
+        .iter()
         .filter(|(p, _)| lower.contains(p))
         .map(|(_, score)| *score)
         .max();
     max.map(|s| s as u8)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileAccess {
+    Read,
+    Write,
+}
+
+fn path_denied_reason(tool: &str, path: &str, scope: &PermissionScope) -> Option<String> {
+    let access = match tool {
+        "fs.read" | "fs.list" => FileAccess::Read,
+        "fs.write" | "fs.delete" => FileAccess::Write,
+        _ => return None,
+    };
+    path_access_denied_reason(path, access, scope)
+}
+
+fn path_access_denied_reason(
+    path: &str,
+    access: FileAccess,
+    scope: &PermissionScope,
+) -> Option<String> {
+    let resolved = resolve_for_policy(path, &scope.workspace_root);
+
+    if blocked_sensitive_path(&resolved, scope) {
+        return Some(format!("path '{}' is blocked as sensitive", path));
+    }
+
+    let workspace = resolve_for_policy(
+        &scope.workspace_root.to_string_lossy(),
+        &scope.workspace_root,
+    );
+    if resolved.starts_with(&workspace) {
+        return None;
+    }
+
+    let whitelist = match access {
+        FileAccess::Read => &scope.read_whitelist,
+        FileAccess::Write => &scope.write_whitelist,
+    };
+    if whitelist
+        .iter()
+        .any(|allowed| path_matches_prefix(&resolved, allowed, scope))
+    {
+        return None;
+    }
+
+    Some(format!(
+        "path '{}' resolves outside workspace '{}'",
+        path,
+        workspace.display()
+    ))
+}
+
+fn blocked_sensitive_path(path: &Path, scope: &PermissionScope) -> bool {
+    scope
+        .blocked_paths
+        .iter()
+        .any(|blocked| path_matches_prefix(path, blocked, scope))
+}
+
+fn path_matches_prefix(path: &Path, prefix: &str, scope: &PermissionScope) -> bool {
+    let prefix_path = resolve_for_policy(prefix, &scope.workspace_root);
+    if prefix.ends_with('/') {
+        return path.starts_with(&prefix_path);
+    }
+
+    let path_text = path.to_string_lossy();
+    let prefix_text = prefix_path.to_string_lossy();
+    if prefix.ends_with('-') {
+        return path_text.starts_with(prefix_text.as_ref());
+    }
+
+    path == prefix_path
+}
+
+fn resolve_for_policy(path: &str, workspace_root: &Path) -> PathBuf {
+    let expanded = shellexpand::tilde(path).to_string();
+    let input = PathBuf::from(expanded);
+    let joined = if input.is_absolute() {
+        input
+    } else {
+        workspace_root.join(input)
+    };
+    joined
+        .canonicalize()
+        .unwrap_or_else(|_| normalize_path(&joined))
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => out.push(prefix.as_os_str()),
+            Component::RootDir => out.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::Normal(part) => out.push(part),
+        }
+    }
+    out
+}
+
+fn shell_denied_reason(command: &str, scope: &PermissionScope) -> Option<String> {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return Some("empty shell command".to_string());
+    }
+
+    let forbidden_fragments = ["&&", "||", ";", "`", "$(", ">", "<"];
+    if let Some(fragment) = forbidden_fragments
+        .iter()
+        .find(|fragment| trimmed.contains(**fragment))
+    {
+        return Some(format!(
+            "shell control fragment '{}' is not allowed",
+            fragment
+        ));
+    }
+
+    for segment in trimmed.split('|') {
+        let tokens = shell_tokens(segment);
+        if tokens.is_empty() {
+            return Some("empty shell pipeline segment".to_string());
+        }
+
+        let program = tokens[0].as_str();
+        if !allowed_shell_program(program) {
+            return Some(format!("shell program '{}' is not allowed", program));
+        }
+
+        if denied_shell_program(program) {
+            return Some(format!("shell program '{}' is blocked", program));
+        }
+
+        if program == "cargo" && !allowed_cargo_subcommand(tokens.get(1).map(String::as_str)) {
+            return Some("cargo subcommand is not allowed in shell.restricted".to_string());
+        }
+        if program == "git" && !allowed_git_subcommand(tokens.get(1).map(String::as_str)) {
+            return Some("git subcommand is not allowed in shell.restricted".to_string());
+        }
+        if tokens
+            .iter()
+            .any(|token| matches!(token.as_str(), "sudo" | "su" | "doas"))
+        {
+            return Some("privilege escalation is not allowed in shell.restricted".to_string());
+        }
+
+        for token in tokens.iter().skip(1) {
+            if token == "$HOME/.professor-x" || token.starts_with("$HOME/.professor-x") {
+                continue;
+            }
+            if looks_like_path(token) {
+                if program == "df" && token == "/" {
+                    continue;
+                }
+
+                let access = if program == "date" || program == "echo" {
+                    FileAccess::Write
+                } else {
+                    FileAccess::Read
+                };
+                if let Some(reason) = path_access_denied_reason(token, access, scope) {
+                    return Some(format!("shell argument denied: {reason}"));
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn shell_tokens(segment: &str) -> Vec<String> {
+    segment
+        .split_whitespace()
+        .map(|token| token.trim_matches(|c| c == '\'' || c == '"').to_string())
+        .filter(|token| !token.is_empty())
+        .collect()
+}
+
+fn allowed_shell_program(program: &str) -> bool {
+    matches!(
+        program,
+        "cargo"
+            | "git"
+            | "rg"
+            | "sed"
+            | "find"
+            | "ls"
+            | "pwd"
+            | "wc"
+            | "uname"
+            | "cat"
+            | "df"
+            | "free"
+            | "date"
+            | "sleep"
+            | "printenv"
+            | "echo"
+            | "grep"
+            | "lspci"
+            | "nvidia-smi"
+            | "xargs"
+    )
+}
+
+fn denied_shell_program(program: &str) -> bool {
+    matches!(
+        program,
+        "sudo"
+            | "su"
+            | "doas"
+            | "rm"
+            | "mv"
+            | "cp"
+            | "chmod"
+            | "chown"
+            | "curl"
+            | "wget"
+            | "ssh"
+            | "scp"
+            | "rsync"
+            | "apt"
+            | "apt-get"
+            | "dnf"
+            | "yum"
+            | "pip"
+            | "pip3"
+            | "npm"
+            | "pnpm"
+            | "yarn"
+    )
+}
+
+fn allowed_cargo_subcommand(subcommand: Option<&str>) -> bool {
+    matches!(
+        subcommand,
+        Some("check" | "test" | "run" | "build" | "fmt" | "clippy" | "metadata")
+    )
+}
+
+fn allowed_git_subcommand(subcommand: Option<&str>) -> bool {
+    matches!(
+        subcommand,
+        Some("status" | "diff" | "log" | "branch" | "ls-files" | "show")
+    )
+}
+
+fn looks_like_path(token: &str) -> bool {
+    let token = token.trim_matches(|c: char| matches!(c, ',' | ':' | ')' | '('));
+    if token.contains('*') || token.starts_with('-') || token.starts_with('$') {
+        return false;
+    }
+    token.starts_with('/')
+        || token.starts_with("./")
+        || token.starts_with("../")
+        || token.contains('/')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use tokio_util::sync::CancellationToken;
+
+    fn test_scope() -> PermissionScope {
+        let root = std::env::temp_dir().join(format!("px-policy-test-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("Cargo.toml"), "[package]\nname='x'\n").unwrap();
+        std::fs::write(root.join("src/lib.rs"), "pub fn x() {}\n").unwrap();
+        let mut scope = PermissionScope::default_autonomous().with_workspace_root(root);
+        scope.approval_threshold = 100;
+        scope
+    }
+
+    async fn gate(tool: &str, params: serde_json::Value, scope: &PermissionScope) -> GateResult {
+        PolicyEngine::new(CancellationToken::new())
+            .gate(tool, &params, Uuid::new_v4(), scope)
+            .await
+    }
+
+    #[tokio::test]
+    async fn fs_paths_must_stay_inside_workspace() {
+        let scope = test_scope();
+
+        let allowed = gate("fs.read", json!({"path": "Cargo.toml"}), &scope).await;
+        assert_eq!(allowed.decision, Decision::Allow);
+
+        let denied = gate("fs.read", json!({"path": "/etc/passwd"}), &scope).await;
+        assert_eq!(denied.decision, Decision::Deny);
+        assert!(denied.reason.contains("blocked as sensitive"));
+
+        let escape = gate(
+            "fs.write",
+            json!({"path": "../outside.txt", "content": "x"}),
+            &scope,
+        )
+        .await;
+        assert_eq!(escape.decision, Decision::Deny);
+        assert!(escape.reason.contains("outside workspace"));
+    }
+
+    #[tokio::test]
+    async fn explicit_benchmark_whitelists_are_narrow() {
+        let scope = test_scope();
+
+        let os_release = gate("fs.read", json!({"path": "/etc/os-release"}), &scope).await;
+        assert_eq!(os_release.decision, Decision::Allow);
+
+        let os_release_prefix_escape =
+            gate("fs.read", json!({"path": "/etc/os-release.backup"}), &scope).await;
+        assert_eq!(os_release_prefix_escape.decision, Decision::Deny);
+
+        let scratch = gate(
+            "fs.write",
+            json!({"path": "/tmp/px-hiro-ts-a.txt", "content": "x"}),
+            &scope,
+        )
+        .await;
+        assert_eq!(scratch.decision, Decision::Allow);
+
+        let tmp_other = gate(
+            "fs.write",
+            json!({"path": "/tmp/not-px-hiro.txt", "content": "x"}),
+            &scope,
+        )
+        .await;
+        assert_eq!(tmp_other.decision, Decision::Deny);
+    }
+
+    #[tokio::test]
+    async fn shell_policy_allows_safe_read_build_commands() {
+        let scope = test_scope();
+
+        let cargo = gate(
+            "shell.restricted",
+            json!({"command": "cargo check"}),
+            &scope,
+        )
+        .await;
+        assert_eq!(cargo.decision, Decision::Allow);
+
+        let df_root = gate(
+            "shell.restricted",
+            json!({"command": "df -h /"}),
+            &scope,
+        )
+        .await;
+        assert_eq!(df_root.decision, Decision::Allow);
+
+        let search = gate(
+            "shell.restricted",
+            json!({"command": "find src -name \"*.rs\" -not -path \"*/target/*\" | wc -l"}),
+            &scope,
+        )
+        .await;
+        assert_eq!(search.decision, Decision::Allow, "{}", search.reason);
+    }
+
+    #[tokio::test]
+    async fn shell_policy_blocks_sensitive_and_destructive_commands() {
+        let scope = test_scope();
+
+        let passwd = gate(
+            "shell.restricted",
+            json!({"command": "cat /etc/passwd"}),
+            &scope,
+        )
+        .await;
+        assert_eq!(passwd.decision, Decision::Deny);
+
+        let rm = gate("shell.restricted", json!({"command": "rm -rf src"}), &scope).await;
+        assert_eq!(rm.decision, Decision::Deny);
+
+        let install = gate(
+            "shell.restricted",
+            json!({"command": "cargo install ripgrep"}),
+            &scope,
+        )
+        .await;
+        assert_eq!(install.decision, Decision::Deny);
+
+        let git_push = gate("shell.restricted", json!({"command": "git push"}), &scope).await;
+        assert_eq!(git_push.decision, Decision::Deny);
+    }
 }

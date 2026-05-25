@@ -13,6 +13,7 @@
 
 use anyhow::Result;
 use chrono::Utc;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{info, warn};
 
@@ -87,7 +88,30 @@ impl EvolvedLoop {
         }
 
         // ── Analyzer: verify and distill ─────────────────────────────────
-        self.analyzer_verify(&mut node, tracker).await?;
+        if let Err(e) = self.analyzer_verify(&mut node, tracker).await {
+            warn!("evolved: Analyzer verification error: {e}; rolling back proposal");
+            node.status = crate::evolved::proposer::NodeStatus::Rejected;
+            node.manifest.verification_status = VerificationStatus::Rejected;
+            node.analysis = format!("verification error: {e}");
+            self.rollback_node_changes(&node).await?;
+            self.node_db.insert(&mut node)?;
+            return Ok(false);
+        }
+
+        match node.status {
+            crate::evolved::proposer::NodeStatus::Accepted => {
+                self.commit_node(&node).await?;
+                self.node_db.insert(&mut node)?;
+            }
+            crate::evolved::proposer::NodeStatus::Rejected => {
+                self.rollback_node_changes(&node).await?;
+                self.node_db.insert(&mut node)?;
+                return Ok(false);
+            }
+            _ => {
+                self.node_db.insert(&mut node)?;
+            }
+        }
 
         info!("evolved: cycle complete — node {} {}", node.id.unwrap_or(0), format!("{:?}", node.status));
         Ok(true)
@@ -186,6 +210,11 @@ impl EvolvedLoop {
             return Ok(false);
         }
 
+        if !self.git_worktree_clean().await? {
+            warn!("evolved: Engineer blocked — git worktree is dirty; refusing autonomous mutation");
+            return Ok(false);
+        }
+
         info!("evolved: Engineer applying change to {:?}", node.target_component);
 
         // Apply the change based on component type
@@ -211,18 +240,6 @@ impl EvolvedLoop {
         match applied {
             Ok(true) => {
                 node.status = crate::evolved::proposer::NodeStatus::Testing;
-                // Version control: git commit the change
-                let _ = tokio::process::Command::new("git")
-                    .args(["add", "-A"])
-                    .output().await;
-                let commit_msg = format!(
-                    "evolved: {} — {}",
-                    format!("{:?}", node.target_component),
-                    node.motivation.chars().take(60).collect::<String>()
-                );
-                let _ = tokio::process::Command::new("git")
-                    .args(["commit", "-m", &commit_msg])
-                    .output().await;
                 Ok(true)
             }
             Ok(false) => Ok(false),
@@ -327,8 +344,73 @@ impl EvolvedLoop {
             );
         }
 
-        // Save node to DB
-        self.node_db.insert(node)?;
+        Ok(())
+    }
+
+    async fn git_worktree_clean(&self) -> Result<bool> {
+        let out = tokio::process::Command::new("git")
+            .args(["status", "--porcelain"])
+            .output()
+            .await?;
+        if !out.status.success() {
+            anyhow::bail!("git status failed: {}", String::from_utf8_lossy(&out.stderr));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).trim().is_empty())
+    }
+
+    async fn commit_node(&self, node: &EvolutionNode) -> Result<()> {
+        let paths = changed_paths_for_node(node);
+        if paths.is_empty() {
+            warn!("evolved: accepted node has no known changed paths; skipping commit");
+            return Ok(());
+        }
+
+        let mut add = tokio::process::Command::new("git");
+        add.arg("add");
+        for path in &paths {
+            add.arg(path);
+        }
+        let add = add.output().await?;
+        if !add.status.success() {
+            anyhow::bail!("git add failed: {}", String::from_utf8_lossy(&add.stderr));
+        }
+
+        let commit_msg = format!(
+            "evolved: {:?} - {}",
+            node.target_component,
+            node.motivation.chars().take(60).collect::<String>()
+        );
+        let commit = tokio::process::Command::new("git")
+            .args(["commit", "-m", &commit_msg])
+            .output()
+            .await?;
+        if !commit.status.success() {
+            let err = String::from_utf8_lossy(&commit.stderr);
+            if err.contains("nothing to commit") {
+                warn!("evolved: accepted proposal produced no commit-worthy diff");
+                return Ok(());
+            }
+            anyhow::bail!("git commit failed: {err}");
+        }
+        Ok(())
+    }
+
+    async fn rollback_node_changes(&self, node: &EvolutionNode) -> Result<()> {
+        let paths = changed_paths_for_node(node);
+        if paths.is_empty() {
+            return Ok(());
+        }
+
+        let mut restore = tokio::process::Command::new("git");
+        restore.args(["restore", "--staged", "--worktree", "--"]);
+        for path in &paths {
+            restore.arg(path);
+        }
+        let restore = restore.output().await?;
+        if !restore.status.success() {
+            anyhow::bail!("git restore failed: {}", String::from_utf8_lossy(&restore.stderr));
+        }
+        info!("evolved: rolled back rejected proposal paths: {:?}", paths);
         Ok(())
     }
 }
@@ -358,5 +440,14 @@ fn parse_component(s: &str) -> HarnessComponent {
         "HarnessConfig" => HarnessComponent::HarnessConfig,
         "ProceduralMemory" => HarnessComponent::ProceduralMemory,
         _ => HarnessComponent::HarnessConfig,
+    }
+}
+
+fn changed_paths_for_node(node: &EvolutionNode) -> Vec<PathBuf> {
+    match &node.target_component {
+        HarnessComponent::SystemPrompt => vec![PathBuf::from("personas/professor_x.md")],
+        HarnessComponent::SkillDefinition(name) => vec![PathBuf::from(format!("skills/{name}.md"))],
+        HarnessComponent::HarnessConfig => vec![PathBuf::from("config/hardware.toml")],
+        _ => Vec::new(),
     }
 }

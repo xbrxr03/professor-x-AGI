@@ -181,3 +181,116 @@ impl AuditStore {
         rows.map(|r| r.map_err(Into::into)).collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+    use serde_json::json;
+
+    fn audit_store() -> AuditStore {
+        let db = Arc::new(Mutex::new(Connection::open_in_memory().unwrap()));
+        db.lock()
+            .unwrap()
+            .execute_batch(
+                r#"
+                CREATE TABLE audit_log (
+                    id TEXT PRIMARY KEY,
+                    prev_hash TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    task_id TEXT,
+                    tool TEXT NOT NULL,
+                    params_hash TEXT NOT NULL,
+                    risk_score INTEGER NOT NULL,
+                    decision TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    execution_ms INTEGER
+                );
+                "#,
+            )
+            .unwrap();
+        AuditStore::new(db)
+    }
+
+    #[test]
+    fn verify_chain_accepts_denied_and_executed_entries() {
+        let audit = audit_store();
+        let session_id = Uuid::new_v4();
+
+        audit
+            .append(
+                session_id,
+                None,
+                "fs.read",
+                &json!({"path": "/etc/passwd"}),
+                10,
+                Decision::Deny,
+                "path blocked",
+                None,
+            )
+            .unwrap();
+        audit
+            .append(
+                session_id,
+                None,
+                "shell.restricted",
+                &json!({"command": "cargo check"}),
+                60,
+                Decision::Allow,
+                "executed",
+                Some(42),
+            )
+            .unwrap();
+
+        assert!(audit.verify_chain().unwrap());
+
+        let tail = audit.tail(2).unwrap();
+        assert_eq!(tail.len(), 2);
+        assert!(tail.iter().any(|entry| entry.contains("Deny")));
+        assert!(tail.iter().any(|entry| entry.contains("Allow")));
+    }
+
+    #[test]
+    fn verify_chain_detects_tampered_reason() {
+        let audit = audit_store();
+        let session_id = Uuid::new_v4();
+
+        audit
+            .append(
+                session_id,
+                None,
+                "fs.read",
+                &json!({"path": "Cargo.toml"}),
+                10,
+                Decision::Allow,
+                "policy pass",
+                None,
+            )
+            .unwrap();
+        audit
+            .append(
+                session_id,
+                None,
+                "shell.restricted",
+                &json!({"command": "cargo check"}),
+                60,
+                Decision::Allow,
+                "executed",
+                Some(7),
+            )
+            .unwrap();
+
+        audit
+            .db
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE audit_log SET reason = 'tampered' WHERE tool = 'fs.read'",
+                [],
+            )
+            .unwrap();
+
+        assert!(!audit.verify_chain().unwrap());
+    }
+}

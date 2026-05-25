@@ -5,6 +5,7 @@
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, warn};
@@ -46,11 +47,16 @@ pub struct ToolExecutor {
     registry: Arc<std::sync::RwLock<ToolRegistry>>,
     memory:   Option<Arc<MemoryManager>>,
     ollama:   Option<Arc<OllamaClient>>,
+    workspace_root: PathBuf,
 }
 
 impl ToolExecutor {
     pub fn new(registry: Arc<std::sync::RwLock<ToolRegistry>>) -> Self {
-        Self { registry, memory: None, ollama: None }
+        Self { registry, memory: None, ollama: None, workspace_root: default_workspace_root() }
+    }
+    pub fn with_workspace_root(mut self, workspace_root: PathBuf) -> Self {
+        self.workspace_root = workspace_root;
+        self
     }
     pub fn with_memory(mut self, memory: Arc<MemoryManager>) -> Self {
         self.memory = Some(memory); self
@@ -127,6 +133,7 @@ impl ToolExecutor {
                 let cmd = req_str(&action.params, "command")?;
                 debug!("shell.restricted: {cmd}");
                 let out = tokio::process::Command::new("sh").arg("-c").arg(cmd)
+                    .current_dir(&self.workspace_root)
                     .output().await?;
                 let stdout = String::from_utf8_lossy(&out.stdout).to_string();
                 let stderr = String::from_utf8_lossy(&out.stderr).to_string();
@@ -185,12 +192,17 @@ impl ToolExecutor {
             }
             "git.commit" => {
                 let message = req_str(&action.params, "message")?;
-                let add = tokio::process::Command::new("git").args(["add", "-A"]).output().await?;
+                let add = tokio::process::Command::new("git")
+                    .args(["add", "-A"])
+                    .current_dir(&self.workspace_root)
+                    .output().await?;
                 if !add.status.success() {
                     anyhow::bail!("git add: {}", String::from_utf8_lossy(&add.stderr));
                 }
                 let commit = tokio::process::Command::new("git")
-                    .args(["commit", "-m", message]).output().await?;
+                    .args(["commit", "-m", message])
+                    .current_dir(&self.workspace_root)
+                    .output().await?;
                 if !commit.status.success() {
                     let err = String::from_utf8_lossy(&commit.stderr);
                     if err.contains("nothing to commit") {
@@ -263,4 +275,17 @@ fn url_encode(s: &str) -> String {
 
 fn req_str<'a>(p: &'a serde_json::Value, key: &str) -> Result<&'a str> {
     p[key].as_str().ok_or_else(|| anyhow::anyhow!("missing param '{key}'"))
+}
+
+
+fn default_workspace_root() -> PathBuf {
+    let mut dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    loop {
+        if dir.join(".git").exists() {
+            return dir;
+        }
+        if !dir.pop() {
+            return std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        }
+    }
 }

@@ -187,10 +187,11 @@ impl ReactLoop {
         num_ctx:          u32,
     ) -> Result<bool> {
         const MAX_STEPS: usize = 20;
+        let scope    = PermissionScope::default_autonomous();
         let executor = ToolExecutor::new(Arc::clone(&self.registry))
+            .with_workspace_root(scope.workspace_root.clone())
             .with_memory(Arc::clone(&self.memory))
             .with_ollama(Arc::clone(&self.ollama));
-        let scope    = PermissionScope::default_autonomous();
         let audit    = AuditStore::new(Arc::clone(&self.memory.db));
         let session_id = Uuid::new_v4();
 
@@ -283,11 +284,23 @@ impl ReactLoop {
                                 risk_score: gate.risk_score,
                             };
                             let obs = executor.execute(&action).await;
-                            if obs.success {
+                            let exec_reason = if obs.success {
                                 consecutive_failures = 0;
+                                "executed"
                             } else {
                                 consecutive_failures += 1;
-                            }
+                                obs.error.as_deref().unwrap_or("execution failed")
+                            };
+                            let _ = audit.append(
+                                session_id,
+                                Some(task.id),
+                                &parsed.tool_name,
+                                &parsed.params,
+                                gate.risk_score,
+                                gate.decision.clone(),
+                                exec_reason,
+                                Some(obs.execution_ms),
+                            );
                             obs
                         }
                     };
