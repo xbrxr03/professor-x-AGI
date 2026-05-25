@@ -157,7 +157,7 @@ Both systems confirm the gap: no open-source local agent has a self-evolution lo
 
 ## On New Intel — v3.0 Additions (May 25, 2026)
 
-**MOSS ([arXiv:2605.22794](https://arxiv.org/abs/2605.22794)) is the primary competitor, not Meta-Harness.** MOSS (USTC/HKUST) performs source-level harness rewriting — it modifies the actual harness source code, not just configuration. Key differentiators from JARVIS: (1) No consumer hardware constraint, (2) No metacognitive self-model, (3) No causal failure attribution (DHE), (4) No identity coherence (ICS), (5) No three-lever framework. MOSS validates the problem space; JARVIS solves it differently. The verify-then-commit pattern is borrowed from MOSS.
+**MOSS ([arXiv:2605.22794](https://arxiv.org/abs/2605.22794)) is the primary competitor, not Meta-Harness.** MOSS (USTC/HKUST) performs source-level harness rewriting — it modifies the actual harness source code, not just configuration. Key differentiators from Professor X: (1) No consumer hardware constraint, (2) No metacognitive self-model, (3) No causal failure attribution (DHE), (4) No identity coherence (ICS), (5) No three-lever framework. MOSS validates the problem space; Professor X solves it differently. The verify-then-commit pattern is borrowed from MOSS.
 
 **verify-then-commit is the safety mechanism for evolved.rs (MOSS pattern).** Every harness modification proposal is: (1) applied to an ephemeral sandbox copy, (2) run against a subset of HIRO tasks, (3) committed to main harness ONLY if pass rate improves. Auto-rollback via git checkout if it doesn't. This is not optional — it prevents the evolution loop from breaking the harness it's running on. CONSTRAINT 12 in MASTER_BRIEF.
 
@@ -169,7 +169,7 @@ Both systems confirm the gap: no open-source local agent has a self-evolution lo
 
 **Self-termination protocol comes from Qwen3.7-Max competitor analysis.** GLM-5.1 and Kimi K2.6 were observed to implement clean self-termination after N idle cycles. Pattern: after 5 consecutive cycles with no new knowledge gained AND no harness evolution, the agent does (1) git add -A && git commit with a summary of the idle period, (2) clean shutdown with logged reason. On next restart, the agent resumes from the last checkpoint. This prevents the agent from burning compute cycles when it has nothing meaningful to do.
 
-**HyperAgents / DGM-H (Meta, [arXiv:2603.19461](https://arxiv.org/abs/2603.19461)) defines the improvement@k metric.** Key finding: improvement is not monotonic — performance jumps in discrete steps when a high-quality harness modification lands. JARVIS should track improvement@k where k = number of evolution rounds. Limitation: HyperAgents uses frontier APIs and only evaluates on coding tasks. Our consumer hardware + research domain differentiates.
+**HyperAgents / DGM-H (Meta, [arXiv:2603.19461](https://arxiv.org/abs/2603.19461)) defines the improvement@k metric.** Key finding: improvement is not monotonic — performance jumps in discrete steps when a high-quality harness modification lands. Professor X should track improvement@k where k = number of evolution rounds. Limitation: HyperAgents uses frontier APIs and only evaluates on coding tasks. Our consumer hardware + research domain differentiates.
 
 **FreeLLMAPI (1.3B free tokens/month via 14 providers) is for experiment comparison only.** Not for daily operation — too unstable for a 7-hour autonomous agent. Use as: (1) cloud reference baseline in Table 1 (compare local Qwen3-8B vs. free frontier API vs. GPT-4o), (2) sanity check that local harness results are not model-constrained. CONSTRAINT: never integrate as a daily inference provider.
 
@@ -178,4 +178,4 @@ Both systems confirm the gap: no open-source local agent has a self-evolution lo
 *Last updated: 2026-05-25*
 *Status: Pre-experiment. All entries are literature-based, not yet from Professor X experiments.*
 *v3.0 update: Added MOSS, Ratchet, Co-Scientist, TencentDB, self-termination, HyperAgents intel.*
-*Major structural note: harness renamed from professor-x/ to jarvis/ per MASTER_BRIEF v3.0.*
+*Major structural note: name stays professor-x/ throughout — no JARVIS split.*

@@ -1,4 +1,4 @@
-# JARVIS — Implementation Spec v2
+# Professor X — Implementation Spec v2
 
 > **Who this file is for:** The Linux coding agent. Read this before touching any code.
 > This spec is self-contained. You do not need to re-derive anything from conversation history.
@@ -10,7 +10,7 @@
 
 **Phase 1 (done):** Directory scaffold, Cargo.toml, config files, policyd skeleton.
 **Phase 2 (done):** Full ReAct loop (`agentd/react.rs`), Ollama client (`ollama.rs`), DFA Trifecta (`evolved/dhe.rs`, `evolved/bf.rs`, `evolved/lcap.rs`), evolution loop skeleton (`evolved/loop_runner.rs`), vault (`policyd/vault.rs`).
-**Path rename (done):** `professor-x/` → `jarvis/` — all source files are now under `jarvis/src/`.
+**Path rename (done):** `professor-x/` → `professor-x/` — all source files are now under `professor-x/src/`.
 
 ---
 
@@ -28,13 +28,13 @@
 - `evolved/proposer.rs` updates — Elo tournament + verify-then-commit (MOSS pattern)
 - `agentd/scheduler.rs` updates — Self-termination protocol (5 idle rounds → clean stop)
 - `memd/working.rs` updates — TencentDB Mermaid task canvas
-- `jarvis/personas/professor_x.md` — Round-0 identity seed (separate from IMPLEMENTATION_SPEC identity)
+- `professor-x/personas/professor_x.md` — Round-0 identity seed (separate from IMPLEMENTATION_SPEC identity)
 
 ---
 
 ## PHASE 3 — Identity-Preserving Evolution
 
-### 3.1 `jarvis/src/memd/self_model.rs` (NEW FILE)
+### 3.1 `professor-x/src/memd/self_model.rs` (NEW FILE)
 
 **Purpose:** The Strange Loop. Professor X's evolving self-description. Lives in pinned memory.
 Updated every 10 HIRO rounds by an LLM call. ICS measures coherence across rewrites.
@@ -228,7 +228,7 @@ if self_model.latest()?.is_none() {
 
 ---
 
-### 3.2 `jarvis/src/evolved/affect.rs` (NEW FILE)
+### 3.2 `professor-x/src/evolved/affect.rs` (NEW FILE)
 
 **Purpose:** Functional affect. Valence/arousal from actual outcomes, not simulation.
 Injected as `<affect state="X" valence="Y" arousal="Z" />` into every ReAct prompt.
@@ -340,7 +340,7 @@ self.affect.lock().unwrap().update(
 
 ---
 
-### 3.3 `jarvis/src/evolved/ics.rs` (NEW FILE)
+### 3.3 `professor-x/src/evolved/ics.rs` (NEW FILE)
 
 **Purpose:** Identity Coherence Score. Alert at 0.70. Halt at 0.50.
 
@@ -404,7 +404,7 @@ pub fn compute_ics(
 
 ---
 
-### 3.4 `jarvis/src/evolved/free_energy.rs` (NEW FILE)
+### 3.4 `professor-x/src/evolved/free_energy.rs` (NEW FILE)
 
 **Purpose:** Free Energy Delta — surprise reduction over time.
 FED decreasing = better world model = H15.
@@ -504,7 +504,7 @@ fed_store.save(&FedEntry { id: None, session_id: session_id.clone(),
 
 ## PHASE 4 — v3.0 Missing Components
 
-### 4.1 `jarvis/src/toolbridge/skill_lifecycle.rs` (NEW FILE)
+### 4.1 `professor-x/src/toolbridge/skill_lifecycle.rs` (NEW FILE)
 
 **Source:** Ratchet (arXiv:2605.22148).
 **Why critical:** WITHOUT retire_skill() → +0.0pp over no-skill baseline. WITH it → +0.328pp.
@@ -646,7 +646,7 @@ pub mod skill_lifecycle;
 
 ---
 
-### 4.2 `jarvis/src/evolved/reward_monitor.rs` (NEW FILE)
+### 4.2 `professor-x/src/evolved/reward_monitor.rs` (NEW FILE)
 
 **Source:** Reward-hacking detection pattern from Qwen3.7-Max competitor analysis.
 **Purpose:** Catch proposals that improve metric scores without genuinely improving performance.
@@ -749,7 +749,7 @@ if reward_check.is_suspicious && reward_check.confidence > 0.7 {
 
 ---
 
-### 4.3 Updates to `jarvis/src/evolved/proposer.rs`
+### 4.3 Updates to `professor-x/src/evolved/proposer.rs`
 
 The proposer.rs exists but needs the Elo tournament and verify-then-commit patterns.
 These are the key differentiators from MOSS.
@@ -839,7 +839,7 @@ pub enum VerificationOutcome {
 
 ---
 
-### 4.4 Updates to `jarvis/src/agentd/scheduler.rs`
+### 4.4 Updates to `professor-x/src/agentd/scheduler.rs`
 
 **Add self-termination protocol** (5 idle rounds → clean stop):
 
@@ -894,7 +894,7 @@ pub enum ShouldTerminate {
 
 ---
 
-### 4.5 Updates to `jarvis/src/memd/working.rs`
+### 4.5 Updates to `professor-x/src/memd/working.rs`
 
 **Add TencentDB Mermaid task canvas pattern.** The key insight: instead of storing full tool
 output in working memory, store a compact Mermaid graph + refs to offloaded files.
@@ -959,27 +959,27 @@ impl MermaidCanvas {
 
 | File | Status | Phase | Notes |
 |------|--------|-------|-------|
-| `jarvis/src/memd/self_model.rs` | **CREATE** | 3 | Strange Loop identity |
-| `jarvis/src/evolved/affect.rs` | **CREATE** | 3 | Functional affect injection |
-| `jarvis/src/evolved/ics.rs` | **CREATE** | 3 | Identity Coherence Score |
-| `jarvis/src/evolved/free_energy.rs` | **CREATE** | 3 | FED metric |
-| `jarvis/src/toolbridge/skill_lifecycle.rs` | **CREATE** | 4 | Ratchet retire_skill() — CRITICAL |
-| `jarvis/src/evolved/reward_monitor.rs` | **CREATE** | 4 | Reward hacking detection |
-| `jarvis/personas/professor_x.md` | **CREATE** | 4 | Round-0 identity seed |
-| `jarvis/benchmark/hiro.rs` | **CREATE** | 4 | P0: before any experiments |
-| `jarvis/skills/conductor/*.md` | **CREATE** | 4 | 9 SKILL.md conductor skills |
-| `jarvis/skills/subject/*.md` | **CREATE** | 4 | 6 SKILL.md subject skills |
+| `professor-x/src/memd/self_model.rs` | **CREATE** | 3 | Strange Loop identity |
+| `professor-x/src/evolved/affect.rs` | **CREATE** | 3 | Functional affect injection |
+| `professor-x/src/evolved/ics.rs` | **CREATE** | 3 | Identity Coherence Score |
+| `professor-x/src/evolved/free_energy.rs` | **CREATE** | 3 | FED metric |
+| `professor-x/src/toolbridge/skill_lifecycle.rs` | **CREATE** | 4 | Ratchet retire_skill() — CRITICAL |
+| `professor-x/src/evolved/reward_monitor.rs` | **CREATE** | 4 | Reward hacking detection |
+| `professor-x/personas/professor_x.md` | **CREATE** | 4 | Round-0 identity seed |
+| `professor-x/benchmark/hiro.rs` | **CREATE** | 4 | P0: before any experiments |
+| `professor-x/skills/conductor/*.md` | **CREATE** | 4 | 9 SKILL.md conductor skills |
+| `professor-x/skills/subject/*.md` | **CREATE** | 4 | 6 SKILL.md subject skills |
 
 | File | Status | Phase | Notes |
 |------|--------|-------|-------|
-| `jarvis/src/evolved/proposer.rs` | **UPDATE** | 4 | Add Elo tournament + verify-then-commit |
-| `jarvis/src/agentd/scheduler.rs` | **UPDATE** | 4 | Add IdleTracker (5 idle → stop) |
-| `jarvis/src/memd/working.rs` | **UPDATE** | 4 | Add MermaidCanvas |
-| `jarvis/src/memd/mod.rs` | **UPDATE** | 3 | Add self_model submodule |
-| `jarvis/src/evolved/mod.rs` | **UPDATE** | 3 | Add affect, ics, free_energy |
-| `jarvis/src/toolbridge/mod.rs` | **UPDATE** | 4 | Add skill_lifecycle |
-| `jarvis/src/agentd/react.rs` | **UPDATE** | 3 | Add affect injection |
-| `jarvis/src/main.rs` | **UPDATE** | 3+4 | Init all new stores |
+| `professor-x/src/evolved/proposer.rs` | **UPDATE** | 4 | Add Elo tournament + verify-then-commit |
+| `professor-x/src/agentd/scheduler.rs` | **UPDATE** | 4 | Add IdleTracker (5 idle → stop) |
+| `professor-x/src/memd/working.rs` | **UPDATE** | 4 | Add MermaidCanvas |
+| `professor-x/src/memd/mod.rs` | **UPDATE** | 3 | Add self_model submodule |
+| `professor-x/src/evolved/mod.rs` | **UPDATE** | 3 | Add affect, ics, free_energy |
+| `professor-x/src/toolbridge/mod.rs` | **UPDATE** | 4 | Add skill_lifecycle |
+| `professor-x/src/agentd/react.rs` | **UPDATE** | 3 | Add affect injection |
+| `professor-x/src/main.rs` | **UPDATE** | 3+4 | Init all new stores |
 
 ---
 
@@ -988,7 +988,7 @@ impl MermaidCanvas {
 Do these in order. Each step should compile before proceeding.
 
 ```
-1.  Create jarvis/personas/professor_x.md (identity seed)
+1.  Create professor-x/personas/professor_x.md (identity seed)
 
 2.  Create memd/self_model.rs (structs + schema only, generate_update as todo!())
     Update memd/mod.rs to add pub mod self_model + seed at startup
@@ -1033,26 +1033,26 @@ Do these in order. Each step should compile before proceeding.
 10. Wire ICS + FED into loop_runner.rs (see section 3.5 above)
     Update main.rs to initialize all new stores
 
-11. Create jarvis/benchmark/hiro.rs skeleton
+11. Create professor-x/benchmark/hiro.rs skeleton
     (20 tool-use + 20 planning + 20 self-correction tasks)
     This is P0 — without it no experiments can run
 
 12. Create skill stubs:
-    jarvis/skills/conductor/px-daily-cycle.md
-    jarvis/skills/conductor/px-literature-search.md
-    jarvis/skills/conductor/px-synthesize.md
-    jarvis/skills/conductor/px-gap-analysis.md
-    jarvis/skills/conductor/px-experiment-runner.md
-    jarvis/skills/conductor/px-write-section.md
-    jarvis/skills/conductor/px-self-review.md
-    jarvis/skills/conductor/px-daily-update.md
-    jarvis/skills/conductor/px-teach.md
-    jarvis/skills/subject/px-know-harness.md
-    jarvis/skills/subject/px-know-self-evolving.md
-    jarvis/skills/subject/px-know-consumer-hw.md
-    jarvis/skills/subject/px-know-existing-systems.md
-    jarvis/skills/subject/px-know-scientific-method.md
-    jarvis/skills/subject/px-know-writing-standards.md
+    professor-x/skills/conductor/px-daily-cycle.md
+    professor-x/skills/conductor/px-literature-search.md
+    professor-x/skills/conductor/px-synthesize.md
+    professor-x/skills/conductor/px-gap-analysis.md
+    professor-x/skills/conductor/px-experiment-runner.md
+    professor-x/skills/conductor/px-write-section.md
+    professor-x/skills/conductor/px-self-review.md
+    professor-x/skills/conductor/px-daily-update.md
+    professor-x/skills/conductor/px-teach.md
+    professor-x/skills/subject/px-know-harness.md
+    professor-x/skills/subject/px-know-self-evolving.md
+    professor-x/skills/subject/px-know-consumer-hw.md
+    professor-x/skills/subject/px-know-existing-systems.md
+    professor-x/skills/subject/px-know-scientific-method.md
+    professor-x/skills/subject/px-know-writing-standards.md
 
 13. cargo build --release — must compile clean
     git add -A && git commit -m "Phase 3+4: identity layer, skill lifecycle, reward monitor"
@@ -1069,7 +1069,7 @@ Do these in order. Each step should compile before proceeding.
 
 ### GAIA Level 2 (H18 target: ≥ 40% at round 30)
 ```rust
-// jarvis/src/benchmark/gaia.rs
+// professor-x/src/benchmark/gaia.rs
 pub struct GaiaTask { pub question: String, pub expected_answer: String, pub level: u8 }
 pub struct GaiaResult { pub pass_rate: f32, pub n_tasks: u32, pub round: u32 }
 // Source: HuggingFace gaia-benchmark/GAIA, Level 2 only
@@ -1079,7 +1079,7 @@ pub struct GaiaResult { pub pass_rate: f32, pub n_tasks: u32, pub round: u32 }
 
 ### AI Idea Bench 2025 (H17 — Research Quality Trajectory)
 ```rust
-// jarvis/src/benchmark/ai_idea_bench.rs
+// professor-x/src/benchmark/ai_idea_bench.rs
 // Weekly scheduled task: generate 5 novel research hypotheses
 // Score: 0.6*novelty + 0.4*feasibility
 // Novelty = 1 - max_cosine_similarity(hypothesis, knowledge_base entries)
@@ -1091,5 +1091,5 @@ pub struct GaiaResult { pub pass_rate: f32, pub n_tasks: u32, pub round: u32 }
 
 *Version: 2.0 — Updated for MASTER_BRIEF v3.0*
 *Date: 2026-05-25*
-*Previous phase paths: professor-x/ → jarvis/ (renamed)*
+*Previous phase paths: professor-x/ (harness Rust dir, consistent throughout)*
 *Critical additions: retire_skill() (Ratchet), reward_monitor (v3.0), Elo tournament (Co-Scientist), verify-then-commit (MOSS), self-termination (5 idle rounds), Mermaid canvas (TencentDB)*

@@ -1,9 +1,9 @@
-﻿# JARVIS — Architecture Document
+﻿# Professor X — Architecture Document
 > Design-before-code. No .rs files until this document is reviewed and approved.
 >
 > **For the Linux agent:** Every repo and paper linked below should be cloned/fetched before starting implementation. The repos are the direct sources for the data structures and patterns described here.
 >
-> **Path note:** All source files are now under `jarvis/src/` (renamed from `professor-x/src/`). All IMPLEMENTATION_SPEC paths use `jarvis/` prefix.
+> **Path note:** All source files are now under `professor-x/src/` (renamed from `professor-x/src/`). All IMPLEMENTATION_SPEC paths use `professor-x/` prefix.
 
 ---
 

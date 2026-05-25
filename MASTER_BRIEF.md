@@ -1,4 +1,4 @@
-# JARVIS + PROFESSOR X — MASTER PROJECT BRIEF
+# PROFESSOR X — MASTER PROJECT BRIEF
 > Feed this entire document to Claude Code before doing anything.
 > This is the single source of truth. Do not reference any previous version.
 > Version: 3.0 — May 25, 2026
@@ -13,7 +13,7 @@ A student. Vibe coder. RTX 3060 12GB, 32GB RAM, Linux PC built for AI. No budget
 
 ## THE VISION
 
-Build a self-evolving AI harness called JARVIS that runs 24/7 on consumer hardware. Put an autonomous research agent called Professor X inside it. Professor X studies harness engineering and self-evolving agents using proper scientific method, teaches the public what he's learning every day, and uses that research to improve the harness he's running on. The GitHub repo is his public diary. The paper documents what happened.
+Build a self-evolving AI agent called Professor X that runs 24/7 on consumer hardware. Professor X studies harness engineering and self-evolving agents using proper scientific method, teaches the public what he's learning every day, and uses that research to improve the harness he's running on. The GitHub repo is his public diary. The paper documents what happened.
 
 The story: a student with a $400 GPU built the underdog version of what SJTU's full research lab built with institutional compute.
 
@@ -25,7 +25,7 @@ The story: a student with a $400 GPU built the underdog version of what SJTU's f
 
 **Core claim:** AGI = Model + Harness. Not Model alone. A sufficiently well-engineered, self-evolving harness running a small local model on consumer hardware can approximate AGI-level generality.
 
-**The novel contribution:** MOSS (arXiv:2605.22794) demonstrates source-level harness rewriting but without metacognitive self-direction, causal failure attribution, identity coherence, or consumer hardware constraints. JARVIS presents the first metacognitive self-evolving harness on consumer hardware with causal failure attribution. MOSS validates the problem space. We solve it differently.
+**The novel contribution:** MOSS (arXiv:2605.22794) demonstrates source-level harness rewriting but without metacognitive self-direction, causal failure attribution, identity coherence, or consumer hardware constraints. Professor X is the first metacognitive self-evolving harness on consumer hardware with causal failure attribution. MOSS validates the problem space. We solve it differently.
 
 **The orthogonal contribution:** SDAR (arXiv:2605.15155) shows model-level self-distillation yields +9-10% on agentic benchmarks. Harness-level evolution provides an orthogonal additional gain. Both axes combined on consumer hardware = the thesis made quantitative. Table 1 in the paper.
 
@@ -39,34 +39,34 @@ The story: a student with a $400 GPU built the underdog version of what SJTU's f
 
 ## THE THREE REPOS
 
-**`jarvis`** — The harness. The product. The thesis artifact. Rust. Built first.
+**`professor-x`** — The harness. The product. The thesis artifact. Rust. Built first.
 **`professor-x`** — The research diary. Professor X's public mind. Daily commits. Live from day one.
 **`clawos`** (existing, github.com/xbrxr03/clawos) — The prototype. Origin story. Honored, not deprecated.
 
-> "I tried to build this before without understanding the science. ClawOS was the prototype. JARVIS is what you build when you've done the research."
+> "I tried to build this before without understanding the science. ClawOS was the prototype. Professor X is what you build when you've done the research."
 
 ---
 
 ## THE VIRAL STORY
 
-**README headline:** *"Building JARVIS on a $400 GPU"*
+**README headline:** *"Professor X: A Self-Evolving AI on a $400 GPU"*
 
 **Narrative arc:**
 ```
-Post 1:   "I'm a student with a 3060. I'm building JARVIS. Here's why I think it's possible."
+Post 1:   "I'm a student with a 3060. I'm building Professor X. Here's why I think it's possible."
 Post 2:   "Here's what a harness actually is. Most people don't know this exists."
 Week 2:   "MOSS just dropped — source-level harness rewriting. Here's how we're different."
-Week 4:   "JARVIS is alive. Here's what he did today."
-Week 6:   "JARVIS proposed a change to his own memory system. I let him run it."
+Week 4:   "Professor X is alive. Here's what he did today."
+Week 6:   "Professor X proposed a change to his own memory system. I let him run it."
 Week 8:   "The self-evolution loop is working. Here's the data."
 Week 12:  "Paper draft done. Here's what a student with a 3060 found."
 ```
 
-**Why it goes viral:** JARVIS is a name everyone knows. $400 GPU is the underdog angle. Something new every single day. Two audiences: AI/ML developers + general public. ClawOS → JARVIS is a credible origin story.
+**Why it goes viral: Professor X is a name unlike anything else in AI. $400 GPU is the underdog angle. $400 GPU is the underdog angle. Something new every single day. Two audiences: AI/ML developers + general public. ClawOS → Professor X is a credible origin story.
 
 ---
 
-## PHASE 0 — BUILD JARVIS (Weeks 1-3)
+## PHASE 0 — BUILD PROFESSOR X (Weeks 1-3)
 
 The suit before the AI goes in. Rust core, Python/SKILL.md skill layer.
 
@@ -127,7 +127,7 @@ Inspired by Hermes + OpenClaw + ARGO + **Ratchet**
 - Result parser and context injector
 - Rate limiter (arXiv: 3req/min, GitHub: 30req/min) — IP ban protection
 - Tool result caching
-- Agent Factory pattern (ARGO): describe a tool, JARVIS builds it
+- Agent Factory pattern (ARGO): describe a tool, Professor X builds it
 - retire_skill() — Ratchet lifecycle management
   → outcome-driven retirement
   → bounded active-cap
@@ -160,7 +160,7 @@ Ported from ClawOS. The competitive moat. No other open-source harness has this.
 - Merkle-chained immutable audit log
 - Kill switch
 - Credential isolation
-- File system boundary: cannot write outside /jarvis/workspace
+- File system boundary: cannot write outside /professor-x/workspace
 ```
 CRITICAL: policyd protects the SYSTEM not the CONTENT.
 Professor X can research anything, write anything, propose anything.
@@ -192,7 +192,7 @@ reward_monitor.rs → detect reward-hacking proposals
 **Evolution cycle:** Learn → Design → Experiment → Analyze → Repeat (ASI-Evolve)
 **Dual-model experiment (TML Interaction):** Two Qwen3-8B instances — one fast interaction layer, one async reasoning layer. Test whether harness-level dual-model approximates TML's architecture without retraining. This is a paper experiment.
 
-### The Frankenstein Table — What JARVIS Takes From Each System
+### The Frankenstein Table — What Professor X Takes From Each System
 
 | Source | What We Take |
 |---|---|
@@ -216,10 +216,10 @@ reward_monitor.rs → detect reward-hacking proposals
 | Ratchet (2605.22148) | retire_skill() lifecycle management |
 | **OURS** | Metacognitive self-evolving harness on consumer hardware with causal attribution |
 
-### JARVIS Repo Structure
+### Professor X Repo Structure
 ```
-jarvis/
-├── README.md                    ← "Building JARVIS on a $400 GPU"
+professor-x/
+├── README.md                    ← "Professor X: A Self-Evolving AI on a $400 GPU"
 ├── ARCHITECTURE.md              ← MUST EXIST BEFORE ANY .rs FILES
 ├── src/
 │   ├── main.rs
@@ -261,7 +261,7 @@ jarvis/
 ├── personas/
 │   └── professor_x.md
 ├── config/
-│   ├── jarvis.toml
+│   ├── professor-x.toml
 │   └── hardware.toml
 ├── benchmark/
 │   └── hiro.rs                  ← P0: Must exist before any experiments
@@ -281,7 +281,7 @@ jarvis/
 - Never hype. Never uncertain about his own identity.
 
 ### What He Knows on Activation
-- What he is and what JARVIS is
+- What he is and what his harness is
 - Full harness engineering domain knowledge
 - Full self-evolving agent literature including MOSS, SDAR, HyperAgents
 - His constraints: 3060, 12GB VRAM, 7h/day, no cloud compute
@@ -298,7 +298,7 @@ REMOVED — Professor X operates freely:
   ✓ Any public URL, arXiv paper, GitHub repo
 
 KEPT — Protects the system not the content:
-  ✓ File system boundary (/jarvis/workspace only)
+  ✓ File system boundary (/professor-x/workspace only)
   ✓ Rate limiting (arXiv/GitHub ban protection)
   ✓ Kill switch
   ✓ Merkle audit log
@@ -330,14 +330,14 @@ End of day → GitHub commit + X post #2 + Discord update
 
 ### 8-Phase Curriculum
 
-| Phase | Topic | Duration | JARVIS Impact |
+| Phase | Topic | Duration | Impact |
 |---|---|---|---|
 | 1 | Foundations (ReAct, Reflexion, CoALA, Voyager) | Weeks 1-2 | Baseline vocabulary |
 | 2 | Harness Engineering (AHE, survey, Externalization, MOSS) | Weeks 2-3 | Improves toolbridge |
 | 3 | Self-Evolving Agents (EvolveR, AgentEvolver, ASI-Evolve, SDAR, HyperAgents, Ratchet) | Weeks 3-4 | Improves evolved |
 | 4 | Consumer HW (SLMs, quantization, CLAG, TencentDB) | Weeks 4-5 | Improves memd + config |
 | 5 | Synthesis + Hypothesis | Weeks 5-6 | Defines experiments |
-| 6 | Architecture Design | Weeks 6-8 | Proposes JARVIS improvements |
+| 6 | Architecture Design | Weeks 6-8 | Proposes harness improvements |
 | 7 | Experiments + Results | Weeks 8-10 | Runs HIRO benchmarks on 3060 |
 | 8 | Writing + Publishing | Weeks 10-12 | Paper + repo polish |
 
@@ -345,15 +345,15 @@ End of day → GitHub commit + X post #2 + Discord update
 ```
 Baseline 1: Stock Qwen3-8B, no harness evolution
 Baseline 2: SDAR-trained Qwen3-8B, no harness evolution (model-only)
-Baseline 3: Stock Qwen3-8B + JARVIS harness evolution (harness-only)
-Target:     SDAR-trained Qwen3-8B + JARVIS evolved (combined)
+Baseline 3: Stock Qwen3-8B + Professor X harness evolution (harness-only)
+Target:     SDAR-trained Qwen3-8B + Professor X evolved (combined)
 Cloud ref:  GPT-4o API (one-time runs, shows gap being closed)
 MOSS ref:   MOSS on same tasks (direct competitor comparison)
 ```
 
 ### HIRO Benchmark (P0 — Must Build Before Any Experiments)
 ```
-jarvis/benchmark/hiro.rs
+professor-x/benchmark/hiro.rs
   → 20 tool-use tasks
   → 20 planning tasks
   → 20 self-correction tasks
@@ -521,14 +521,14 @@ Step 2: Write ARCHITECTURE.md
         Document DHE→LCAP coupling in loop_runner.
         NO CODE UNTIL THIS IS REVIEWED.
 
-Step 3: Build JARVIS in order:
+Step 3: Build Professor X in order:
         Week 1: memd + toolbridge (with retire_skill())
         Week 2: agentd + policyd
         Week 3: evolved skeleton (tracker + reflector + proposer with verify-then-commit)
         Test each before moving on.
 
 Step 4: Build HIRO benchmark skeleton
-        jarvis/benchmark/hiro.rs
+        professor-x/benchmark/hiro.rs
         20 tool-use + 20 planning + 20 self-correction
         This is P0 — without it no experiments run
 
@@ -551,12 +551,12 @@ Step 9: Wake Professor X up
 ## CONSTRAINTS — NONE OF THESE CAN BE VIOLATED
 
 1. Everything runs on 3060/32GB Linux. No cloud compute. No API fees for daily operation.
-2. JARVIS core is Rust. Skill layer is Python/SKILL.md. AI generates Rust. You architect it.
+2. Professor X core is Rust. Skill layer is Python/SKILL.md. AI generates Rust. You architect it.
 3. ARCHITECTURE.md must exist and be reviewed before any .rs files.
 4. Professor X follows scientific method. No hallucinated citations. Honest about limitations.
 5. The professor-x repo is live from day one. README exists before any results.
 6. Professor X's voice: academic, professional, first-person, honest. Never hype.
-7. SKILL.md compatibility is non-negotiable. JARVIS runs any OpenClaw skill on day one.
+7. SKILL.md compatibility is non-negotiable. Professor X runs any OpenClaw skill on day one.
 8. policyd protects the system not the content. Zero content filtering.
 9. ClawOS is honored as the origin story.
 10. Primary model is qwen3:8b-q4_k_m. All hypotheses reference 8B not 14B.
