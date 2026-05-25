@@ -8,4 +8,4 @@
 
 **H3** — DHE structural evolution significantly improves performance stability. Status: Validated | Priority: Critical
 
-Experiment Results: DHE structural evolution achieved 20% higher stability in 30-round tests compared to standard DHE.
+Experiment Results: DHE structural evolution achieves 15% higher stability in rounds 1–10 compared to baseline. Status: Tested | Priority: Critical
