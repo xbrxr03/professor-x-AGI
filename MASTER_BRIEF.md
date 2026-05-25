@@ -471,6 +471,10 @@ FOUNDATIONS
 2303.11366  Reflexion
 2309.02427  CoALA
 2305.16291  Voyager
+2308.00352  MetaGPT — multi-agent role decomposition (agentd patterns)
+2308.08155  AutoGen — multi-agent conversation framework (agentd patterns)
+ICLR 2025   OpenHands — consumer-deployable generalist agent (toolbridge patterns)
+COLM 2025   AIOS — harness as OS, AGI-as-OS framing (thesis intro)
 
 HARNESS ENGINEERING
 2604.25850  AHE — automatic harness evolution
@@ -490,7 +494,7 @@ SELF-EVOLVING AGENTS
 2510.16079  EvolveR
 2511.10395  AgentEvolver
 2601.11658  Towards AGI: Self-Evolving Agent
-2504.21024  WebEvolver
+2504.21024  WebEvolver — +10% without bigger models, consumer HW proof
 2604.17091  GenericAgent
 2605.13821  AEvo
 2605.10663  Evolving-RL
@@ -508,6 +512,7 @@ MEMORY SYSTEMS
 CONSUMER HARDWARE
 2506.02153  Small Language Models are the Future of Agentic AI
 2510.03847  SLMs for Agentic Systems Survey
+2510.00229  AgentFlux — decoupled fine-tuning, +46% tool accuracy on Qwen-2.5-7B
 ```
 
 ### Build order:

@@ -97,7 +97,18 @@ git clone https://github.com/ai-boost/awesome-harness-engineering    # Harness e
 | — | TencentDB Agent Memory | [github.com/Tencent/TencentDB-Agent-Memory](https://github.com/Tencent/TencentDB-Agent-Memory) | L0→L1→L2→L3 semantic pyramid. Mermaid task canvas in working memory. Cuts token usage ~61%. Reject brute-force history AND lossy summarization. |
 | 2603.19461 | HyperAgents / DGM-H (Meta) | [arxiv.org/abs/2603.19461](https://arxiv.org/abs/2603.19461) | improvement@k metric. Frontier APIs, coding domain only — our consumer HW differentiator. |
 
-**Tier 6 — Three-lever framework + comparative landscape (read before writing the paper):**
+**Tier 6 — Foundations + multi-agent frameworks (read before implementing agentd + toolbridge):**
+
+| ID | Title | Link | What it gives Professor X |
+|----|-------|------|----------------------|
+| 2308.00352 | MetaGPT: Meta Programming for Multi-Agent Framework | [arxiv.org/abs/2308.00352](https://arxiv.org/abs/2308.00352) | Organizational structure in the harness (not the model) determines complex task performance. Role decomposition patterns for agentd. ICLR 2024. |
+| 2308.08155 | AutoGen: Next-Gen LLM Apps via Multi-Agent Conversation | [arxiv.org/abs/2308.08155](https://arxiv.org/abs/2308.08155) | Widely deployed multi-agent framework. Role-based task decomposition — direct inspiration for agentd design. |
+| — | OpenHands: Open Platform for AI Software Developers | [ICLR 2025](https://iclr.cc/2025) | Open, consumer-deployable generalist agent. Extensive harness design documentation. Study for toolbridge + agentd patterns. |
+| — | AIOS: LLM Agent Operating System | [COLM 2025](https://colmweb.org/2025) | Harness as OS — manages context scheduling, memory, tool access. Critical AGI-as-OS framing for the thesis intro. |
+| 2510.00229 | AgentFlux: Decoupled Fine-Tuning for Tool Calling | [arxiv.org/abs/2510.00229](https://arxiv.org/abs/2510.00229) | Qwen-2.5-7B with decoupled fine-tuning: +46% tool call accuracy, outperforms models 2x larger. toolbridge structured output enforcement can replicate this without fine-tuning. |
+| 2504.21024 | WebEvolver: Web Agent Self-Improvement with World Model | [arxiv.org/abs/2504.21024](https://arxiv.org/abs/2504.21024) | +10% gain without distillation from bigger models. Co-evolving world model validates consumer HW self-improvement feasibility. |
+
+**Tier 7 — Three-lever framework + comparative landscape (read before writing the paper):**
 
 | ID | Title | Link | What it gives Professor X |
 |----|-------|------|----------------------|

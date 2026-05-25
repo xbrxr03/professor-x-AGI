@@ -175,7 +175,25 @@ Both systems confirm the gap: no open-source local agent has a self-evolution lo
 
 ---
 
+---
+
+## On Foundations — Multi-Agent Frameworks and Agent OS
+
+**MetaGPT ([arXiv:2308.00352](https://arxiv.org/abs/2308.00352)) shows organizational structure in the harness determines performance.** ICLR 2024. Different roles (product manager, architect, engineer) produce better outputs than a single agent attempting everything. Key insight for `agentd`: role decomposition in the task graph is a harness-level decision, not a model-level one. Professor X uses this for the Researcher/Engineer/Analyzer loop in `evolved/`.
+
+**AutoGen ([arXiv:2308.08155](https://arxiv.org/abs/2308.08155)) is the most widely deployed multi-agent conversation framework.** Microsoft. Conversational agent groups, flexible termination, tool use integration. Direct inspiration for `agentd`'s role-based task decomposition. Widely studied baseline — citing it anchors Professor X in the mainstream conversation.
+
+**AIOS (COLM 2025) frames the harness as an operating system.** Manages context scheduling, memory allocation, tool access — the same things an OS does for processes. Strongest framing for the thesis: AGI = Model + Harness is equivalent to AGI = CPU + OS. The harness IS the operating system for the model.
+
+**OpenHands (ICLR 2025) is the most capable open consumer-deployable generalist agent.** Extensive harness design documentation. Study for toolbridge and agentd patterns — particularly sandboxed execution and tool registry design. Consumer-deployable = directly comparable to Professor X's deployment context.
+
+**AgentFlux ([arXiv:2510.00229](https://arxiv.org/abs/2510.00229)) achieves +46% tool call accuracy through decoupled fine-tuning.** Outperforms models 2x larger on function calling. Implication: `toolbridge`'s structured output enforcement and LCAP's tool-use allocation can replicate much of this gain without fine-tuning.
+
+**WebEvolver ([arXiv:2504.21024](https://arxiv.org/abs/2504.21024)) achieves +10% without distillation from bigger models.** Co-evolving world model validates self-improvement on consumer hardware without a larger teacher model. Directly supports H9 (consumer hardware parity) and the core thesis.
+
+---
+
 *Last updated: 2026-05-25*
 *Status: Pre-experiment. All entries are literature-based, not yet from Professor X experiments.*
 *v3.0 update: Added MOSS, Ratchet, Co-Scientist, TencentDB, self-termination, HyperAgents intel.*
-*Major structural note: name stays professor-x/ throughout — no JARVIS split.*
+*Study list update: Added MetaGPT, AutoGen, OpenHands, AIOS, AgentFlux, WebEvolver.*
