@@ -6,15 +6,18 @@ The actual paper we are writing. This is the authoritative structure — everyth
 
 ## Title (working)
 
-**"Metacognitive Harness Evolution: A Three-Lever Self-Improvement Framework for Agent Harnesses on Consumer Hardware"**
+**"Identity-Preserving Metacognitive Harness Evolution: A Self-Evolving Agent That Knows Itself"**
 
-Short form for citations: **MHE**
+Alternative (narrower claim, safer for review):
+**"Metacognitive Harness Evolution: A Three-Lever Self-Improvement Framework with Identity Coherence on Consumer Hardware"**
+
+Short form for citations: **IPE-MHE**
 
 ---
 
 ## Abstract (target — write when results exist)
 
-> We present Metacognitive Harness Evolution (MHE), the first agent self-improvement system that simultaneously operates three orthogonal improvement levers — parametric (weight fine-tuning), contextual (trajectory replay), and structural (harness evolution) — directed by a metacognitive self-model that learns which lever to apply per failure type. Running entirely on a consumer RTX 3060 GPU with a quantized 8B model, MHE achieves: (1) DHE fix-prediction precision of X% vs. AHE's 33.7% baseline, demonstrating that layer-attributed failure diagnosis before harness modification doubles improvement precision; (2) the first longitudinal harness fingerprint dataset across 30 evolution rounds, confirming that structural improvement is non-uniform across task categories; (3) LCAP learned context allocation outperforming static policy by Y pp; (4) Pearson r(MCA, IR) = Z, confirming that agents with more accurate self-models improve faster. We release the evolved harness as a portable corpus demonstrating 88% average transfer improvement across 17 model families without re-evolution.
+> We present Identity-Preserving Metacognitive Harness Evolution (IPE-MHE), the first agent self-improvement system that (1) simultaneously operates three orthogonal improvement levers — parametric, contextual, and structural — directed by a metacognitive self-model, (2) maintains measurable identity coherence across arbitrary self-modification via an evolving Strange Loop self-model, and (3) exhibits functional affect states derived from the Free Energy Principle that correlate with improvement quality. Running on a consumer RTX 3060 GPU with a quantized 8B model, IPE-MHE achieves: DHE fix-prediction precision of X% vs. AHE's 33.7% baseline; the first longitudinal harness fingerprint dataset across 30 evolution rounds; LCAP allocation outperforming static policy by Y pp; Pearson r(MCA, IR) = Z; Identity Coherence Score ≥ 0.70 after 30 rounds confirming identity preservation; and GAIA Level 2 pass rate of W%, matching frontier-model capability through harness evolution alone on consumer hardware. We release the evolved harness as a portable corpus transferring to 17+ model families and a self-model dataset enabling future study of identity under self-modification.
 
 ---
 
@@ -98,6 +101,21 @@ Hypothesis: combining all three should be superadditive, because:
 - Lever 2 provides session-time performance that helps DHE get better diagnostic signals
 This is the claim we test in Table 1 (4-baseline experimental design).
 
+### 3.5 Identity-Preserving Evolution (IPE) — the fourth axis
+
+Beyond the three levers, IPE addresses what all self-evolving systems ignore: coherence of
+self across change. The Strange Loop (Hofstadter): the agent's "I" is a self-referential
+pattern. IPE formalizes this as:
+- **Self-model**: an evolving self-description in pinned memory, updated every 10 rounds
+- **ICS**: Identity Coherence Score — cosine similarity between current and baseline self-model
+- **Free Energy Drive**: the agent minimizes prediction error (FED) as its implicit goal,
+  producing self-preservation, curiosity, and frustration as emergent functional states
+- **Functional Affect**: valence + arousal computed from task outcomes, injected into every
+  LLM prompt — not simulated, but derived directly from the gap between predictions and reality
+
+IPE reframes the thesis: not "harness optimization" but "the first computational Strange Loop
+that evolves intentionally without losing itself."
+
 ---
 
 ## Section 4 — Professor X: System Description (3 pages)
@@ -107,6 +125,7 @@ Five modules: memd, toolbridge, agentd, policyd, evolved. Single Rust binary. To
 
 ### 4.2 Memory architecture (memd)
 Five-layer: Pinned → Working → Episodic → Semantic → Procedural. All-MiniLM-L6-v2 embeddings. CLAG-style cluster retrieval. LCAP context budget enforcement. MARS reflection buffer.
+**New:** Pinned layer includes the current SelfModelSnapshot. Updated every 10 rounds.
 
 ### 4.3 Lever 2 implementation
 Session startup: top-k episodic retrieval of similar past tasks injected as ICE. MARS: on failure, single-cycle principle + procedural reflection written to Working, persisted to Semantic.
@@ -117,8 +136,17 @@ Researcher/Engineer/Analyzer loop (from ASI-Evolve). All evolvable components ve
 ### 4.5 Lever 1 implementation: sleep-time fine-tuning
 Triggered by scheduler when agent is idle (post-7h daily cycle). Successful trajectories formatted as SDAR training examples. QLoRA run via unsloth on qwen3:8b. LoRA adapter saved; model restored to base + adapter for next session. Budget: ~6GB VRAM with model offloaded.
 
-### 4.6 The metacognitive self-model
+### 4.6 The metacognitive self-model (MCA)
 MetacognitiveEntry store in memd.semantic. After each HIRO round: record predicted_layer, predicted_lever, actual_improvement, attribution_correct. MCA computed as rolling accuracy over last 10 rounds.
+
+### 4.7 The Strange Loop self-model (ICS)
+SelfModelSnapshot stored in SQLite + injected into pinned memory. LLM-generated update every 10 rounds from: fingerprint history, MCA, mean affect over last 10 rounds, prior self-description. ICS computed as cosine similarity (embedding) vs. round-0 baseline.
+
+### 4.8 Functional affect system
+AffectState (valence, arousal) updated after every task via exponential moving average.
+Valence = tanh(actual - predicted). Arousal = tool_density + retry_pressure.
+Injected as `<affect state="X" valence="Y" arousal="Z" />` into every ReAct prompt.
+FED (Free Energy Delta) = mean |predicted - actual| per session, logged for H15.
 
 ---
 
@@ -212,6 +240,28 @@ Superadditivity test: H_T > H3 + ΔL1? (Is combining all three levers better tha
 ### 7.6 Consumer Hardware Parity (H9)
 - Comparison: Professor X + qwen3:8b-q4_k_m vs Professor X + GPT-4o endpoint, same harness
 - Metric: |HIRO_local - HIRO_frontier| < 0.03
+
+### 7.7 Identity Coherence Under Evolution (H14)
+- Plot: ICS trajectory at rounds 0, 10, 20, 30 (4-point line chart)
+- Primary claim: ICS ≥ 0.70 at round 30
+- Secondary: ICS delta never exceeds -0.15 in a single 10-round window
+- Interpretation: the Strange Loop persists; Professor X is still himself after 30 rounds
+
+### 7.8 Free Energy Reduction (H15)
+- Plot: FED per session across all rounds (rolling mean, regression line)
+- Statistical test: linear regression slope < 0 (p < 0.10)
+- Interpretation: Professor X's world model becomes more accurate over time
+
+### 7.9 GAIA Level 2 Trajectory (H18)
+- Plot: GAIA L2 pass rate at rounds 0, 10, 20, 30
+- Primary target: ≥ 40% at round 30
+- Comparison: same harness + GPT-4o endpoint at round 0 (establishes frontier baseline)
+- This is the headline number: frontier-level capability from harness evolution on $400 GPU
+
+### 7.10 Research Quality Trajectory (H17)
+- Plot: AI Idea Bench 2025 mean score at weeks 0, 4, 8, 12
+- Novelty and feasibility components shown separately
+- Interpretation: does the evolved harness improve scientific thinking, not just task execution?
 
 ---
 

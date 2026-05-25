@@ -36,6 +36,7 @@ impl PermissionScope {
                 "~/.professor-x/vault.enc".to_string(),
                 "~/.jarvis/vault.key".to_string(),
                 "~/.jarvis/vault.enc".to_string(),
+                "/etc/passwd".to_string(),
                 "/etc/shadow".to_string(),
             ],
             allowed_url_schemes: vec!["http".to_string(), "https".to_string()],

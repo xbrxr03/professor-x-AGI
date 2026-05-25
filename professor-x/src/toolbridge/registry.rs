@@ -53,7 +53,7 @@ impl ToolRegistry {
     }
 
     fn register_builtins(&mut self) {
-        // Risk scores ported from ClawOS policyd/service.py, extended for JARVIS.
+        // Risk scores ported from ClawOS policyd/service.py, extended for Professor X.
         let builtins = [
             ("fs.read",          "Read file contents",                    10, 5_000),
             ("fs.list",          "List directory contents",               8,  5_000),
@@ -64,8 +64,8 @@ impl ToolRegistry {
             ("web.fetch",        "Fetch content from a URL",              20, 30_000),
             ("shell.restricted", "Run a sandboxed shell command",         60, 60_000),
             ("shell.elevated",   "Run a privileged shell command",        90, 60_000),
-            ("memory.read",      "Query JARVIS memory layers",            5,  5_000),
-            ("memory.write",     "Write an entry to JARVIS memory",       10, 5_000),
+            ("memory.read",      "Query Professor X memory layers",       5,  5_000),
+            ("memory.write",     "Write an entry to Professor X memory",  10, 5_000),
             ("ollama.complete",  "Call the local Ollama LLM",             15, 120_000),
             ("harness.modify",   "Propose a harness component change",    85, 30_000),
             ("git.commit",       "Commit harness changes to git",         50, 30_000),

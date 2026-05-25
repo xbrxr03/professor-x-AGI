@@ -1,7 +1,7 @@
 /// Merkle-chained audit log.
 ///
 /// ClawOS claims Merkle chaining but its policyd/service.py does plain SQLite append.
-/// JARVIS actually implements SHA-256 prev_hash chaining on every AuditEntry.
+/// Professor X actually implements SHA-256 prev_hash chaining on every AuditEntry.
 /// verify_chain() runs at startup to detect tampering.
 
 use anyhow::Result;

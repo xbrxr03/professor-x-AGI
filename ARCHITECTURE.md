@@ -2,6 +2,8 @@
 > Design-before-code. No .rs files until this document is reviewed and approved.
 >
 > **For the Linux agent:** Every repo and paper linked below should be cloned/fetched before starting implementation. The repos are the direct sources for the data structures and patterns described here.
+>
+> **Path note:** All source files are now under `professor-x/src/` (renamed from `professor-x/src/`). All IMPLEMENTATION_SPEC paths use `professor-x/` prefix.
 
 ---
 
@@ -10,17 +12,36 @@
 ### Repos to clone
 
 ```bash
+# Our prototype
 git clone https://github.com/xbrxr03/clawos                          # Our prototype — policyd source
-git clone https://github.com/GAIR-NLP/ASI-Evolve                     # Self-evolution reference (SJTU)
-git clone https://github.com/modelscope/AgentEvolver                 # Self-evolving RL reference
-git clone https://github.com/K-Dense-AI/scientific-agent-skills      # SKILL.md spec + examples
+
+# Direct competitors — study DEEPLY before writing evolved.rs
+git clone https://github.com/dav-joy-thon/MOSS                       # PRIMARY COMPETITOR: source-level harness rewriting (arXiv:2605.22794)
+git clone https://github.com/facebookresearch/Hyperagents             # HyperAgents/DGM-H: improvement@k (arXiv:2603.19461)
+
+# Self-evolution reference systems
+git clone https://github.com/GAIR-NLP/ASI-Evolve                     # Self-evolution reference (SJTU, arXiv:2603.29640)
+git clone https://github.com/ZJU-REAL/SDAR                           # SDAR: token-weighted distillation (arXiv:2605.15155)
+git clone https://github.com/modelscope/AgentEvolver                 # Self-evolving RL reference (arXiv:2511.10395)
+
+# Memory systems
+git clone https://github.com/Tencent/TencentDB-Agent-Memory          # L0→L1→L2→L3 pyramid + Mermaid canvas (PRIMARY memd inspiration)
+
+# Local agent systems — study for agentd + toolbridge patterns
+git clone https://github.com/xark-argo/argo                          # ARGO: Agent Factory pattern, local Manus alternative
+git clone https://github.com/Fosowl/agenticSeek                      # AgenticSeek: local-first, smart agent routing
+
+# SKILL.md format references
+git clone https://github.com/K-Dense-AI/scientific-agent-skills      # SKILL.md spec + examples (K-Dense-AI format)
 git clone https://github.com/NousResearch/hermes-agent               # Scheduler + memory schema reference
-git clone https://github.com/Gloriaameng/Awesome-Agent-Harness       # Harness paper index
-git clone https://github.com/XMUDeepLIT/Awesome-Self-Evolving-Agents # Self-evolving agent index
-git clone https://github.com/ai-boost/awesome-harness-engineering    # Harness engineering index
 git clone https://github.com/Orchestra-Research/AI-Research-SKILLs  # Additional SKILL.md examples
 git clone https://github.com/wanshuiyin/Auto-claude-code-research-in-sleep  # Research automation patterns
 git clone https://github.com/Imbad0202/academic-research-skills     # Academic SKILL.md examples
+
+# Literature indexes
+git clone https://github.com/Gloriaameng/Awesome-Agent-Harness       # Harness paper index
+git clone https://github.com/XMUDeepLIT/Awesome-Self-Evolving-Agents # Self-evolving agent index
+git clone https://github.com/ai-boost/awesome-harness-engineering    # Harness engineering index
 ```
 
 ### Papers to fetch (arXiv)
@@ -66,7 +87,28 @@ git clone https://github.com/Imbad0202/academic-research-skills     # Academic S
 | 2601.19935 | Mem2ActBench | [arxiv.org/abs/2601.19935](https://arxiv.org/abs/2601.19935) | Oracle vs. retrieval 23-point gap — confirms allocation matters for LCAP |
 | 2506.21605 | MemBench | [arxiv.org/abs/2506.21605](https://arxiv.org/abs/2506.21605) | Store size degrades quality at 100K tokens — confirms BF & LCAP motivation |
 
-**Tier 5 — Three-lever framework + comparative landscape (read before writing the paper):**
+**Tier 5 — NEW: v3.0 additions (MOSS, Ratchet, Co-Scientist, TencentDB) — read before implementing evolved.rs:**
+
+| ID | Title | Link | What it gives Professor X |
+|----|-------|------|----------------------|
+| 2605.22794 | MOSS: Source-Level Harness Rewriting | [arxiv.org/abs/2605.22794](https://arxiv.org/abs/2605.22794) | **PRIMARY COMPETITOR**. verify-then-commit pattern. Health-probe rollback. No consumer HW, no metacognitive self-model — our gap. |
+| 2605.22148 | Ratchet: Skill Lifecycle Management | [arxiv.org/abs/2605.22148](https://arxiv.org/abs/2605.22148) | retire_skill() is load-bearing. WITHOUT: +0.0pp. WITH: +0.328pp. Pattern canonicalisation. Bounded active-cap. |
+| 2502.18864 | Co-Scientist: Elo-Based Idea Tournament | [arxiv.org/abs/2502.18864](https://arxiv.org/abs/2502.18864) | Generate 3-5 competing proposals per cycle. Agents debate. Elo ranking selects winner. Stronger than greedy first-proposal acceptance. |
+| — | TencentDB Agent Memory | [github.com/Tencent/TencentDB-Agent-Memory](https://github.com/Tencent/TencentDB-Agent-Memory) | L0→L1→L2→L3 semantic pyramid. Mermaid task canvas in working memory. Cuts token usage ~61%. Reject brute-force history AND lossy summarization. |
+| 2603.19461 | HyperAgents / DGM-H (Meta) | [arxiv.org/abs/2603.19461](https://arxiv.org/abs/2603.19461) | improvement@k metric. Frontier APIs, coding domain only — our consumer HW differentiator. |
+
+**Tier 6 — Foundations + multi-agent frameworks (read before implementing agentd + toolbridge):**
+
+| ID | Title | Link | What it gives Professor X |
+|----|-------|------|----------------------|
+| 2308.00352 | MetaGPT: Meta Programming for Multi-Agent Framework | [arxiv.org/abs/2308.00352](https://arxiv.org/abs/2308.00352) | Organizational structure in the harness (not the model) determines complex task performance. Role decomposition patterns for agentd. ICLR 2024. |
+| 2308.08155 | AutoGen: Next-Gen LLM Apps via Multi-Agent Conversation | [arxiv.org/abs/2308.08155](https://arxiv.org/abs/2308.08155) | Widely deployed multi-agent framework. Role-based task decomposition — direct inspiration for agentd design. |
+| — | OpenHands: Open Platform for AI Software Developers | [ICLR 2025](https://iclr.cc/2025) | Open, consumer-deployable generalist agent. Extensive harness design documentation. Study for toolbridge + agentd patterns. |
+| — | AIOS: LLM Agent Operating System | [COLM 2025](https://colmweb.org/2025) | Harness as OS — manages context scheduling, memory, tool access. Critical AGI-as-OS framing for the thesis intro. |
+| 2510.00229 | AgentFlux: Decoupled Fine-Tuning for Tool Calling | [arxiv.org/abs/2510.00229](https://arxiv.org/abs/2510.00229) | Qwen-2.5-7B with decoupled fine-tuning: +46% tool call accuracy, outperforms models 2x larger. toolbridge structured output enforcement can replicate this without fine-tuning. |
+| 2504.21024 | WebEvolver: Web Agent Self-Improvement with World Model | [arxiv.org/abs/2504.21024](https://arxiv.org/abs/2504.21024) | +10% gain without distillation from bigger models. Co-evolving world model validates consumer HW self-improvement feasibility. |
+
+**Tier 7 — Three-lever framework + comparative landscape (read before writing the paper):**
 
 | ID | Title | Link | What it gives Professor X |
 |----|-------|------|----------------------|
