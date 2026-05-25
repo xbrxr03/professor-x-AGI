@@ -566,12 +566,7 @@ mod tests {
         .await;
         assert_eq!(cargo.decision, Decision::Allow);
 
-        let df_root = gate(
-            "shell.restricted",
-            json!({"command": "df -h /"}),
-            &scope,
-        )
-        .await;
+        let df_root = gate("shell.restricted", json!({"command": "df -h /"}), &scope).await;
         assert_eq!(df_root.decision, Decision::Allow);
 
         let search = gate(

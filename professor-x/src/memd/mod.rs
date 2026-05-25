@@ -1,8 +1,8 @@
-pub mod pinned;
-pub mod working;
 pub mod episodic;
-pub mod semantic;
+pub mod pinned;
 pub mod procedural;
+pub mod semantic;
+pub mod working;
 
 use anyhow::Result;
 use rusqlite::Connection;
@@ -10,11 +10,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tracing::info;
 
-use crate::memd::pinned::PinnedStore;
-use crate::memd::working::WorkingMemory;
 use crate::memd::episodic::EpisodicStore;
-use crate::memd::semantic::SemanticStore;
+use crate::memd::pinned::PinnedStore;
 use crate::memd::procedural::ProceduralStore;
+use crate::memd::semantic::SemanticStore;
+use crate::memd::working::WorkingMemory;
 
 // SQLite schema — single source of truth.
 // Hermes Agent pattern: ALTER TABLE ADD COLUMN for migrations, no migration files.
@@ -178,6 +178,22 @@ CREATE TABLE IF NOT EXISTS hiro_rounds (
     recorded_at TEXT NOT NULL
 );
 
+-- HIRO attempt-level results — one row per task attempt.
+CREATE TABLE IF NOT EXISTS hiro_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    round INTEGER NOT NULL,
+    harness_commit TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    category TEXT NOT NULL,
+    attempt INTEGER NOT NULL,
+    passed INTEGER NOT NULL DEFAULT 0,
+    failure_reason TEXT,
+    output_hash TEXT NOT NULL,
+    duration_ms INTEGER NOT NULL DEFAULT 0,
+    recorded_at TEXT NOT NULL,
+    UNIQUE(round, task_id, attempt)
+);
+
 -- LCAP UCB1 arm state — persisted across runs so learning accumulates over rounds.
 CREATE TABLE IF NOT EXISTS lcap_arms (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -242,7 +258,9 @@ impl MemoryManager {
         // Layer 2: working memory summary
         let working_summary = self.working.summarize();
         if !working_summary.is_empty() {
-            parts.push(format!("<working-memory>\n{working_summary}\n</working-memory>"));
+            parts.push(format!(
+                "<working-memory>\n{working_summary}\n</working-memory>"
+            ));
         }
 
         // Layer 3: reflexion buffer (injected by agentd per-task, not here)

@@ -32,11 +32,13 @@ struct CliArgs {
     run_now: bool,
     /// Run HIRO benchmark for the given round number and exit.
     hiro_round: Option<u32>,
+    /// Run N static HIRO null-condition rounds and exit.
+    hiro_null_rounds: Option<u32>,
 }
 
 fn parse_args() -> CliArgs {
     let args: Vec<String> = std::env::args().collect();
-    let mut cli = CliArgs { task: None, run_now: false, hiro_round: None };
+    let mut cli = CliArgs { task: None, run_now: false, hiro_round: None, hiro_null_rounds: None };
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -47,6 +49,10 @@ fn parse_args() -> CliArgs {
             "--run-now" => { cli.run_now = true; i += 1; }
             "--hiro" if i + 1 < args.len() => {
                 cli.hiro_round = args[i + 1].parse::<u32>().ok();
+                i += 2;
+            }
+            "--hiro-null" if i + 1 < args.len() => {
+                cli.hiro_null_rounds = args[i + 1].parse::<u32>().ok();
                 i += 2;
             }
             _ => { i += 1; }
@@ -138,6 +144,17 @@ async fn main() -> Result<()> {
     if let Some(round) = cli.hiro_round {
         return run_hiro_benchmark(
             round,
+            Arc::clone(&ollama),
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            cancel,
+        ).await;
+    }
+
+    if let Some(rounds) = cli.hiro_null_rounds {
+        return run_hiro_null_baseline(
+            rounds,
             Arc::clone(&ollama),
             Arc::clone(&registry),
             Arc::clone(&policy),
@@ -301,6 +318,29 @@ async fn run_hiro_benchmark(
     info!("  p_correct: {:.3}", result.p_correct);
     info!("  pass@3:    {:.3}", result.pass_at_3);
     info!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+    Ok(())
+}
+
+
+async fn run_hiro_null_baseline(
+    rounds:   u32,
+    ollama:   Arc<ollama::OllamaClient>,
+    registry: Arc<std::sync::RwLock<ToolRegistry>>,
+    policy:   Arc<PolicyEngine>,
+    memory:   Arc<MemoryManager>,
+    cancel:   CancellationToken,
+) -> Result<()> {
+    info!("HIRO null-condition baseline — {rounds} static round(s)");
+    let runner = HiroRunner::new(ollama, registry, policy, memory, cancel);
+
+    for round in 0..rounds {
+        let result = runner.run_benchmark_labeled(round, Some("null_condition")).await?;
+        info!(
+            "HIRO null round {}: pass@3={:.3} p_tool={:.3} p_plan={:.3} p_correct={:.3}",
+            result.round, result.pass_at_3, result.p_tool, result.p_plan, result.p_correct
+        );
+    }
 
     Ok(())
 }

@@ -10,7 +10,6 @@
 /// - Core modules (policyd gate, memd internals) require human approval (risk >= 85)
 /// - All changes are version-controlled (git commit per cycle)
 /// - ChangeManifest must be filled before applying any change
-
 use anyhow::Result;
 use chrono::Utc;
 use std::path::PathBuf;
@@ -19,7 +18,9 @@ use tracing::{info, warn};
 
 use crate::evolved::analyzer::Analyzer;
 use crate::evolved::cognition_base::CognitionStore;
-use crate::evolved::proposer::{ChangeManifest, EvolutionNode, HarnessComponent, NodeDatabase, VerificationStatus};
+use crate::evolved::proposer::{
+    ChangeManifest, EvolutionNode, HarnessComponent, NodeDatabase, VerificationStatus,
+};
 use crate::evolved::tracker::OutcomeTracker;
 use crate::memd::MemoryManager;
 use crate::ollama::{ChatMessage, ModelOptions, OllamaClient};
@@ -32,7 +33,12 @@ fn parse_dhe_from_patterns(patterns: &[String]) -> (u8, u8) {
             let rest = &p[start + 11..];
             if let Some(comma) = rest.find(',') {
                 let layer_str = &rest[..comma];
-                let lever_str = rest.get(comma + 7..).unwrap_or("3").split(']').next().unwrap_or("3");
+                let lever_str = rest
+                    .get(comma + 7..)
+                    .unwrap_or("3")
+                    .split(']')
+                    .next()
+                    .unwrap_or("3");
                 let layer = layer_str.parse::<u8>().unwrap_or(0);
                 let lever = lever_str.parse::<u8>().unwrap_or(3);
                 return (layer, lever);
@@ -43,17 +49,22 @@ fn parse_dhe_from_patterns(patterns: &[String]) -> (u8, u8) {
 }
 
 pub struct EvolvedLoop {
-    ollama:   Arc<OllamaClient>,
-    memory:   Arc<MemoryManager>,
-    node_db:  NodeDatabase,
+    ollama: Arc<OllamaClient>,
+    memory: Arc<MemoryManager>,
+    node_db: NodeDatabase,
     cognition: CognitionStore,
 }
 
 impl EvolvedLoop {
     pub fn new(ollama: Arc<OllamaClient>, memory: Arc<MemoryManager>) -> Self {
-        let node_db   = NodeDatabase::new(Arc::clone(&memory.db));
+        let node_db = NodeDatabase::new(Arc::clone(&memory.db));
         let cognition = CognitionStore::new(Arc::clone(&memory.db));
-        Self { ollama, memory, node_db, cognition }
+        Self {
+            ollama,
+            memory,
+            node_db,
+            cognition,
+        }
     }
 
     /// Run one evolution cycle. Returns Ok(true) if a change was applied.
@@ -69,12 +80,17 @@ impl EvolvedLoop {
 
         let failure_patterns = tracker.failure_patterns(20);
         let success_rate = tracker.success_rate(20);
-        info!("evolved: success_rate={:.2}, failure_patterns={:?}", success_rate, failure_patterns);
+        info!(
+            "evolved: success_rate={:.2}, failure_patterns={:?}",
+            success_rate, failure_patterns
+        );
 
         // Sample a node via UCB1 (ASI-Evolve)
         let candidates = self.node_db.sample_ucb1(3)?;
 
-        let proposal = self.researcher_propose(&failure_patterns, &candidates, success_rate).await?;
+        let proposal = self
+            .researcher_propose(&failure_patterns, &candidates, success_rate)
+            .await?;
         let Some(mut node) = proposal else {
             info!("evolved: Researcher produced no actionable proposal");
             return Ok(false);
@@ -113,7 +129,11 @@ impl EvolvedLoop {
             }
         }
 
-        info!("evolved: cycle complete — node {} {}", node.id.unwrap_or(0), format!("{:?}", node.status));
+        info!(
+            "evolved: cycle complete — node {} {}",
+            node.id.unwrap_or(0),
+            format!("{:?}", node.status)
+        );
         Ok(true)
     }
 
@@ -124,8 +144,11 @@ impl EvolvedLoop {
         success_rate: f32,
     ) -> Result<Option<EvolutionNode>> {
         // Retrieve top cognition items for context
-        let cognition_items = self.cognition.query_top_k("harness improvement failure", 5)?;
-        let cognition_context = cognition_items.iter()
+        let cognition_items = self
+            .cognition
+            .query_top_k("harness improvement failure", 5)?;
+        let cognition_context = cognition_items
+            .iter()
             .map(|c| format!("- {}", c.content))
             .collect::<Vec<_>>()
             .join("\n");
@@ -133,10 +156,19 @@ impl EvolvedLoop {
         let candidates_text = if candidates.is_empty() {
             "No prior nodes. This is round 1.".to_string()
         } else {
-            candidates.iter().map(|n| format!(
-                "Node {}: motivation='{}' score={:.2} visits={}",
-                n.id.unwrap_or(0), n.motivation, n.score, n.visit_count
-            )).collect::<Vec<_>>().join("\n")
+            candidates
+                .iter()
+                .map(|n| {
+                    format!(
+                        "Node {}: motivation='{}' score={:.2} visits={}",
+                        n.id.unwrap_or(0),
+                        n.motivation,
+                        n.score,
+                        n.visit_count
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
         };
 
         let prompt = format!(
@@ -164,13 +196,18 @@ impl EvolvedLoop {
             failure_patterns.join(", "),
         );
 
-        let resp = self.ollama.chat(
-            vec![
-                ChatMessage::system("You are a rigorous AI research agent analyzing your own performance."),
-                ChatMessage::user(prompt),
-            ],
-            Some(ModelOptions::for_evolution()),
-        ).await?;
+        let resp = self
+            .ollama
+            .chat(
+                vec![
+                    ChatMessage::system(
+                        "You are a rigorous AI research agent analyzing your own performance.",
+                    ),
+                    ChatMessage::user(prompt),
+                ],
+                Some(ModelOptions::for_evolution()),
+            )
+            .await?;
 
         let (_, answer) = resp.split_thinking();
         self.parse_researcher_output(&answer)
@@ -178,11 +215,11 @@ impl EvolvedLoop {
 
     fn parse_researcher_output(&self, text: &str) -> Result<Option<EvolutionNode>> {
         let component_str = extract_field(text, "COMPONENT").unwrap_or_default();
-        let motivation    = extract_field(text, "MOTIVATION").unwrap_or_default();
-        let root_cause    = extract_field(text, "ROOT_CAUSE").unwrap_or_default();
-        let fix           = extract_field(text, "FIX").unwrap_or_default();
-        let predicts_fix  = extract_field(text, "PREDICTS_FIX").unwrap_or_default();
-        let predicts_reg  = extract_field(text, "PREDICTS_REGRESSION").unwrap_or_default();
+        let motivation = extract_field(text, "MOTIVATION").unwrap_or_default();
+        let root_cause = extract_field(text, "ROOT_CAUSE").unwrap_or_default();
+        let fix = extract_field(text, "FIX").unwrap_or_default();
+        let predicts_fix = extract_field(text, "PREDICTS_FIX").unwrap_or_default();
+        let predicts_reg = extract_field(text, "PREDICTS_REGRESSION").unwrap_or_default();
 
         if motivation.is_empty() || fix.is_empty() {
             return Ok(None);
@@ -195,12 +232,18 @@ impl EvolvedLoop {
             root_cause,
             fix_description: fix.clone(),
             predicted_fixes: vec![predicts_fix],
-            predicted_regressions: if predicts_reg == "none" { vec![] } else { vec![predicts_reg] },
+            predicted_regressions: if predicts_reg == "none" {
+                vec![]
+            } else {
+                vec![predicts_reg]
+            },
             verification_status: VerificationStatus::Pending,
             verified_at: None,
         };
 
-        Ok(Some(EvolutionNode::new(motivation, component, fix, manifest)))
+        Ok(Some(EvolutionNode::new(
+            motivation, component, fix, manifest,
+        )))
     }
 
     async fn engineer_apply(&self, node: &mut EvolutionNode) -> Result<bool> {
@@ -211,20 +254,21 @@ impl EvolvedLoop {
         }
 
         if !self.git_worktree_clean().await? {
-            warn!("evolved: Engineer blocked — git worktree is dirty; refusing autonomous mutation");
+            warn!(
+                "evolved: Engineer blocked — git worktree is dirty; refusing autonomous mutation"
+            );
             return Ok(false);
         }
 
-        info!("evolved: Engineer applying change to {:?}", node.target_component);
+        info!(
+            "evolved: Engineer applying change to {:?}",
+            node.target_component
+        );
 
         // Apply the change based on component type
         let applied = match &node.target_component {
-            HarnessComponent::SystemPrompt => {
-                self.apply_system_prompt_change(&node.diff).await
-            }
-            HarnessComponent::HarnessConfig => {
-                self.apply_config_change(&node.diff).await
-            }
+            HarnessComponent::SystemPrompt => self.apply_system_prompt_change(&node.diff).await,
+            HarnessComponent::HarnessConfig => self.apply_config_change(&node.diff).await,
             HarnessComponent::ToolDescription(name) => {
                 self.apply_tool_description_change(name, &node.diff).await
             }
@@ -232,7 +276,10 @@ impl EvolvedLoop {
                 self.apply_skill_change(name, &node.diff).await
             }
             _ => {
-                warn!("evolved: component {:?} not yet implemented", node.target_component);
+                warn!(
+                    "evolved: component {:?} not yet implemented",
+                    node.target_component
+                );
                 Ok(false)
             }
         };
@@ -272,7 +319,11 @@ impl EvolvedLoop {
         Ok(false)
     }
 
-    async fn apply_tool_description_change(&self, _tool_name: &str, _new_desc: &str) -> Result<bool> {
+    async fn apply_tool_description_change(
+        &self,
+        _tool_name: &str,
+        _new_desc: &str,
+    ) -> Result<bool> {
         // Tool descriptions are in the registry; live mutation via skills/ YAML
         // Full implementation in Week 3
         Ok(false)
@@ -286,13 +337,17 @@ impl EvolvedLoop {
         Ok(true)
     }
 
-    async fn analyzer_verify(&self, node: &mut EvolutionNode, tracker: &OutcomeTracker) -> Result<()> {
-        let prompt = Analyzer::build_prompt(
-            &node.motivation,
-            &node.diff,
-            &node.results.to_string(),
-        );
-        let resp = self.ollama.generate(&prompt, None, Some(ModelOptions::for_evolution())).await?;
+    async fn analyzer_verify(
+        &self,
+        node: &mut EvolutionNode,
+        tracker: &OutcomeTracker,
+    ) -> Result<()> {
+        let prompt =
+            Analyzer::build_prompt(&node.motivation, &node.diff, &node.results.to_string());
+        let resp = self
+            .ollama
+            .generate(&prompt, None, Some(ModelOptions::for_evolution()))
+            .await?;
         let (_, answer) = resp.split_thinking();
 
         let (analysis, lesson) = Analyzer::parse_response(&answer);
@@ -353,7 +408,10 @@ impl EvolvedLoop {
             .output()
             .await?;
         if !out.status.success() {
-            anyhow::bail!("git status failed: {}", String::from_utf8_lossy(&out.stderr));
+            anyhow::bail!(
+                "git status failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
         }
         Ok(String::from_utf8_lossy(&out.stdout).trim().is_empty())
     }
@@ -401,17 +459,48 @@ impl EvolvedLoop {
             return Ok(());
         }
 
-        let mut restore = tokio::process::Command::new("git");
-        restore.args(["restore", "--staged", "--worktree", "--"]);
-        for path in &paths {
-            restore.arg(path);
+        let mut tracked_paths = Vec::new();
+        let mut untracked_paths = Vec::new();
+        for path in paths {
+            if self.git_path_tracked(&path).await? {
+                tracked_paths.push(path);
+            } else {
+                untracked_paths.push(path);
+            }
         }
-        let restore = restore.output().await?;
-        if !restore.status.success() {
-            anyhow::bail!("git restore failed: {}", String::from_utf8_lossy(&restore.stderr));
+
+        if !tracked_paths.is_empty() {
+            let mut restore = tokio::process::Command::new("git");
+            restore.args(["restore", "--staged", "--worktree", "--"]);
+            for path in &tracked_paths {
+                restore.arg(path);
+            }
+            let restore = restore.output().await?;
+            if !restore.status.success() {
+                anyhow::bail!(
+                    "git restore failed: {}",
+                    String::from_utf8_lossy(&restore.stderr)
+                );
+            }
         }
-        info!("evolved: rolled back rejected proposal paths: {:?}", paths);
+
+        for path in &untracked_paths {
+            if path.is_file() {
+                std::fs::remove_file(path)?;
+            }
+        }
+
+        info!("evolved: rolled back rejected proposal paths");
         Ok(())
+    }
+
+    async fn git_path_tracked(&self, path: &PathBuf) -> Result<bool> {
+        let out = tokio::process::Command::new("git")
+            .args(["ls-files", "--error-unmatch"])
+            .arg(path)
+            .output()
+            .await?;
+        Ok(out.status.success())
     }
 }
 
