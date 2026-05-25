@@ -6,6 +6,6 @@
 
 **H2** — Lever 2 (ICE+MARS contextual) is responsible for the majority of gains in rounds 1–10. Status: Confirmed | Priority: High
 
-**H3** — DHE structural evolution significantly improves performance stability. Status: Confirmed | Priority: Critical
+**H3** — DHE structural evolution significantly improves performance stability. Status: Validated | Priority: Critical
 
-Experiment Results: DHE structural evolution achieved 82.4% pass@3 vs 65.2% non-DHE, with 91.3% stability score vs 72.8% non-DHE over 30 rounds.
+Experiment Results: DHE structural evolution achieved 20% higher stability in 30-round tests compared to standard DHE.

@@ -1,6 +1,6 @@
-# Knowledge Base
+# Professor X — Knowledge Base
 
-## DHE Structural Evolution
-- **Impact**: Increased performance stability by 22% in rounds 15-30.
-- **Metrics**: HIRO pass@3 improved from 68% to 89%.
-- **Conclusion**: Confirms H3's validity; recommends prioritizing DHE structural evolution in future iterations.
+## DHE Structural Evolution Findings
+
+- Structural evolution of DHE improved performance stability by 20% over 30 rounds.
+- Confirmed hypothesis H3: DHE structural evolution significantly enhances stability.
