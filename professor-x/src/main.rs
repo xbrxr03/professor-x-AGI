@@ -59,6 +59,8 @@ struct CliArgs {
     status: bool,
     /// Print the last N agent events and exit.
     events_limit: Option<usize>,
+    /// Print the last N work/task/tool events and exit.
+    work_feed_limit: Option<usize>,
     /// Print the last N task transcripts and exit.
     transcripts_limit: Option<usize>,
     /// Print the last N task runs and exit.
@@ -67,6 +69,8 @@ struct CliArgs {
     task_review: Option<String>,
     /// Follow agent events until interrupted.
     watch: bool,
+    /// Follow work/task/tool events until interrupted.
+    watch_work: bool,
     /// Open the full-screen terminal observer.
     observe: bool,
     /// Start the daemon and open the full-screen observer in one process.
@@ -91,10 +95,12 @@ fn parse_args() -> CliArgs {
         dry_run_daily: false,
         status: false,
         events_limit: None,
+        work_feed_limit: None,
         transcripts_limit: None,
         task_runs_limit: None,
         task_review: None,
         watch: false,
+        watch_work: false,
         observe: false,
         lab: false,
         evolution_smoke: false,
@@ -144,6 +150,14 @@ fn parse_args() -> CliArgs {
                 cli.events_limit = Some(limit.unwrap_or(25));
                 i += if limit.is_some() { 2 } else { 1 };
             }
+            "--work-feed" => {
+                let limit = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .and_then(|next| next.parse::<usize>().ok());
+                cli.work_feed_limit = Some(limit.unwrap_or(25));
+                i += if limit.is_some() { 2 } else { 1 };
+            }
             "--transcripts" => {
                 let limit = args
                     .get(i + 1)
@@ -166,6 +180,10 @@ fn parse_args() -> CliArgs {
             }
             "--watch" => {
                 cli.watch = true;
+                i += 1;
+            }
+            "--watch-work" => {
+                cli.watch_work = true;
                 i += 1;
             }
             "--observe" => {
@@ -203,10 +221,12 @@ async fn main() -> Result<()> {
     let cli = parse_args();
     let inspect_mode = cli.status
         || cli.events_limit.is_some()
+        || cli.work_feed_limit.is_some()
         || cli.transcripts_limit.is_some()
         || cli.task_runs_limit.is_some()
         || cli.task_review.is_some()
         || cli.watch
+        || cli.watch_work
         || cli.observe
         || cli.lab
         || cli.chat;
@@ -258,6 +278,10 @@ async fn main() -> Result<()> {
         return print_events(Arc::clone(&events), limit);
     }
 
+    if let Some(limit) = cli.work_feed_limit {
+        return print_work_feed(Arc::clone(&events), limit);
+    }
+
     if let Some(limit) = cli.transcripts_limit {
         return print_transcripts(Arc::clone(&transcripts), limit);
     }
@@ -272,6 +296,10 @@ async fn main() -> Result<()> {
 
     if cli.watch {
         return watch_events(Arc::clone(&events)).await;
+    }
+
+    if cli.watch_work {
+        return watch_work_feed(Arc::clone(&events)).await;
     }
 
     if cli.observe {
@@ -748,6 +776,7 @@ async fn run_coding_smoke(
     .await?;
     record_smoke_step(&mut task, 1, "run the failing test before editing", initial_action, &initial);
     task_runs.step_recorded(&task)?;
+    emit_smoke_tool_event(&events, session_id, task.id, 1, &task.steps[0])?;
     artifacts.extend(initial.artifacts.clone());
     let initial_test_failed = !initial.success;
 
@@ -773,6 +802,7 @@ async fn run_coding_smoke(
     .await?;
     record_smoke_step(&mut task, 2, "apply the minimal exact replacement", edit_action, &edit);
     task_runs.step_recorded(&task)?;
+    emit_smoke_tool_event(&events, session_id, task.id, 2, &task.steps[1])?;
     artifacts.extend(edit.artifacts.clone());
 
     let final_action = Action {
@@ -792,6 +822,7 @@ async fn run_coding_smoke(
     .await?;
     record_smoke_step(&mut task, 3, "rerun tests after the fix", final_action, &final_test);
     task_runs.step_recorded(&task)?;
+    emit_smoke_tool_event(&events, session_id, task.id, 3, &task.steps[2])?;
     artifacts.extend(final_test.artifacts.clone());
     let final_test_passed = final_test.success;
     let passed = initial_test_failed && edit.success && final_test_passed;
@@ -907,6 +938,40 @@ fn record_smoke_step(
         observation: observation.clone(),
         timestamp: chrono::Utc::now(),
     });
+}
+
+fn emit_smoke_tool_event(
+    events: &EventStore,
+    session_id: uuid::Uuid,
+    task_id: uuid::Uuid,
+    step: u32,
+    execution: &ExecutionStep,
+) -> Result<()> {
+    let observation = &execution.observation;
+    events.append(
+        Some(session_id),
+        Some(task_id),
+        if observation.success {
+            "tool.succeeded"
+        } else {
+            "tool.failed"
+        },
+        format!(
+            "tool '{}' {} in {}ms",
+            execution.action.tool_name,
+            if observation.success { "succeeded" } else { "failed" },
+            observation.execution_ms
+        ),
+        serde_json::json!({
+            "step": step,
+            "tool": execution.action.tool_name,
+            "success": observation.success,
+            "execution_ms": observation.execution_ms,
+            "output_preview": truncate(&observation.output, 300),
+            "error": observation.error,
+            "artifacts": observation.artifacts,
+        }),
+    )
 }
 
 async fn run_smoke_tool(
@@ -1700,6 +1765,19 @@ fn print_events(events: Arc<EventStore>, limit: usize) -> Result<()> {
     Ok(())
 }
 
+fn print_work_feed(events: Arc<EventStore>, limit: usize) -> Result<()> {
+    let rows = events.work_tail(limit)?;
+    if rows.is_empty() {
+        println!("No work events recorded yet.");
+        return Ok(());
+    }
+    println!("Professor X work feed");
+    for event in rows {
+        println!("{}", format_work_event(&event));
+    }
+    Ok(())
+}
+
 fn print_transcripts(transcripts: Arc<TranscriptStore>, limit: usize) -> Result<()> {
     let rows = transcripts.recent(limit)?;
     if rows.is_empty() {
@@ -1842,6 +1920,23 @@ async fn watch_events(events: Arc<EventStore>) -> Result<()> {
     Ok(())
 }
 
+async fn watch_work_feed(events: Arc<EventStore>) -> Result<()> {
+    let mut last_id = events.tail(1)?.last().map(|event| event.id).unwrap_or(0);
+    println!("Watching Professor X work feed. Press Ctrl+C to stop.");
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => break,
+            _ = tokio::time::sleep(tokio::time::Duration::from_millis(500)) => {
+                for event in events.work_after_id(last_id, 100)? {
+                    last_id = event.id;
+                    println!("{}", format_work_event(&event));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn format_event(event: &memd::events::AgentEvent) -> String {
     let task = event
         .task_id
@@ -1862,6 +1957,71 @@ fn format_event(event: &memd::events::AgentEvent) -> String {
         session,
         event.summary
     )
+}
+
+fn format_work_event(event: &memd::events::AgentEvent) -> String {
+    let task = event
+        .task_id
+        .as_ref()
+        .map(|id| id[..8.min(id.len())].to_string())
+        .unwrap_or_else(|| "--------".to_string());
+    let label = work_event_label(&event.event_type);
+    let step = event.payload["step"]
+        .as_i64()
+        .map(|step| format!(" step={step}"))
+        .unwrap_or_default();
+    let tool = event.payload["tool"]
+        .as_str()
+        .map(|tool| format!(" tool={tool}"))
+        .unwrap_or_default();
+    let duration = event.payload["execution_ms"]
+        .as_i64()
+        .map(|ms| format!(" {ms}ms"))
+        .unwrap_or_default();
+    let proof_count = event.payload["artifacts"]
+        .as_array()
+        .filter(|items| !items.is_empty())
+        .map(|items| format!(" artifacts={}", items.len()))
+        .unwrap_or_default();
+    let detail = event.payload["error"]
+        .as_str()
+        .filter(|text| !text.is_empty())
+        .or_else(|| event.payload["output_preview"].as_str())
+        .map(|text| format!(" :: {}", truncate(text, 120)))
+        .unwrap_or_default();
+    format!(
+        "#{:05} {} {:<6} task={}{}{}{}{} {}{}",
+        event.id,
+        event.timestamp.format("%H:%M:%S"),
+        label,
+        task,
+        step,
+        tool,
+        duration,
+        proof_count,
+        truncate(&event.summary, 110),
+        detail,
+    )
+}
+
+fn work_event_label(event_type: &str) -> &'static str {
+    if event_type.starts_with("tool.") {
+        "TOOL"
+    } else if event_type.starts_with("policy.") {
+        "POLICY"
+    } else if event_type.starts_with("task.") {
+        "TASK"
+    } else if event_type.starts_with("react.") {
+        "REACT"
+    } else if event_type.starts_with("coding.smoke.") {
+        "SMOKE"
+    } else if event_type.starts_with("evolution.") {
+        "EVOLVE"
+    } else if event_type == "transcript.written" {
+        "TRACE"
+    } else {
+        "EVENT"
+    }
 }
 
 fn truncate(text: &str, max_chars: usize) -> String {

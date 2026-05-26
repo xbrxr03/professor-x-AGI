@@ -85,6 +85,23 @@ impl EventStore {
         Ok(events)
     }
 
+    pub fn work_tail(&self, limit: usize) -> Result<Vec<AgentEvent>> {
+        let limit = limit.clamp(1, 500) as i64;
+        let db = self.db.lock().unwrap();
+        let mut stmt = db.prepare(&format!(
+            "SELECT id, timestamp, session_id, task_id, event_type, summary, payload
+             FROM agent_events
+             WHERE {}
+             ORDER BY id DESC
+             LIMIT ?1",
+            work_event_where_clause()
+        ))?;
+        let rows = stmt.query_map(params![limit], parse_event)?;
+        let mut events: Vec<AgentEvent> = rows.map(|r| r.map_err(Into::into)).collect::<Result<_>>()?;
+        events.reverse();
+        Ok(events)
+    }
+
     pub fn after_id(&self, last_id: i64, limit: usize) -> Result<Vec<AgentEvent>> {
         let limit = limit.clamp(1, 500) as i64;
         let db = self.db.lock().unwrap();
@@ -95,6 +112,21 @@ impl EventStore {
              ORDER BY id ASC
              LIMIT ?2",
         )?;
+        let rows = stmt.query_map(params![last_id, limit], parse_event)?;
+        rows.map(|r| r.map_err(Into::into)).collect()
+    }
+
+    pub fn work_after_id(&self, last_id: i64, limit: usize) -> Result<Vec<AgentEvent>> {
+        let limit = limit.clamp(1, 500) as i64;
+        let db = self.db.lock().unwrap();
+        let mut stmt = db.prepare(&format!(
+            "SELECT id, timestamp, session_id, task_id, event_type, summary, payload
+             FROM agent_events
+             WHERE id > ?1 AND ({})
+             ORDER BY id ASC
+             LIMIT ?2",
+            work_event_where_clause()
+        ))?;
         let rows = stmt.query_map(params![last_id, limit], parse_event)?;
         rows.map(|r| r.map_err(Into::into)).collect()
     }
@@ -144,6 +176,16 @@ impl EventStore {
         writeln!(file, "{}", record)?;
         Ok(())
     }
+}
+
+fn work_event_where_clause() -> &'static str {
+    "event_type LIKE 'task.%'
+      OR event_type LIKE 'tool.%'
+      OR event_type LIKE 'policy.%'
+      OR event_type LIKE 'react.%'
+      OR event_type LIKE 'coding.smoke.%'
+      OR event_type LIKE 'evolution.%'
+      OR event_type = 'transcript.written'"
 }
 
 fn parse_event(row: &rusqlite::Row) -> rusqlite::Result<AgentEvent> {
@@ -200,5 +242,7 @@ mod tests {
         assert_eq!(events[0].event_type, "daemon.started");
         assert_eq!(events[1].payload["priority"], 100);
         assert_eq!(store.after_id(events[0].id, 10).unwrap().len(), 1);
+        assert_eq!(store.work_tail(10).unwrap().len(), 1);
+        assert_eq!(store.work_after_id(0, 10).unwrap().len(), 1);
     }
 }
