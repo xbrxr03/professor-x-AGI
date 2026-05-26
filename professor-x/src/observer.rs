@@ -60,6 +60,7 @@ pub fn print_snapshot(memory: Arc<MemoryManager>, events: Arc<EventStore>) -> Re
         snapshot.accepted_artifacts,
         snapshot.rejected_artifacts
     );
+    println!("  command artifacts: {}", snapshot.command_artifacts);
     let pass = snapshot
         .latest_pass_at_3
         .map(|v| format!("{v:.3}"))
@@ -212,6 +213,7 @@ struct ObserverSnapshot {
     verification_artifacts: usize,
     accepted_artifacts: usize,
     rejected_artifacts: usize,
+    command_artifacts: usize,
     git_branch: String,
     git_commit: String,
     git_dirty: bool,
@@ -302,6 +304,7 @@ impl ObserverSnapshot {
         snapshot.verification_artifacts = count_json_files(&artifact_root.join("verifications"));
         snapshot.accepted_artifacts = count_json_files(&artifact_root.join("accepted"));
         snapshot.rejected_artifacts = count_json_files(&artifact_root.join("rejections"));
+        snapshot.command_artifacts = count_json_files(&generic_artifact_root(&repo).join("commands"));
 
         for event in &snapshot.events {
             if event.event_type.starts_with("task.") {
@@ -343,6 +346,15 @@ fn evolution_artifact_root(repo: &Path) -> PathBuf {
         nested
     } else {
         repo.join("artifacts/evolution")
+    }
+}
+
+fn generic_artifact_root(repo: &Path) -> PathBuf {
+    let nested = repo.join("professor-x/artifacts");
+    if nested.exists() {
+        nested
+    } else {
+        repo.join("artifacts")
     }
 }
 
@@ -399,6 +411,7 @@ impl Default for ObserverSnapshot {
             verification_artifacts: 0,
             accepted_artifacts: 0,
             rejected_artifacts: 0,
+            command_artifacts: 0,
             git_branch: "unknown".to_string(),
             git_commit: "unknown".to_string(),
             git_dirty: false,
@@ -646,6 +659,10 @@ fn draw_science(frame: &mut Frame, area: Rect, app: &ObserverApp) {
             app.snapshot.verification_artifacts,
             app.snapshot.accepted_artifacts,
             app.snapshot.rejected_artifacts,
+        )),
+        Line::from(format!(
+            "Command output artifacts: {}",
+            app.snapshot.command_artifacts,
         )),
         Line::from(
             "Run --lab --run-now for daemon plus observer; --observe follows an existing run.",

@@ -59,6 +59,18 @@ pub struct ToolExecutor {
     workspace_root: PathBuf,
 }
 
+#[derive(Debug, Serialize)]
+struct CommandOutputArtifact<'a> {
+    command: &'a str,
+    exit_code: Option<i32>,
+    success: bool,
+    stdout: &'a str,
+    stderr: &'a str,
+    stdout_bytes: usize,
+    stderr_bytes: usize,
+    recorded_at: String,
+}
+
 impl ToolExecutor {
     pub fn new(registry: Arc<std::sync::RwLock<ToolRegistry>>) -> Self {
         Self {
@@ -175,17 +187,31 @@ impl ToolExecutor {
                     .await?;
                 let stdout = String::from_utf8_lossy(&out.stdout).to_string();
                 let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                let artifact_path = self.write_command_artifact(
+                    cmd,
+                    out.status.code(),
+                    out.status.success(),
+                    &stdout,
+                    &stderr,
+                )?;
                 if !out.status.success() {
-                    anyhow::bail!("exit {}: {stderr}", out.status.code().unwrap_or(-1));
+                    anyhow::bail!(
+                        "exit {}: {}; artifact={}",
+                        out.status.code().unwrap_or(-1),
+                        truncate_text(&stderr, 4000),
+                        artifact_path.display()
+                    );
                 }
-                Ok((
-                    if stderr.is_empty() {
-                        stdout
-                    } else {
-                        format!("{stdout}\nstderr: {stderr}")
-                    },
-                    0,
-                ))
+                let preview = if stderr.is_empty() {
+                    truncate_text(&stdout, 8000)
+                } else {
+                    format!(
+                        "{}\nstderr: {}",
+                        truncate_text(&stdout, 6000),
+                        truncate_text(&stderr, 2000)
+                    )
+                };
+                Ok((format!("{preview}\n[full output: {}]", artifact_path.display()), 0))
             }
             "patch.apply" => {
                 let patch = req_str(&action.params, "patch")?;
@@ -353,6 +379,34 @@ impl ToolExecutor {
         writeln!(file, "{patch}")?;
         Ok(path)
     }
+
+    fn write_command_artifact(
+        &self,
+        command: &str,
+        exit_code: Option<i32>,
+        success: bool,
+        stdout: &str,
+        stderr: &str,
+    ) -> Result<PathBuf> {
+        let dir = artifact_root(&self.workspace_root)
+            .join("commands")
+            .join(chrono::Utc::now().format("%Y-%m-%d").to_string());
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join(format!("{}.json", uuid::Uuid::new_v4()));
+        let artifact = CommandOutputArtifact {
+            command,
+            exit_code,
+            success,
+            stdout,
+            stderr,
+            stdout_bytes: stdout.len(),
+            stderr_bytes: stderr.len(),
+            recorded_at: chrono::Utc::now().to_rfc3339(),
+        };
+        let mut file = std::fs::File::create(&path)?;
+        writeln!(file, "{}", serde_json::to_string_pretty(&artifact)?)?;
+        Ok(path)
+    }
 }
 
 fn artifact_root(workspace_root: &std::path::Path) -> PathBuf {
@@ -505,6 +559,15 @@ fn req_str<'a>(p: &'a serde_json::Value, key: &str) -> Result<&'a str> {
         .ok_or_else(|| anyhow::anyhow!("missing param '{key}'"))
 }
 
+fn truncate_text(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let mut out = text.chars().take(max_chars).collect::<String>();
+    out.push_str("\n[... truncated; full output saved as artifact]");
+    out
+}
+
 fn default_workspace_root() -> PathBuf {
     let mut dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     loop {
@@ -546,6 +609,14 @@ mod tests {
         }
     }
 
+    fn shell_action(command: &str) -> Action {
+        Action {
+            tool_name: "shell.restricted".to_string(),
+            params: json!({"command": command}),
+            risk_score: 60,
+        }
+    }
+
     #[tokio::test]
     async fn patch_apply_checks_and_applies_reviewable_diff() {
         let root = temp_workspace();
@@ -570,5 +641,44 @@ mod tests {
         assert!(root.join("artifacts/patches").exists());
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn shell_restricted_writes_full_output_artifact() {
+        let root = temp_workspace();
+        let registry = Arc::new(std::sync::RwLock::new(ToolRegistry::new()));
+        let executor = ToolExecutor::new(registry).with_workspace_root(root.clone());
+
+        let obs = executor
+            .execute(&shell_action("printf 'hello professor x'"))
+            .await;
+        assert!(obs.success, "{:?}", obs.error);
+        assert!(obs.output.contains("hello professor x"));
+        assert!(obs.output.contains("[full output:"));
+
+        let artifacts = root.join("artifacts/commands");
+        assert!(artifacts.exists());
+        let files = collect_json_files(&artifacts);
+        assert_eq!(files.len(), 1);
+        let artifact: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&files[0]).unwrap()).unwrap();
+        assert_eq!(artifact["command"], "printf 'hello professor x'");
+        assert_eq!(artifact["success"], true);
+        assert_eq!(artifact["stdout"], "hello professor x");
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn collect_json_files(root: &std::path::Path) -> Vec<PathBuf> {
+        let mut files = Vec::new();
+        for entry in std::fs::read_dir(root).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                files.extend(collect_json_files(&path));
+            } else if path.extension().is_some_and(|ext| ext == "json") {
+                files.push(path);
+            }
+        }
+        files
     }
 }
