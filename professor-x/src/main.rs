@@ -2278,9 +2278,9 @@ fn print_work_loops(memory: Arc<MemoryManager>, limit: usize) -> Result<()> {
             run.failed_cycles,
             run.report_path,
         );
-        if let Some(smoke) = run.smoke_records.last() {
+        for smoke in run.smoke_records.iter().take(8) {
             println!(
-                "  latest cycle {}: {} smoke={} {} transcript={} detail={}",
+                "  cycle {}: {} smoke={} {} transcript={} detail={}",
                 smoke.cycle,
                 smoke.kind,
                 smoke
@@ -2291,6 +2291,9 @@ fn print_work_loops(memory: Arc<MemoryManager>, limit: usize) -> Result<()> {
                 smoke.transcript_path.as_deref().unwrap_or("none"),
                 truncate(&smoke.detail, 80),
             );
+        }
+        if run.smoke_records.len() > 8 {
+            println!("  ... {} more cycle(s)", run.smoke_records.len() - 8);
         }
     }
     Ok(())
