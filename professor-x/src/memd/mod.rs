@@ -1,3 +1,4 @@
+pub mod coding_smoke;
 pub mod events;
 pub mod episodic;
 pub mod pinned;
@@ -179,6 +180,20 @@ CREATE TABLE IF NOT EXISTS task_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_task_runs_updated ON task_runs(updated_at);
 CREATE INDEX IF NOT EXISTS idx_task_runs_status ON task_runs(status);
+
+CREATE TABLE IF NOT EXISTS coding_smokes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    generated_at TEXT NOT NULL,
+    workspace TEXT NOT NULL,
+    passed INTEGER NOT NULL DEFAULT 0,
+    initial_test_failed INTEGER NOT NULL DEFAULT 0,
+    edit_applied INTEGER NOT NULL DEFAULT 0,
+    final_test_passed INTEGER NOT NULL DEFAULT 0,
+    report_path TEXT NOT NULL,
+    artifacts TEXT NOT NULL DEFAULT '[]',
+    recorded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_coding_smokes_generated ON coding_smokes(generated_at);
 
 CREATE TABLE IF NOT EXISTS cron_jobs (
     id TEXT PRIMARY KEY,

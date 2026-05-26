@@ -16,6 +16,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::memd::coding_smoke::{CodingSmokeRecord, CodingSmokeStore};
 use crate::memd::events::{AgentEvent, EventStore};
 use crate::memd::task_runs::{TaskRun, TaskRunStore};
 use crate::memd::MemoryManager;
@@ -67,6 +68,19 @@ pub fn print_snapshot(memory: Arc<MemoryManager>, events: Arc<EventStore>) -> Re
         .map(|v| format!("{v:.3}"))
         .unwrap_or_else(|| "not run".to_string());
     println!("  HIRO: {} rounds, pass@3 {pass}", snapshot.hiro_rounds);
+    println!(
+        "  coding smoke: {} runs, {} passed",
+        snapshot.coding_smoke_count, snapshot.coding_smoke_passed
+    );
+    if let Some(smoke) = &snapshot.latest_coding_smoke {
+        println!(
+            "    latest: #{} {} / generated {} / report {}",
+            smoke.id.unwrap_or_default(),
+            if smoke.passed { "passed" } else { "failed" },
+            smoke.generated_at.format("%Y-%m-%d %H:%M:%S"),
+            smoke.report_path
+        );
+    }
     println!("  audit entries: {}", snapshot.audit_entries);
     println!("  task transcripts: {}", snapshot.transcript_count);
     if let Some(run) = &snapshot.latest_run {
@@ -238,6 +252,8 @@ struct ObserverSnapshot {
     task_run_count: i64,
     hiro_rounds: i64,
     latest_pass_at_3: Option<f64>,
+    coding_smoke_count: i64,
+    coding_smoke_passed: i64,
     task_events: usize,
     tool_events: usize,
     policy_events: usize,
@@ -260,6 +276,7 @@ struct ObserverSnapshot {
     latest_evolution: Option<AgentEvent>,
     latest_transcript: Option<AgentEvent>,
     latest_run: Option<TaskRun>,
+    latest_coding_smoke: Option<CodingSmokeRecord>,
 }
 
 impl ObserverSnapshot {
@@ -325,6 +342,10 @@ impl ObserverSnapshot {
             ..Self::default()
         };
         snapshot.latest_run = TaskRunStore::new(Arc::clone(&memory.db)).latest()?;
+        let smoke_store = CodingSmokeStore::new(Arc::clone(&memory.db));
+        snapshot.coding_smoke_count = smoke_store.count()?;
+        snapshot.coding_smoke_passed = smoke_store.pass_count()?;
+        snapshot.latest_coding_smoke = smoke_store.latest()?;
 
         let repo = repo_root();
         snapshot.git_branch = git_output(&repo, &["branch", "--show-current"])
@@ -443,6 +464,8 @@ impl Default for ObserverSnapshot {
             task_run_count: 0,
             hiro_rounds: 0,
             latest_pass_at_3: None,
+            coding_smoke_count: 0,
+            coding_smoke_passed: 0,
             task_events: 0,
             tool_events: 0,
             policy_events: 0,
@@ -465,6 +488,7 @@ impl Default for ObserverSnapshot {
             latest_evolution: None,
             latest_transcript: None,
             latest_run: None,
+            latest_coding_smoke: None,
         }
     }
 }
@@ -560,7 +584,7 @@ fn draw_body(frame: &mut Frame, area: Rect, app: &ObserverApp) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(9),
-            Constraint::Length(9),
+            Constraint::Length(10),
             Constraint::Min(8),
         ])
         .split(columns[0]);
@@ -594,6 +618,13 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &ObserverApp) {
             Span::raw(format!(
                 "{} rounds / pass@3 {pass}",
                 app.snapshot.hiro_rounds
+            )),
+        ]),
+        Line::from(vec![
+            Span::styled("Coding      ", label()),
+            Span::raw(format!(
+                "{} smoke / {} passed",
+                app.snapshot.coding_smoke_count, app.snapshot.coding_smoke_passed
             )),
         ]),
         Line::from(vec![
@@ -646,6 +677,7 @@ fn draw_activity(frame: &mut Frame, area: Rect, app: &ObserverApp) {
         latest_line("policy", &app.snapshot.latest_policy),
         latest_line("trace", &app.snapshot.latest_transcript),
         latest_line("evolve", &app.snapshot.latest_evolution),
+        latest_coding_smoke_line(&app.snapshot.latest_coding_smoke),
         Line::from(vec![
             Span::styled("commit  ", label()),
             Span::raw(
@@ -712,6 +744,7 @@ fn draw_science(frame: &mut Frame, area: Rect, app: &ObserverApp) {
             "Command output artifacts: {}",
             app.snapshot.command_artifacts,
         )),
+        latest_coding_smoke_detail(&app.snapshot.latest_coding_smoke),
         Line::from(
             "Run --lab --run-now for daemon plus observer; --observe follows an existing run.",
         ),
@@ -890,6 +923,28 @@ fn latest_run_line(run: &Option<TaskRun>) -> Line<'static> {
     }
 }
 
+fn latest_coding_smoke_line(smoke: &Option<CodingSmokeRecord>) -> Line<'static> {
+    match smoke {
+        Some(smoke) => Line::from(vec![
+            Span::styled("smoke   ", label()),
+            Span::styled(
+                if smoke.passed { "passed  " } else { "failed  " },
+                status_style(if smoke.passed { "Complete" } else { "Failed" }),
+            ),
+            Span::raw(format!(
+                "#{}  {} artifacts  {}",
+                smoke.id.unwrap_or_default(),
+                smoke.artifacts.len(),
+                truncate(&smoke.report_path, 58),
+            )),
+        ]),
+        None => Line::from(vec![
+            Span::styled("smoke   ", label()),
+            Span::styled("waiting", Style::default().fg(Color::DarkGray)),
+        ]),
+    }
+}
+
 fn status_style(status: &str) -> Style {
     let color = match status {
         "Complete" => Color::Green,
@@ -898,6 +953,20 @@ fn status_style(status: &str) -> Style {
         _ => Color::Yellow,
     };
     Style::default().fg(color)
+}
+
+fn latest_coding_smoke_detail(smoke: &Option<CodingSmokeRecord>) -> Line<'static> {
+    match smoke {
+        Some(smoke) => Line::from(format!(
+            "Coding smoke: {} / initial fail {} / edit {} / final pass {} / {}",
+            if smoke.passed { "passed" } else { "failed" },
+            smoke.initial_test_failed,
+            smoke.edit_applied,
+            smoke.final_test_passed,
+            truncate(&smoke.report_path, 74),
+        )),
+        None => Line::from("Coding smoke: waiting for first run."),
+    }
 }
 
 fn latest_run_detail(run: &Option<TaskRun>) -> Vec<Line<'static>> {

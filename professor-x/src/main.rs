@@ -28,6 +28,7 @@ use evolved::tracker::{OutcomeTracker, TaskOutcome};
 use evolved::verify_node_in_sandbox;
 use evolved::CognitionStore;
 use evolved::{EvolvedLoop, HiroRunner};
+use memd::coding_smoke::{CodingSmokeRecord, CodingSmokeStore};
 use memd::events::EventStore;
 use memd::transcripts::TranscriptStore;
 use memd::MemoryManager;
@@ -729,6 +730,21 @@ async fn run_coding_smoke(
         artifacts,
     };
     let report_path = write_coding_smoke_report(&report)?;
+    let generated_at = chrono::DateTime::parse_from_rfc3339(&report.generated_at)
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+        .unwrap_or_else(|_| chrono::Utc::now());
+    CodingSmokeStore::new(Arc::clone(&memory.db)).insert(&CodingSmokeRecord {
+        id: None,
+        generated_at,
+        workspace: report.workspace.clone(),
+        passed,
+        initial_test_failed,
+        edit_applied: edit.success,
+        final_test_passed,
+        report_path: report_path.display().to_string(),
+        artifacts: report.artifacts.clone(),
+        recorded_at: chrono::Utc::now(),
+    })?;
 
     events.append(
         None,

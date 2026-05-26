@@ -1,0 +1,12 @@
+{
+  "generated_at": "2026-05-26T17:03:12.733395695+00:00",
+  "workspace": "/tmp/px-coding-smoke-b7a756ca-f40a-43d5-b438-6c094bb3897c",
+  "passed": true,
+  "initial_test_failed": true,
+  "edit_applied": true,
+  "final_test_passed": true,
+  "artifacts": [
+    "/tmp/px-coding-smoke-b7a756ca-f40a-43d5-b438-6c094bb3897c/artifacts/replacements/2026-05-26/eb7789db-3aaa-4826-8246-90280b764f03.diff",
+    "/tmp/px-coding-smoke-b7a756ca-f40a-43d5-b438-6c094bb3897c/artifacts/commands/2026-05-26/becada4c-dc81-4462-bbe1-62922f11d606.json"
+  ]
+}
