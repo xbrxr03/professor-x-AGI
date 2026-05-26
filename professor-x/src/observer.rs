@@ -123,6 +123,12 @@ pub fn print_snapshot(memory: Arc<MemoryManager>, events: Arc<EventStore>) -> Re
         if let Some(path) = &run.transcript_path {
             println!("    transcript: {path}");
         }
+        if !run.verification_summary.is_empty() {
+            println!(
+                "    verification: {}",
+                truncate(&run.verification_summary, 110)
+            );
+        }
         if let Some(output) = &run.last_output_preview {
             println!("    output: {}", truncate(output, 110));
         }
@@ -131,6 +137,12 @@ pub fn print_snapshot(memory: Arc<MemoryManager>, events: Arc<EventStore>) -> Re
         }
         if !run.last_artifacts.is_empty() {
             println!("    artifacts: {}", run.last_artifacts.len());
+        }
+        if !run.verification_artifacts.is_empty() {
+            println!(
+                "    verification artifacts: {}",
+                run.verification_artifacts.len()
+            );
         }
     }
     println!("  events: {}", snapshot.total_events);
@@ -1086,6 +1098,18 @@ fn latest_run_detail(run: &Option<TaskRun>) -> Vec<Line<'static>> {
                 lines.push(Line::from(vec![
                     Span::styled("files   ", label()),
                     Span::raw(run.last_artifacts.len().to_string()),
+                ]));
+            }
+            if !run.verification_summary.is_empty() {
+                lines.push(Line::from(vec![
+                    Span::styled("verify  ", label()),
+                    Span::raw(truncate(&run.verification_summary, 96)),
+                ]));
+            }
+            if !run.verification_artifacts.is_empty() {
+                lines.push(Line::from(vec![
+                    Span::styled("proofs  ", label()),
+                    Span::raw(run.verification_artifacts.len().to_string()),
                 ]));
             }
             lines

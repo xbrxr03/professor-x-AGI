@@ -20,6 +20,8 @@ pub struct TaskRun {
     pub last_output_preview: Option<String>,
     pub last_error: Option<String>,
     pub last_artifacts: Vec<String>,
+    pub verification_summary: String,
+    pub verification_artifacts: Vec<String>,
     pub outcome_score: Option<f32>,
     pub failure_mode: Option<String>,
     pub transcript_path: Option<String>,
@@ -118,6 +120,9 @@ impl TaskRunStore {
         transcript_path: Option<&Path>,
     ) -> Result<()> {
         let now = Utc::now();
+        let (verification_summary, verification_artifacts) =
+            verification_for_task(task, transcript_path);
+        let verification_artifacts_raw = serde_json::to_string(&verification_artifacts)?;
         let db = self.db.lock().unwrap();
         db.execute(
             "UPDATE task_runs
@@ -128,8 +133,10 @@ impl TaskRunStore {
                  outcome_score = ?6,
                  failure_mode = ?7,
                  transcript_path = ?8,
-                 updated_at = ?9,
-                 completed_at = ?10
+                 verification_summary = ?9,
+                 verification_artifacts = ?10,
+                 updated_at = ?11,
+                 completed_at = ?12
              WHERE task_id = ?1",
             params![
                 task.id.to_string(),
@@ -146,6 +153,8 @@ impl TaskRunStore {
                 task.outcome_score,
                 failure_mode,
                 transcript_path.map(|path| path.display().to_string()),
+                verification_summary,
+                verification_artifacts_raw,
                 now.to_rfc3339(),
                 task.completed_at.unwrap_or(now).to_rfc3339(),
             ],
@@ -158,6 +167,7 @@ impl TaskRunStore {
         let mut stmt = db.prepare(
             "SELECT task_id, description, task_type, status, priority, attempt_count, step_count,
                     last_tool, last_summary, last_output_preview, last_error, last_artifacts,
+                    verification_summary, verification_artifacts,
                     outcome_score, failure_mode, transcript_path,
                     queued_at, started_at, updated_at, completed_at
              FROM task_runs
@@ -248,10 +258,11 @@ impl TaskRunStore {
 
 fn parse_run(row: &rusqlite::Row) -> rusqlite::Result<TaskRun> {
     let artifacts_raw: String = row.get(11)?;
-    let queued_at_raw: String = row.get(15)?;
-    let started_at_raw: Option<String> = row.get(16)?;
-    let updated_at_raw: String = row.get(17)?;
-    let completed_at_raw: Option<String> = row.get(18)?;
+    let verification_artifacts_raw: String = row.get(13)?;
+    let queued_at_raw: String = row.get(17)?;
+    let started_at_raw: Option<String> = row.get(18)?;
+    let updated_at_raw: String = row.get(19)?;
+    let completed_at_raw: Option<String> = row.get(20)?;
     Ok(TaskRun {
         task_id: row.get(0)?,
         description: row.get(1)?,
@@ -265,14 +276,52 @@ fn parse_run(row: &rusqlite::Row) -> rusqlite::Result<TaskRun> {
         last_output_preview: row.get(9)?,
         last_error: row.get(10)?,
         last_artifacts: serde_json::from_str(&artifacts_raw).unwrap_or_default(),
-        outcome_score: row.get(12)?,
-        failure_mode: row.get(13)?,
-        transcript_path: row.get(14)?,
+        verification_summary: row.get(12)?,
+        verification_artifacts: serde_json::from_str(&verification_artifacts_raw)
+            .unwrap_or_default(),
+        outcome_score: row.get(14)?,
+        failure_mode: row.get(15)?,
+        transcript_path: row.get(16)?,
         queued_at: parse_time(&queued_at_raw),
         started_at: started_at_raw.as_deref().map(parse_time),
         updated_at: parse_time(&updated_at_raw),
         completed_at: completed_at_raw.as_deref().map(parse_time),
     })
+}
+
+fn verification_for_task(task: &TaskNode, transcript_path: Option<&Path>) -> (String, Vec<String>) {
+    let succeeded = task
+        .steps
+        .iter()
+        .filter(|step| step.observation.success)
+        .count();
+    let failed = task.steps.len().saturating_sub(succeeded);
+    let mut artifacts = task
+        .steps
+        .iter()
+        .flat_map(|step| step.observation.artifacts.iter().cloned())
+        .collect::<Vec<_>>();
+    if let Some(path) = transcript_path {
+        artifacts.push(path.display().to_string());
+    }
+    artifacts.sort();
+    artifacts.dedup();
+    let transcript_status = if transcript_path.is_some() {
+        "transcript recorded"
+    } else {
+        "no transcript"
+    };
+    (
+        format!(
+            "{} step(s): {} succeeded, {} failed; {} artifact(s); {}",
+            task.steps.len(),
+            succeeded,
+            failed,
+            artifacts.len(),
+            transcript_status
+        ),
+        artifacts,
+    )
 }
 
 fn step_summary(step: &crate::agentd::graph::ExecutionStep) -> String {
@@ -324,6 +373,8 @@ mod tests {
                     last_output_preview TEXT,
                     last_error TEXT,
                     last_artifacts TEXT NOT NULL DEFAULT '[]',
+                    verification_summary TEXT NOT NULL DEFAULT '',
+                    verification_artifacts TEXT NOT NULL DEFAULT '[]',
                     outcome_score REAL,
                     failure_mode TEXT,
                     transcript_path TEXT,
@@ -381,6 +432,12 @@ mod tests {
         assert_eq!(latest.last_tool.as_deref(), Some("shell.restricted"));
         assert_eq!(latest.last_output_preview.as_deref(), Some("clean"));
         assert!(latest.last_artifacts.is_empty());
+        assert!(latest.verification_summary.contains("1 step(s)"));
+        assert!(latest.verification_summary.contains("transcript recorded"));
+        assert_eq!(
+            latest.verification_artifacts,
+            vec!["artifacts/transcripts/task.json".to_string()]
+        );
         assert_eq!(
             latest.transcript_path.as_deref(),
             Some("artifacts/transcripts/task.json")

@@ -170,6 +170,8 @@ CREATE TABLE IF NOT EXISTS task_runs (
     last_output_preview TEXT,
     last_error TEXT,
     last_artifacts TEXT NOT NULL DEFAULT '[]',
+    verification_summary TEXT NOT NULL DEFAULT '',
+    verification_artifacts TEXT NOT NULL DEFAULT '[]',
     outcome_score REAL,
     failure_mode TEXT,
     transcript_path TEXT,
@@ -305,6 +307,11 @@ impl MemoryManager {
                 ("last_output_preview", "TEXT"),
                 ("last_error", "TEXT"),
                 ("last_artifacts", "TEXT NOT NULL DEFAULT '[]'"),
+                ("verification_summary", "TEXT NOT NULL DEFAULT ''"),
+                (
+                    "verification_artifacts",
+                    "TEXT NOT NULL DEFAULT '[]'",
+                ),
             ],
         )?;
         ensure_columns(

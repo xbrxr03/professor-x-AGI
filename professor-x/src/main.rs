@@ -31,6 +31,7 @@ use evolved::CognitionStore;
 use evolved::{EvolvedLoop, HiroRunner};
 use memd::coding_smoke::{CodingSmokeRecord, CodingSmokeStore};
 use memd::events::EventStore;
+use memd::task_runs::TaskRunStore;
 use memd::transcripts::{TranscriptStore, TranscriptSummary};
 use memd::MemoryManager;
 use policyd::{AuditStore, Decision, PermissionScope, PolicyEngine};
@@ -695,6 +696,10 @@ async fn run_coding_smoke(
     task.started_at = Some(chrono::Utc::now());
     task.attempt_count = 1;
     task.max_attempts = 1;
+    let task_runs = TaskRunStore::new(Arc::clone(&memory.db));
+    task_runs.queued(&task)?;
+    task_runs.started(&task)?;
+    task_runs.attempt_started(&task)?;
 
     events.append(
         None,
@@ -726,6 +731,7 @@ async fn run_coding_smoke(
     )
     .await?;
     record_smoke_step(&mut task, 1, "run the failing test before editing", initial_action, &initial);
+    task_runs.step_recorded(&task)?;
     artifacts.extend(initial.artifacts.clone());
     let initial_test_failed = !initial.success;
 
@@ -750,6 +756,7 @@ async fn run_coding_smoke(
     )
     .await?;
     record_smoke_step(&mut task, 2, "apply the minimal exact replacement", edit_action, &edit);
+    task_runs.step_recorded(&task)?;
     artifacts.extend(edit.artifacts.clone());
 
     let final_action = Action {
@@ -768,6 +775,7 @@ async fn run_coding_smoke(
     )
     .await?;
     record_smoke_step(&mut task, 3, "rerun tests after the fix", final_action, &final_test);
+    task_runs.step_recorded(&task)?;
     artifacts.extend(final_test.artifacts.clone());
     let final_test_passed = final_test.success;
     let passed = initial_test_failed && edit.success && final_test_passed;
@@ -802,6 +810,15 @@ async fn run_coding_smoke(
             }),
         )?;
     }
+    task_runs.finished(
+        &task,
+        if passed {
+            None
+        } else {
+            Some("coding smoke failed")
+        },
+        transcript_path.as_deref(),
+    )?;
     let report = CodingSmokeReport {
         generated_at: chrono::Utc::now().to_rfc3339(),
         workspace: workspace.display().to_string(),
