@@ -837,14 +837,15 @@ impl EvolvedLoop {
     }
 
     async fn commit_node(&self, node: &EvolutionNode) -> Result<Option<String>> {
-        let paths = changed_paths_for_node_at(&default_repo_root(), node);
+        let repo_root = default_repo_root();
+        let paths = changed_paths_for_node_at(&repo_root, node);
         if paths.is_empty() {
             warn!("evolved: accepted node has no known changed paths; skipping commit");
             return Ok(None);
         }
 
         let mut add = tokio::process::Command::new("git");
-        add.arg("add");
+        add.arg("add").current_dir(&repo_root);
         for path in &paths {
             add.arg(path);
         }
@@ -860,6 +861,7 @@ impl EvolvedLoop {
         );
         let commit = tokio::process::Command::new("git")
             .args(["commit", "-m", &commit_msg])
+            .current_dir(&repo_root)
             .output()
             .await?;
         if !commit.status.success() {
@@ -870,7 +872,7 @@ impl EvolvedLoop {
             }
             anyhow::bail!("git commit failed: {err}");
         }
-        Ok(Some(git_head(&default_repo_root()).await?))
+        Ok(Some(git_head(&repo_root).await?))
     }
 
     fn emit_event(
