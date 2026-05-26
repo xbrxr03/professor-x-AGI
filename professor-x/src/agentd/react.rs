@@ -34,6 +34,7 @@ use crate::evolved::lcap::LcapPolicy;
 use crate::evolved::tracker::TaskOutcome;
 use crate::memd::episodic::EpisodicEntry;
 use crate::memd::events::EventStore;
+use crate::memd::transcripts::TranscriptStore;
 use crate::memd::MemoryManager;
 use crate::ollama::{ModelOptions, OllamaClient};
 use crate::policyd::{AuditStore, Decision, PermissionScope, PolicyEngine};
@@ -57,6 +58,7 @@ pub struct ReactLoop {
     lcap: Arc<std::sync::Mutex<LcapPolicy>>,
     current_round: u32,
     events: Option<Arc<EventStore>>,
+    transcripts: Option<Arc<TranscriptStore>>,
 }
 
 impl ReactLoop {
@@ -76,6 +78,7 @@ impl ReactLoop {
             lcap: Arc::new(std::sync::Mutex::new(LcapPolicy::new())),
             current_round: 0,
             events: None,
+            transcripts: None,
         }
     }
 
@@ -87,6 +90,11 @@ impl ReactLoop {
 
     pub fn with_events(mut self, events: Arc<EventStore>) -> Self {
         self.events = Some(events);
+        self
+    }
+
+    pub fn with_transcripts(mut self, transcripts: Arc<TranscriptStore>) -> Self {
+        self.transcripts = Some(transcripts);
         self
     }
 
@@ -146,6 +154,7 @@ impl ReactLoop {
                     task.outcome_score = Some(1.0);
 
                     self.write_episodic(task, true).await;
+                    self.record_transcript(task, "succeeded", "task completed successfully");
                     self.emit_event(
                         None,
                         Some(task.id),
@@ -215,6 +224,7 @@ impl ReactLoop {
         task.outcome_score = Some(0.0);
 
         self.write_episodic(task, false).await;
+        self.record_transcript(task, "failed", &failure_mode);
         self.emit_event(
             None,
             Some(task.id),
@@ -535,6 +545,26 @@ impl ReactLoop {
             if let Err(e) = events.append(session_id, task_id, event_type, summary, payload) {
                 warn!("agent event write failed: {e}");
             }
+        }
+    }
+
+    fn record_transcript(&self, task: &TaskNode, status: &str, summary: &str) {
+        let (Some(transcripts), Some(events)) = (&self.transcripts, &self.events) else {
+            return;
+        };
+        match transcripts.record_task(task, status, summary, events) {
+            Ok(path) => self.emit_event(
+                None,
+                Some(task.id),
+                "transcript.written",
+                format!("task transcript written to {}", path.display()),
+                json!({
+                    "path": path,
+                    "status": status,
+                    "summary": summary,
+                }),
+            ),
+            Err(e) => warn!("task transcript write failed: {e}"),
         }
     }
 

@@ -99,6 +99,20 @@ impl EventStore {
         rows.map(|r| r.map_err(Into::into)).collect()
     }
 
+    pub fn for_task(&self, task_id: Uuid, limit: usize) -> Result<Vec<AgentEvent>> {
+        let limit = limit.clamp(1, 2000) as i64;
+        let db = self.db.lock().unwrap();
+        let mut stmt = db.prepare(
+            "SELECT id, timestamp, session_id, task_id, event_type, summary, payload
+             FROM agent_events
+             WHERE task_id = ?1
+             ORDER BY id ASC
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![task_id.to_string(), limit], parse_event)?;
+        rows.map(|r| r.map_err(Into::into)).collect()
+    }
+
     fn append_jsonl(
         &self,
         id: i64,

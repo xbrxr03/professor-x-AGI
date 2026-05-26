@@ -147,6 +147,7 @@ struct ObserverSnapshot {
     active_jobs: i64,
     paused_jobs: i64,
     audit_entries: i64,
+    transcript_count: i64,
     hiro_rounds: i64,
     latest_pass_at_3: Option<f64>,
     task_events: usize,
@@ -157,6 +158,7 @@ struct ObserverSnapshot {
     latest_tool: Option<AgentEvent>,
     latest_policy: Option<AgentEvent>,
     latest_evolution: Option<AgentEvent>,
+    latest_transcript: Option<AgentEvent>,
 }
 
 impl ObserverSnapshot {
@@ -175,6 +177,8 @@ impl ObserverSnapshot {
         )?;
         let audit_entries: i64 =
             db.query_row("SELECT COUNT(*) FROM audit_log", [], |row| row.get(0))?;
+        let transcript_count: i64 =
+            db.query_row("SELECT COUNT(*) FROM task_transcripts", [], |row| row.get(0))?;
         let hiro_rounds: i64 =
             db.query_row("SELECT COUNT(*) FROM hiro_rounds", [], |row| row.get(0))?;
         let total_events: i64 =
@@ -194,6 +198,7 @@ impl ObserverSnapshot {
             active_jobs,
             paused_jobs,
             audit_entries,
+            transcript_count,
             hiro_rounds,
             latest_pass_at_3,
             ..Self::default()
@@ -212,6 +217,8 @@ impl ObserverSnapshot {
             } else if event.event_type.starts_with("evolution.") {
                 snapshot.evolution_events += 1;
                 snapshot.latest_evolution = Some(event.clone());
+            } else if event.event_type.starts_with("transcript.") {
+                snapshot.latest_transcript = Some(event.clone());
             }
         }
 
@@ -250,7 +257,9 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &ObserverApp) {
         Span::raw(" active   "),
         Span::styled("audit ", Style::default().fg(Color::Gray)),
         Span::styled(app.snapshot.audit_entries.to_string(), Style::default().fg(Color::Magenta)),
-        Span::raw(" entries"),
+        Span::raw(" entries   "),
+        Span::styled("transcripts ", Style::default().fg(Color::Gray)),
+        Span::styled(app.snapshot.transcript_count.to_string(), Style::default().fg(Color::Green)),
     ]);
     frame.render_widget(
         Paragraph::new(vec![title, subtitle])
@@ -294,6 +303,7 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &ObserverApp) {
         Line::from(vec![Span::styled("Scheduler   ", label()), Span::raw(format!("{} active / {} paused", app.snapshot.active_jobs, app.snapshot.paused_jobs))]),
         Line::from(vec![Span::styled("HIRO        ", label()), Span::raw(format!("{} rounds / pass@3 {pass}", app.snapshot.hiro_rounds))]),
         Line::from(vec![Span::styled("Audit       ", label()), Span::raw(format!("{} entries", app.snapshot.audit_entries))]),
+        Line::from(vec![Span::styled("Transcripts ", label()), Span::raw(format!("{} tasks", app.snapshot.transcript_count))]),
         Line::from(vec![Span::styled("Event log   ", label()), Span::raw(format!("{} recorded", app.snapshot.total_events))]),
     ];
     frame.render_widget(
@@ -309,6 +319,7 @@ fn draw_activity(frame: &mut Frame, area: Rect, app: &ObserverApp) {
         latest_line("task", &app.snapshot.latest_task),
         latest_line("tool", &app.snapshot.latest_tool),
         latest_line("policy", &app.snapshot.latest_policy),
+        latest_line("trace", &app.snapshot.latest_transcript),
         latest_line("evolve", &app.snapshot.latest_evolution),
     ];
     frame.render_widget(

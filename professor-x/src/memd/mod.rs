@@ -3,6 +3,7 @@ pub mod episodic;
 pub mod pinned;
 pub mod procedural;
 pub mod semantic;
+pub mod transcripts;
 pub mod working;
 
 use anyhow::Result;
@@ -136,6 +137,23 @@ CREATE TABLE IF NOT EXISTS agent_events (
 CREATE INDEX IF NOT EXISTS idx_agent_events_timestamp ON agent_events(timestamp);
 CREATE INDEX IF NOT EXISTS idx_agent_events_type ON agent_events(event_type);
 CREATE INDEX IF NOT EXISTS idx_agent_events_task ON agent_events(task_id);
+
+CREATE TABLE IF NOT EXISTS task_transcripts (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    session_ids TEXT NOT NULL DEFAULT '[]',
+    task_description TEXT NOT NULL,
+    status TEXT NOT NULL,
+    started_at TEXT,
+    completed_at TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    step_count INTEGER NOT NULL DEFAULT 0,
+    transcript_path TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    recorded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_task_transcripts_task ON task_transcripts(task_id);
+CREATE INDEX IF NOT EXISTS idx_task_transcripts_recorded ON task_transcripts(recorded_at);
 
 CREATE TABLE IF NOT EXISTS cron_jobs (
     id TEXT PRIMARY KEY,

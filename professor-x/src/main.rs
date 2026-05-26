@@ -1,3 +1,4 @@
+mod artifacts;
 mod agentd;
 mod evolved;
 mod memd;
@@ -16,11 +17,13 @@ use tracing_subscriber::EnvFilter;
 
 use agentd::react::ReactLoop;
 use agentd::{TaskNode, TaskQueue, TaskType};
+use artifacts::ArtifactValidator;
 use evolved::cognition_base::CognitionItem;
 use evolved::tracker::{OutcomeTracker, TaskOutcome};
 use evolved::CognitionStore;
 use evolved::{EvolvedLoop, HiroRunner};
 use memd::events::EventStore;
+use memd::transcripts::TranscriptStore;
 use memd::MemoryManager;
 use policyd::{AuditStore, PolicyEngine};
 use toolbridge::ToolRegistry;
@@ -159,6 +162,17 @@ async fn main() -> Result<()> {
     let events = Arc::new(
         EventStore::new(Arc::clone(&memory.db)).with_jsonl_mirror(event_log_dir),
     );
+    let transcript_dir = std::env::var("PROFESSOR_X_TRANSCRIPT_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("artifacts/transcripts"));
+    let transcripts = Arc::new(TranscriptStore::new(
+        Arc::clone(&memory.db),
+        transcript_dir,
+    ));
+    let artifact_report_dir = std::env::var("PROFESSOR_X_ARTIFACT_REPORT_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("artifacts/validation"));
+    let artifact_validator = Arc::new(ArtifactValidator::new(artifact_report_dir));
     info!("memd: initialized at {}", data_dir.display());
 
     if cli.status {
@@ -267,6 +281,7 @@ async fn main() -> Result<()> {
             Arc::clone(&policy),
             Arc::clone(&memory),
             Arc::clone(&events),
+            Arc::clone(&transcripts),
             cancel,
         )
         .await;
@@ -306,13 +321,26 @@ async fn main() -> Result<()> {
             Arc::clone(&policy),
             Arc::clone(&memory),
             Arc::clone(&events),
+            Arc::clone(&transcripts),
+            Arc::clone(&artifact_validator),
             cancel,
             cli.run_now,
         )
         .await;
     }
 
-    run_daemon(ollama, registry, policy, memory, events, cancel, cli.run_now).await
+    run_daemon(
+        ollama,
+        registry,
+        policy,
+        memory,
+        events,
+        transcripts,
+        artifact_validator,
+        cancel,
+        cli.run_now,
+    )
+    .await
 }
 
 // ── Lab mode ─────────────────────────────────────────────────────────────────
@@ -323,6 +351,8 @@ async fn run_lab(
     policy: Arc<PolicyEngine>,
     memory: Arc<MemoryManager>,
     events: Arc<EventStore>,
+    transcripts: Arc<TranscriptStore>,
+    artifact_validator: Arc<ArtifactValidator>,
     cancel: CancellationToken,
     run_now: bool,
 ) -> Result<()> {
@@ -340,9 +370,22 @@ async fn run_lab(
         let policy = Arc::clone(&policy);
         let memory = Arc::clone(&memory);
         let events = Arc::clone(&events);
+        let transcripts = Arc::clone(&transcripts);
+        let artifact_validator = Arc::clone(&artifact_validator);
         let cancel = cancel.clone();
         tokio::spawn(async move {
-            run_daemon(ollama, registry, policy, memory, events, cancel, run_now).await
+            run_daemon(
+                ollama,
+                registry,
+                policy,
+                memory,
+                events,
+                transcripts,
+                artifact_validator,
+                cancel,
+                run_now,
+            )
+            .await
         })
     };
 
@@ -371,6 +414,8 @@ async fn run_daemon(
     policy: Arc<PolicyEngine>,
     memory: Arc<MemoryManager>,
     events: Arc<EventStore>,
+    transcripts: Arc<TranscriptStore>,
+    artifact_validator: Arc<ArtifactValidator>,
     cancel: CancellationToken,
     run_now: bool,
 ) -> Result<()> {
@@ -443,6 +488,8 @@ async fn run_daemon(
                 let cancel_ref   = cancel.clone();
                 let outcome_tx   = outcome_tx.clone();
                 let events_ref   = Arc::clone(&events);
+                let transcripts_ref = Arc::clone(&transcripts);
+                let artifact_validator_ref = Arc::clone(&artifact_validator);
 
                 tokio::spawn(async move {
                     let react = ReactLoop::new(
@@ -452,24 +499,47 @@ async fn run_daemon(
                         memory_ref,
                         cancel_ref,
                     )
-                    .with_events(Arc::clone(&events_ref));
+                    .with_events(Arc::clone(&events_ref))
+                    .with_transcripts(transcripts_ref);
                     match react.run(&mut task).await {
                         Ok(mut outcome) => {
-                            if let Some(validation_error) = validate_scheduled_artifacts(&task) {
-                                warn!(
-                                    "task '{}' failed artifact validation: {validation_error}",
-                                    task.description
-                                );
-                                let _ = events_ref.append(
-                                    None,
-                                    Some(task.id),
-                                    "artifact.invalid",
-                                    validation_error.clone(),
-                                    serde_json::json!({"task": task.description}),
-                                );
-                                outcome.success = false;
-                                outcome.score = 0.0;
-                                outcome.failure_mode = Some(validation_error);
+                            match artifact_validator_ref.validate_task(&task) {
+                                Ok(Some(mut report)) => {
+                                    let report_path = artifact_validator_ref.write_report(&mut report).ok();
+                                    let event_type = if report.passed {
+                                        "artifact.valid"
+                                    } else {
+                                        "artifact.invalid"
+                                    };
+                                    let _ = events_ref.append(
+                                        None,
+                                        Some(task.id),
+                                        event_type,
+                                        if report.passed {
+                                            "artifact validation passed".to_string()
+                                        } else {
+                                            report.failure_reason().unwrap_or_else(|| "artifact validation failed".to_string())
+                                        },
+                                        serde_json::json!({
+                                            "passed": report.passed,
+                                            "checks": report.checks,
+                                            "artifacts": report.artifacts,
+                                            "report_path": report_path,
+                                        }),
+                                    );
+                                    if !report.passed {
+                                        let failure = report.failure_reason().unwrap_or_else(|| "artifact validation failed".to_string());
+                                        warn!(
+                                            "task '{}' failed artifact validation: {failure}",
+                                            task.description
+                                        );
+                                        outcome.success = false;
+                                        outcome.score = 0.0;
+                                        outcome.failure_mode = Some(failure);
+                                    }
+                                }
+                                Ok(None) => {}
+                                Err(e) => warn!("artifact validation error: {e}"),
                             }
                             info!(
                                 "task '{}' {} (score={:.2})",
@@ -567,6 +637,7 @@ async fn run_single_task(
     policy: Arc<PolicyEngine>,
     memory: Arc<MemoryManager>,
     events: Arc<EventStore>,
+    transcripts: Arc<TranscriptStore>,
     cancel: CancellationToken,
 ) -> Result<()> {
     info!("one-shot task: {description}");
@@ -577,7 +648,9 @@ async fn run_single_task(
         format!("queued one-shot task: {description}"),
         serde_json::json!({"task_type": "UserRequest"}),
     )?;
-    let react = ReactLoop::new(ollama, registry, policy, memory, cancel).with_events(events);
+    let react = ReactLoop::new(ollama, registry, policy, memory, cancel)
+        .with_events(events)
+        .with_transcripts(transcripts);
     let mut task = TaskNode::new(description, TaskType::UserRequest, 100);
     let outcome = react.run(&mut task).await?;
     info!(
@@ -705,12 +778,15 @@ fn print_status(memory: Arc<MemoryManager>, events: Arc<EventStore>) -> Result<(
         db.query_row("SELECT COUNT(*) FROM hiro_rounds", [], |row| row.get(0))?;
     let audit_entries: i64 =
         db.query_row("SELECT COUNT(*) FROM audit_log", [], |row| row.get(0))?;
+    let transcripts: i64 =
+        db.query_row("SELECT COUNT(*) FROM task_transcripts", [], |row| row.get(0))?;
     drop(db);
 
     println!("Professor X status");
     println!("  scheduled jobs: {active_jobs} active, {paused_jobs} paused");
     println!("  HIRO rounds: {hiro_rounds}");
     println!("  audit entries: {audit_entries}");
+    println!("  task transcripts: {transcripts}");
     println!("  recent events:");
     for event in events.tail(8)? {
         println!("  {}", format_event(&event));
@@ -843,41 +919,6 @@ fn seed_daily_schedule(scheduler: &agentd::CronScheduler, fire_now: bool) -> Res
     Ok(())
 }
 
-fn validate_scheduled_artifacts(task: &TaskNode) -> Option<String> {
-    if task.task_type != TaskType::Scheduled {
-        return None;
-    }
-
-    if std::path::Path::new("professor-x").exists() {
-        return Some(
-            "scheduled job created nested professor-x/ directory inside crate; refusing outcome"
-                .to_string(),
-        );
-    }
-
-    if let Some(job_id) = scheduled_job_id(&task.description) {
-        if job_id.contains("daily-update") {
-            let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-            let expected = std::path::PathBuf::from("ops/daily").join(format!("{today}.md"));
-            if !expected.exists() {
-                return Some(format!(
-                    "scheduled job '{job_id}' did not write expected daily note {}",
-                    expected.display()
-                ));
-            }
-        }
-    }
-
-    None
-}
-
-fn scheduled_job_id(description: &str) -> Option<String> {
-    let marker = "scheduled daily job '";
-    let start = description.find(marker)? + marker.len();
-    let rest = &description[start..];
-    let end = rest.find('\'')?;
-    Some(rest[..end].to_string())
-}
 
 // ── Cognition base ────────────────────────────────────────────────────────────
 
