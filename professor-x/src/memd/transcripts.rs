@@ -13,6 +13,19 @@ use uuid::Uuid;
 use crate::agentd::graph::{ExecutionStep, TaskNode};
 use crate::memd::events::{AgentEvent, EventStore};
 
+#[derive(Debug, Clone)]
+pub struct TranscriptSummary {
+    pub id: String,
+    pub task_id: String,
+    pub task_description: String,
+    pub status: String,
+    pub attempt_count: u8,
+    pub step_count: usize,
+    pub transcript_path: String,
+    pub summary: String,
+    pub recorded_at: DateTime<Utc>,
+}
+
 #[derive(Clone)]
 pub struct TranscriptStore {
     db: Arc<Mutex<Connection>>,
@@ -100,6 +113,57 @@ impl TranscriptStore {
 
         Ok(path)
     }
+
+    pub fn recent(&self, limit: usize) -> Result<Vec<TranscriptSummary>> {
+        let limit = limit.clamp(1, 100) as i64;
+        let db = self.db.lock().unwrap();
+        let mut stmt = db.prepare(
+            "SELECT id, task_id, task_description, status, attempt_count, step_count,
+                    transcript_path, summary, recorded_at
+             FROM task_transcripts
+             ORDER BY recorded_at DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit], parse_summary)?;
+        rows.map(|r| r.map_err(Into::into)).collect()
+    }
+
+    pub fn latest(&self) -> Result<Option<TranscriptSummary>> {
+        Ok(self.recent(1)?.into_iter().next())
+    }
+
+    pub fn get_by_task_prefix(&self, task_ref: &str) -> Result<Option<TranscriptSummary>> {
+        let db = self.db.lock().unwrap();
+        let pattern = format!("{task_ref}%");
+        let mut stmt = db.prepare(
+            "SELECT id, task_id, task_description, status, attempt_count, step_count,
+                    transcript_path, summary, recorded_at
+             FROM task_transcripts
+             WHERE task_id LIKE ?1
+             ORDER BY recorded_at DESC
+             LIMIT 1",
+        )?;
+        let mut rows = stmt.query(params![pattern])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        Ok(Some(parse_summary(row)?))
+    }
+}
+
+fn parse_summary(row: &rusqlite::Row) -> rusqlite::Result<TranscriptSummary> {
+    let recorded_at_raw: String = row.get(8)?;
+    Ok(TranscriptSummary {
+        id: row.get(0)?,
+        task_id: row.get(1)?,
+        task_description: row.get(2)?,
+        status: row.get(3)?,
+        attempt_count: row.get::<_, i64>(4)? as u8,
+        step_count: row.get::<_, i64>(5)? as usize,
+        transcript_path: row.get(6)?,
+        summary: row.get(7)?,
+        recorded_at: parse_time(&recorded_at_raw),
+    })
 }
 
 #[derive(Debug, Serialize)]
@@ -243,6 +307,12 @@ fn git_diff_snapshot(repo: &std::path::Path) -> (String, bool) {
     (truncated, true)
 }
 
+fn parse_time(raw: &str) -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339(raw)
+        .map(|dt| dt.with_timezone(&Utc))
+        .unwrap_or_else(|_| Utc::now())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,5 +402,15 @@ mod tests {
         assert!(transcript["review"]["changed_files"].is_array());
         assert!(transcript["review"]["git_diff"].is_string());
         assert!(transcript["steps"].as_array().unwrap().len() == 1);
+
+        let recent = store.recent(5).unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].task_description, "fix failing test");
+        assert_eq!(recent[0].status, "succeeded");
+        let by_prefix = store
+            .get_by_task_prefix(&task.id.to_string()[..8])
+            .unwrap()
+            .unwrap();
+        assert_eq!(by_prefix.task_id, task.id.to_string());
     }
 }

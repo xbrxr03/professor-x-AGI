@@ -30,7 +30,7 @@ use evolved::CognitionStore;
 use evolved::{EvolvedLoop, HiroRunner};
 use memd::coding_smoke::{CodingSmokeRecord, CodingSmokeStore};
 use memd::events::EventStore;
-use memd::transcripts::TranscriptStore;
+use memd::transcripts::{TranscriptStore, TranscriptSummary};
 use memd::MemoryManager;
 use policyd::{AuditStore, Decision, PermissionScope, PolicyEngine};
 use toolbridge::executor::{Action, Observation};
@@ -57,6 +57,10 @@ struct CliArgs {
     status: bool,
     /// Print the last N agent events and exit.
     events_limit: Option<usize>,
+    /// Print the last N task transcripts and exit.
+    transcripts_limit: Option<usize>,
+    /// Print a task transcript review by task id prefix, or 'latest'.
+    task_review: Option<String>,
     /// Follow agent events until interrupted.
     watch: bool,
     /// Open the full-screen terminal observer.
@@ -83,6 +87,8 @@ fn parse_args() -> CliArgs {
         dry_run_daily: false,
         status: false,
         events_limit: None,
+        transcripts_limit: None,
+        task_review: None,
         watch: false,
         observe: false,
         lab: false,
@@ -133,6 +139,18 @@ fn parse_args() -> CliArgs {
                 cli.events_limit = Some(limit.unwrap_or(25));
                 i += if limit.is_some() { 2 } else { 1 };
             }
+            "--transcripts" => {
+                let limit = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .and_then(|next| next.parse::<usize>().ok());
+                cli.transcripts_limit = Some(limit.unwrap_or(10));
+                i += if limit.is_some() { 2 } else { 1 };
+            }
+            "--task-review" if i + 1 < args.len() => {
+                cli.task_review = Some(args[i + 1].clone());
+                i += 2;
+            }
             "--watch" => {
                 cli.watch = true;
                 i += 1;
@@ -170,8 +188,14 @@ fn parse_args() -> CliArgs {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = parse_args();
-    let inspect_mode =
-        cli.status || cli.events_limit.is_some() || cli.watch || cli.observe || cli.lab || cli.chat;
+    let inspect_mode = cli.status
+        || cli.events_limit.is_some()
+        || cli.transcripts_limit.is_some()
+        || cli.task_review.is_some()
+        || cli.watch
+        || cli.observe
+        || cli.lab
+        || cli.chat;
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| {
@@ -218,6 +242,14 @@ async fn main() -> Result<()> {
 
     if let Some(limit) = cli.events_limit {
         return print_events(Arc::clone(&events), limit);
+    }
+
+    if let Some(limit) = cli.transcripts_limit {
+        return print_transcripts(Arc::clone(&transcripts), limit);
+    }
+
+    if let Some(task_ref) = cli.task_review {
+        return print_task_review(Arc::clone(&transcripts), &task_ref);
     }
 
     if cli.watch {
@@ -1560,6 +1592,89 @@ fn print_events(events: Arc<EventStore>, limit: usize) -> Result<()> {
         println!("{}", format_event(&event));
     }
     Ok(())
+}
+
+fn print_transcripts(transcripts: Arc<TranscriptStore>, limit: usize) -> Result<()> {
+    let rows = transcripts.recent(limit)?;
+    if rows.is_empty() {
+        println!("No task transcripts recorded yet.");
+        return Ok(());
+    }
+    println!("Recent task transcripts");
+    for transcript in rows {
+        println!("{}", format_transcript_summary(&transcript));
+        println!("  path: {}", transcript.transcript_path);
+    }
+    Ok(())
+}
+
+fn print_task_review(transcripts: Arc<TranscriptStore>, task_ref: &str) -> Result<()> {
+    let transcript = if task_ref == "latest" {
+        transcripts.latest()?
+    } else {
+        transcripts.get_by_task_prefix(task_ref)?
+    };
+    let Some(transcript) = transcript else {
+        println!("No transcript found for '{task_ref}'.");
+        return Ok(());
+    };
+    let raw = std::fs::read_to_string(&transcript.transcript_path)?;
+    let doc: serde_json::Value = serde_json::from_str(&raw)?;
+    println!("{}", format_transcript_summary(&transcript));
+    println!("path: {}", transcript.transcript_path);
+    println!("summary: {}", transcript.summary);
+
+    let review = &doc["review"];
+    print_json_array("changed files", &review["changed_files"], 20);
+    print_json_array("git status", &review["git_status"], 20);
+    print_json_array("tool artifacts", &review["tool_artifacts"], 20);
+
+    let steps = doc["steps"].as_array().map(Vec::len).unwrap_or_default();
+    let events = doc["events"].as_array().map(Vec::len).unwrap_or_default();
+    println!("steps: {steps}");
+    println!("events: {events}");
+
+    if let Some(diff) = review["git_diff"].as_str().filter(|diff| !diff.is_empty()) {
+        println!("diff:");
+        println!("{}", truncate(diff, 4000));
+        if review["git_diff_truncated"].as_bool().unwrap_or(false) {
+            println!("[diff is truncated in transcript]");
+        }
+    } else {
+        println!("diff: clean or no uncommitted diff captured");
+    }
+    Ok(())
+}
+
+fn format_transcript_summary(transcript: &TranscriptSummary) -> String {
+    format!(
+        "{} {} transcript={} task={} attempts={} steps={} {}",
+        transcript.recorded_at.format("%Y-%m-%d %H:%M:%S"),
+        transcript.status,
+        &transcript.id[..8.min(transcript.id.len())],
+        &transcript.task_id[..8.min(transcript.task_id.len())],
+        transcript.attempt_count,
+        transcript.step_count,
+        truncate(&transcript.task_description, 96),
+    )
+}
+
+fn print_json_array(label: &str, value: &serde_json::Value, limit: usize) {
+    let Some(items) = value.as_array() else {
+        println!("{label}: 0");
+        return;
+    };
+    println!("{label}: {}", items.len());
+    for item in items.iter().take(limit) {
+        if let Some(text) = item.as_str() {
+            println!("  {text}");
+        } else {
+            println!("  {item}");
+        }
+    }
+    if items.len() > limit {
+        println!("  ... {} more", items.len() - limit);
+    }
 }
 
 async fn watch_events(events: Arc<EventStore>) -> Result<()> {
