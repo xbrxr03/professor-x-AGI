@@ -628,7 +628,9 @@ impl EvolvedLoop {
              COMPONENT: <SystemPrompt|ToolDescription:<name>|SkillDefinition:<name>|HarnessConfig>\n\
              MOTIVATION: <one sentence why this change will help>\n\
              ROOT_CAUSE: <which failure mode this addresses>\n\
-             FIX: <specific change to make>\n\
+             FIX:\n\
+             <complete replacement file content for SystemPrompt, HarnessConfig, or SkillDefinition. \
+             For SkillDefinition, write a complete markdown skill with '# <name>', Purpose, Workflow, and Output Contract.>\n\
              PREDICTS_FIX: <what task type should improve>\n\
              PREDICTS_REGRESSION: <what might get worse, or 'none'>",
             failure_patterns.join(", "),
@@ -655,7 +657,7 @@ impl EvolvedLoop {
         let component_str = extract_field(text, "COMPONENT").unwrap_or_default();
         let motivation = extract_field(text, "MOTIVATION").unwrap_or_default();
         let root_cause = extract_field(text, "ROOT_CAUSE").unwrap_or_default();
-        let fix = extract_field(text, "FIX").unwrap_or_default();
+        let fix = extract_field_block(text, "FIX").unwrap_or_default();
         let predicts_fix = extract_field(text, "PREDICTS_FIX").unwrap_or_default();
         let predicts_reg = extract_field(text, "PREDICTS_REGRESSION").unwrap_or_default();
 
@@ -901,6 +903,41 @@ fn extract_field(text: &str, field: &str) -> Option<String> {
     None
 }
 
+fn extract_field_block(text: &str, field: &str) -> Option<String> {
+    let prefix = format!("{field}:");
+    let stop_fields = [
+        "COMPONENT:",
+        "MOTIVATION:",
+        "ROOT_CAUSE:",
+        "FIX:",
+        "PREDICTS_FIX:",
+        "PREDICTS_REGRESSION:",
+    ];
+    let mut lines = text.lines();
+    while let Some(line) = lines.next() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix(&prefix) {
+            let mut block = Vec::new();
+            if !rest.trim().is_empty() {
+                block.push(rest.trim().to_string());
+            }
+            for next in lines {
+                let next_trimmed = next.trim();
+                if stop_fields
+                    .iter()
+                    .any(|stop| next_trimmed.starts_with(stop) && *stop != prefix)
+                {
+                    break;
+                }
+                block.push(next.to_string());
+            }
+            let value = block.join("\n").trim().to_string();
+            return if value.is_empty() { None } else { Some(value) };
+        }
+    }
+    None
+}
+
 fn parse_component(s: &str) -> HarnessComponent {
     let s = s.trim();
     if s.starts_with("ToolDescription:") {
@@ -1139,5 +1176,16 @@ mod tests {
         let patterns = vec!["failure [DHE:layer=3,lever=2]".to_string()];
 
         assert_eq!(parse_dhe_from_patterns(&patterns), (3, 2));
+    }
+
+    #[test]
+    fn field_block_parser_reads_multiline_fix() {
+        let text = "COMPONENT: SkillDefinition:retry\nMOTIVATION: improve retries\nROOT_CAUSE: poor fallback\nFIX:\n# retry\n\n## Purpose\nHandle failures.\nPREDICTS_FIX: fallback tasks\nPREDICTS_REGRESSION: none";
+
+        let fix = extract_field_block(text, "FIX").unwrap();
+
+        assert!(fix.contains("# retry"));
+        assert!(fix.contains("## Purpose"));
+        assert!(!fix.contains("PREDICTS_FIX"));
     }
 }

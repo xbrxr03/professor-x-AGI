@@ -116,6 +116,14 @@ find artifacts/evolution -type f | sort
 
 Runtime observability files under `artifacts/events/` and `artifacts/evolution/` do not by themselves block the clean-worktree safety gate, but source/config/skill changes still do.
 
+To run one controlled autonomous evolution cycle from seeded local outcomes:
+
+```bash
+PROFESSOR_X_DATA_DIR=/tmp/px-evolution-cycle cargo run -- --evolution-cycle
+```
+
+This uses the real Researcher/Engineer/Analyzer loop. If the proposed change passes sandbox verification and analysis, it can create a git commit.
+
 ## Kill Switch
 
 Use Ctrl+C for foreground runs, or send SIGUSR2 to the process for a graceful shutdown.

@@ -59,6 +59,8 @@ struct CliArgs {
     lab: bool,
     /// Run deterministic evolution accept/reject smoke checks and exit.
     evolution_smoke: bool,
+    /// Run one seeded autonomous evolution cycle and exit.
+    evolution_cycle: bool,
 }
 
 fn parse_args() -> CliArgs {
@@ -76,6 +78,7 @@ fn parse_args() -> CliArgs {
         observe: false,
         lab: false,
         evolution_smoke: false,
+        evolution_cycle: false,
     };
     let mut i = 1;
     while i < args.len() {
@@ -130,6 +133,10 @@ fn parse_args() -> CliArgs {
             }
             "--evolution-smoke" => {
                 cli.evolution_smoke = true;
+                i += 1;
+            }
+            "--evolution-cycle" => {
+                cli.evolution_cycle = true;
                 i += 1;
             }
             _ => {
@@ -285,6 +292,15 @@ async fn main() -> Result<()> {
         Ok(true) => info!("ollama: reachable, model qwen3:8b-q4_k_m ready"),
         Ok(false) => warn!("ollama: reachable but model may not be loaded"),
         Err(e) => warn!("ollama: not reachable ({e}) — tasks will fail until Ollama starts"),
+    }
+
+    if cli.evolution_cycle {
+        return run_one_evolution_cycle(
+            Arc::clone(&ollama),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+        )
+        .await;
     }
 
     // ── one-shot --task mode ──────────────────────────────────────────────
@@ -562,6 +578,79 @@ fn git_head(repo_root: &std::path::Path) -> Result<String> {
         anyhow::bail!("git rev-parse failed: {}", String::from_utf8_lossy(&output.stderr));
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+async fn run_one_evolution_cycle(
+    ollama: Arc<ollama::OllamaClient>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+) -> Result<()> {
+    let mut tracker = OutcomeTracker::new();
+    for outcome in seeded_evolution_outcomes() {
+        tracker.record(outcome);
+    }
+
+    events.append(
+        None,
+        None,
+        "evolution.manual_cycle.started",
+        "starting one seeded autonomous evolution cycle",
+        serde_json::json!({
+            "seeded_outcomes": tracker.len(),
+            "success_rate_20": tracker.success_rate(20),
+            "failure_patterns": tracker.failure_patterns(20),
+        }),
+    )?;
+
+    let evolved = EvolvedLoop::new(ollama, memory).with_events(Arc::clone(&events));
+    let applied = evolved.run_cycle(&tracker).await?;
+    events.append(
+        None,
+        None,
+        if applied {
+            "evolution.manual_cycle.applied"
+        } else {
+            "evolution.manual_cycle.no_change"
+        },
+        if applied {
+            "seeded autonomous evolution cycle applied a change"
+        } else {
+            "seeded autonomous evolution cycle made no change"
+        },
+        serde_json::json!({"applied": applied}),
+    )?;
+
+    println!(
+        "Evolution cycle: {}",
+        if applied { "applied change" } else { "no change" }
+    );
+    println!("  events: cargo run -- --events 20");
+    println!("  artifacts: find artifacts/evolution -type f | sort");
+    Ok(())
+}
+
+fn seeded_evolution_outcomes() -> Vec<TaskOutcome> {
+    (0..20)
+        .map(|i| {
+            let success = i >= 12;
+            TaskOutcome {
+                task_id: uuid::Uuid::new_v4(),
+                description: format!("seeded evolution calibration task {}", i + 1),
+                success,
+                score: if success { 0.82 } else { 0.18 },
+                failure_mode: if success {
+                    None
+                } else {
+                    Some(
+                        "[DHE:layer=3,lever=3] autonomous coding tasks need a reusable skill for interpreting failed tool observations and producing a bounded retry plan"
+                            .to_string(),
+                    )
+                },
+                steps_taken: if success { 4 } else { 2 },
+                timestamp: chrono::Utc::now(),
+            }
+        })
+        .collect()
 }
 
 // ── Lab mode ─────────────────────────────────────────────────────────────────
