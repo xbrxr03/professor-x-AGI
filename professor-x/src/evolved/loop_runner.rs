@@ -32,10 +32,10 @@ pub struct VerificationOutcome {
     pub checks: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
-struct SandboxVerification {
-    outcome: VerificationOutcome,
-    diff: String,
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SandboxVerification {
+    pub outcome: VerificationOutcome,
+    pub diff: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -68,7 +68,7 @@ fn parse_dhe_from_patterns(patterns: &[String]) -> (u8, u8) {
     (0, 3)
 }
 
-async fn verify_node_in_sandbox(
+pub async fn verify_node_in_sandbox(
     repo_root: &Path,
     node: &EvolutionNode,
 ) -> Result<SandboxVerification> {

@@ -98,6 +98,16 @@ find artifacts/patches -type f | sort
 
 Autonomous coding tasks should prefer `patch.apply` with `mode=check` before `mode=apply`, then run compile/tests before any commit.
 
+## Evolution Smoke
+
+Before unattended evolution, run the deterministic accept/reject smoke:
+
+```bash
+PROFESSOR_X_DATA_DIR=/tmp/px-evolution-smoke cargo run -- --evolution-smoke
+```
+
+This verifies one safe proposal, one no-op rejection, and one reward-hacking rejection through the sandbox worktree gate. It writes events to `artifacts/events/` and a report under `artifacts/evolution/YYYY-MM-DD/`.
+
 ## Kill Switch
 
 Use Ctrl+C for foreground runs, or send SIGUSR2 to the process for a graceful shutdown.
