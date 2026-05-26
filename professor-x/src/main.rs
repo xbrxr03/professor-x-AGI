@@ -17,6 +17,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
+use agentd::graph::{ExecutionStep, TaskStatus};
 use agentd::react::ReactLoop;
 use agentd::{TaskNode, TaskQueue, TaskType};
 use artifacts::ArtifactValidator;
@@ -336,6 +337,7 @@ async fn main() -> Result<()> {
             Arc::clone(&policy),
             Arc::clone(&memory),
             Arc::clone(&events),
+            Arc::clone(&transcripts),
         )
         .await;
     }
@@ -662,6 +664,7 @@ struct CodingSmokeReport {
     initial_test_failed: bool,
     edit_applied: bool,
     final_test_passed: bool,
+    transcript_path: Option<String>,
     artifacts: Vec<String>,
 }
 
@@ -670,6 +673,7 @@ async fn run_coding_smoke(
     policy: Arc<PolicyEngine>,
     memory: Arc<MemoryManager>,
     events: Arc<EventStore>,
+    transcripts: Arc<TranscriptStore>,
 ) -> Result<()> {
     let workspace = std::env::temp_dir().join(format!("px-coding-smoke-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(workspace.join("src"))?;
@@ -682,9 +686,19 @@ async fn run_coding_smoke(
         "pub fn add(left: i32, right: i32) -> i32 {\n    left - right\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn adds_numbers() {\n        assert_eq!(add(2, 3), 5);\n    }\n}\n",
     )?;
 
+    let mut task = TaskNode::new(
+        "deterministic coding smoke: fix a failing Rust test and verify it passes".to_string(),
+        TaskType::UserRequest,
+        100,
+    );
+    task.status = TaskStatus::Running;
+    task.started_at = Some(chrono::Utc::now());
+    task.attempt_count = 1;
+    task.max_attempts = 1;
+
     events.append(
         None,
-        None,
+        Some(task.id),
         "coding.smoke.started",
         "starting deterministic coding-agent smoke",
         serde_json::json!({"workspace": workspace}),
@@ -694,64 +708,100 @@ async fn run_coding_smoke(
     scope.approval_threshold = 100;
     let executor = ToolExecutor::new(registry).with_workspace_root(workspace.clone());
     let session_id = uuid::Uuid::new_v4();
-    let task_id = uuid::Uuid::new_v4();
     let mut artifacts = Vec::new();
 
+    let initial_action = Action {
+        tool_name: "shell.restricted".to_string(),
+        params: serde_json::json!({"command": "cargo test"}),
+        risk_score: 60,
+    };
     let initial = run_smoke_tool(
         &executor,
         Arc::clone(&policy),
         Arc::clone(&memory),
         &scope,
         session_id,
-        task_id,
-        Action {
-            tool_name: "shell.restricted".to_string(),
-            params: serde_json::json!({"command": "cargo test"}),
-            risk_score: 60,
-        },
+        task.id,
+        initial_action.clone(),
     )
     .await?;
+    record_smoke_step(&mut task, 1, "run the failing test before editing", initial_action, &initial);
     artifacts.extend(initial.artifacts.clone());
     let initial_test_failed = !initial.success;
 
+    let edit_action = Action {
+        tool_name: "fs.replace".to_string(),
+        params: serde_json::json!({
+            "path": "src/lib.rs",
+            "old": "    left - right",
+            "new": "    left + right",
+            "mode": "apply",
+        }),
+        risk_score: 42,
+    };
     let edit = run_smoke_tool(
         &executor,
         Arc::clone(&policy),
         Arc::clone(&memory),
         &scope,
         session_id,
-        task_id,
-        Action {
-            tool_name: "fs.replace".to_string(),
-            params: serde_json::json!({
-                "path": "src/lib.rs",
-                "old": "    left - right",
-                "new": "    left + right",
-                "mode": "apply",
-            }),
-            risk_score: 42,
-        },
+        task.id,
+        edit_action.clone(),
     )
     .await?;
+    record_smoke_step(&mut task, 2, "apply the minimal exact replacement", edit_action, &edit);
     artifacts.extend(edit.artifacts.clone());
 
+    let final_action = Action {
+        tool_name: "shell.restricted".to_string(),
+        params: serde_json::json!({"command": "cargo test"}),
+        risk_score: 60,
+    };
     let final_test = run_smoke_tool(
         &executor,
         Arc::clone(&policy),
         Arc::clone(&memory),
         &scope,
         session_id,
-        task_id,
-        Action {
-            tool_name: "shell.restricted".to_string(),
-            params: serde_json::json!({"command": "cargo test"}),
-            risk_score: 60,
-        },
+        task.id,
+        final_action.clone(),
     )
     .await?;
+    record_smoke_step(&mut task, 3, "rerun tests after the fix", final_action, &final_test);
     artifacts.extend(final_test.artifacts.clone());
     let final_test_passed = final_test.success;
     let passed = initial_test_failed && edit.success && final_test_passed;
+    task.status = if passed {
+        TaskStatus::Complete
+    } else {
+        TaskStatus::Failed
+    };
+    task.completed_at = Some(chrono::Utc::now());
+    task.outcome_score = Some(if passed { 1.0 } else { 0.0 });
+    let transcript_path = transcripts
+        .record_task(
+            &task,
+            if passed { "succeeded" } else { "failed" },
+            if passed {
+                "deterministic coding smoke fixed the test and verified it"
+            } else {
+                "deterministic coding smoke failed"
+            },
+            &events,
+        )
+        .ok();
+    if let Some(path) = &transcript_path {
+        events.append(
+            None,
+            Some(task.id),
+            "transcript.written",
+            format!("coding smoke transcript written to {}", path.display()),
+            serde_json::json!({
+                "path": path,
+                "status": if passed { "succeeded" } else { "failed" },
+            }),
+        )?;
+    }
     let report = CodingSmokeReport {
         generated_at: chrono::Utc::now().to_rfc3339(),
         workspace: workspace.display().to_string(),
@@ -759,6 +809,9 @@ async fn run_coding_smoke(
         initial_test_failed,
         edit_applied: edit.success,
         final_test_passed,
+        transcript_path: transcript_path
+            .as_ref()
+            .map(|path| path.display().to_string()),
         artifacts,
     };
     let report_path = write_coding_smoke_report(&report)?;
@@ -774,13 +827,14 @@ async fn run_coding_smoke(
         edit_applied: edit.success,
         final_test_passed,
         report_path: report_path.display().to_string(),
+        transcript_path: report.transcript_path.clone(),
         artifacts: report.artifacts.clone(),
         recorded_at: chrono::Utc::now(),
     })?;
 
     events.append(
         None,
-        None,
+        Some(task.id),
         if passed {
             "coding.smoke.passed"
         } else {
@@ -793,6 +847,9 @@ async fn run_coding_smoke(
     println!("Coding smoke: {}", if passed { "passed" } else { "failed" });
     println!("  workspace: {}", workspace.display());
     println!("  report: {}", report_path.display());
+    if let Some(path) = &report.transcript_path {
+        println!("  transcript: {path}");
+    }
     println!("  initial cargo test failed: {initial_test_failed}");
     println!("  fs.replace applied: {}", edit.success);
     println!("  final cargo test passed: {final_test_passed}");
@@ -801,6 +858,22 @@ async fn run_coding_smoke(
         anyhow::bail!("coding smoke failed");
     }
     Ok(())
+}
+
+fn record_smoke_step(
+    task: &mut TaskNode,
+    index: u32,
+    thought: &str,
+    action: Action,
+    observation: &Observation,
+) {
+    task.steps.push(ExecutionStep {
+        index,
+        thought: thought.to_string(),
+        action,
+        observation: observation.clone(),
+        timestamp: chrono::Utc::now(),
+    });
 }
 
 async fn run_smoke_tool(

@@ -13,6 +13,7 @@ pub struct CodingSmokeRecord {
     pub edit_applied: bool,
     pub final_test_passed: bool,
     pub report_path: String,
+    pub transcript_path: Option<String>,
     pub artifacts: Vec<String>,
     pub recorded_at: DateTime<Utc>,
 }
@@ -33,8 +34,8 @@ impl CodingSmokeStore {
         db.execute(
             "INSERT INTO coding_smokes
              (generated_at, workspace, passed, initial_test_failed, edit_applied,
-              final_test_passed, report_path, artifacts, recorded_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+              final_test_passed, report_path, transcript_path, artifacts, recorded_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 record.generated_at.to_rfc3339(),
                 record.workspace,
@@ -43,6 +44,7 @@ impl CodingSmokeStore {
                 record.edit_applied as i64,
                 record.final_test_passed as i64,
                 record.report_path,
+                record.transcript_path,
                 artifacts,
                 record.recorded_at.to_rfc3339(),
             ],
@@ -68,7 +70,7 @@ impl CodingSmokeStore {
         let db = self.db.lock().unwrap();
         let mut stmt = db.prepare(
             "SELECT id, generated_at, workspace, passed, initial_test_failed, edit_applied,
-                    final_test_passed, report_path, artifacts, recorded_at
+                    final_test_passed, report_path, transcript_path, artifacts, recorded_at
              FROM coding_smokes
              ORDER BY generated_at DESC, id DESC
              LIMIT 1",
@@ -83,8 +85,8 @@ impl CodingSmokeStore {
 
 fn parse_record(row: &rusqlite::Row) -> rusqlite::Result<CodingSmokeRecord> {
     let generated_at_raw: String = row.get(1)?;
-    let artifacts_raw: String = row.get(8)?;
-    let recorded_at_raw: String = row.get(9)?;
+    let artifacts_raw: String = row.get(9)?;
+    let recorded_at_raw: String = row.get(10)?;
     Ok(CodingSmokeRecord {
         id: row.get(0)?,
         generated_at: parse_time(&generated_at_raw),
@@ -94,6 +96,7 @@ fn parse_record(row: &rusqlite::Row) -> rusqlite::Result<CodingSmokeRecord> {
         edit_applied: row.get::<_, i64>(5)? != 0,
         final_test_passed: row.get::<_, i64>(6)? != 0,
         report_path: row.get(7)?,
+        transcript_path: row.get(8)?,
         artifacts: serde_json::from_str(&artifacts_raw).unwrap_or_default(),
         recorded_at: parse_time(&recorded_at_raw),
     })
@@ -124,6 +127,7 @@ mod tests {
                     edit_applied INTEGER NOT NULL DEFAULT 0,
                     final_test_passed INTEGER NOT NULL DEFAULT 0,
                     report_path TEXT NOT NULL,
+                    transcript_path TEXT,
                     artifacts TEXT NOT NULL DEFAULT '[]',
                     recorded_at TEXT NOT NULL
                 );",
@@ -141,6 +145,7 @@ mod tests {
             edit_applied: true,
             final_test_passed: true,
             report_path: "artifacts/coding-smoke/report.json".to_string(),
+            transcript_path: Some("artifacts/transcripts/task.json".to_string()),
             artifacts: vec!["artifacts/commands/cargo-test.json".to_string()],
             recorded_at: now,
         };
@@ -151,6 +156,10 @@ mod tests {
         let latest = store.latest().unwrap().unwrap();
         assert_eq!(latest.workspace, "/tmp/px");
         assert!(latest.passed);
+        assert_eq!(
+            latest.transcript_path.as_deref(),
+            Some("artifacts/transcripts/task.json")
+        );
         assert_eq!(latest.artifacts.len(), 1);
         assert!(latest.id.is_some());
     }

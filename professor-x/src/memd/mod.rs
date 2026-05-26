@@ -190,6 +190,7 @@ CREATE TABLE IF NOT EXISTS coding_smokes (
     edit_applied INTEGER NOT NULL DEFAULT 0,
     final_test_passed INTEGER NOT NULL DEFAULT 0,
     report_path TEXT NOT NULL,
+    transcript_path TEXT,
     artifacts TEXT NOT NULL DEFAULT '[]',
     recorded_at TEXT NOT NULL
 );
@@ -305,6 +306,11 @@ impl MemoryManager {
                 ("last_error", "TEXT"),
                 ("last_artifacts", "TEXT NOT NULL DEFAULT '[]'"),
             ],
+        )?;
+        ensure_columns(
+            &conn,
+            "coding_smokes",
+            &[("transcript_path", "TEXT")],
         )?;
         info!("memd: database opened at {}", db_path.display());
 

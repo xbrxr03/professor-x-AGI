@@ -74,11 +74,16 @@ pub fn print_snapshot(memory: Arc<MemoryManager>, events: Arc<EventStore>) -> Re
     );
     if let Some(smoke) = &snapshot.latest_coding_smoke {
         println!(
-            "    latest: #{} {} / generated {} / report {}",
+            "    latest: #{} {} / generated {} / report {}{}",
             smoke.id.unwrap_or_default(),
             if smoke.passed { "passed" } else { "failed" },
             smoke.generated_at.format("%Y-%m-%d %H:%M:%S"),
-            smoke.report_path
+            smoke.report_path,
+            smoke
+                .transcript_path
+                .as_ref()
+                .map(|path| format!(" / transcript {path}"))
+                .unwrap_or_default(),
         );
     }
     println!("  audit entries: {}", snapshot.audit_entries);
@@ -963,7 +968,13 @@ fn latest_coding_smoke_detail(smoke: &Option<CodingSmokeRecord>) -> Line<'static
             smoke.initial_test_failed,
             smoke.edit_applied,
             smoke.final_test_passed,
-            truncate(&smoke.report_path, 74),
+            truncate(
+                smoke
+                    .transcript_path
+                    .as_deref()
+                    .unwrap_or(&smoke.report_path),
+                74,
+            ),
         )),
         None => Line::from("Coding smoke: waiting for first run."),
     }
