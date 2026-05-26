@@ -8,6 +8,7 @@ mod policyd;
 mod toolbridge;
 
 use anyhow::Result;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -37,6 +38,8 @@ use toolbridge::ToolRegistry;
 struct CliArgs {
     /// Run a single task immediately and exit.
     task: Option<String>,
+    /// Read user tasks interactively from the terminal.
+    chat: bool,
     /// Fire the daily cron job immediately (for testing).
     run_now: bool,
     /// Run HIRO benchmark for the given round number and exit.
@@ -67,6 +70,7 @@ fn parse_args() -> CliArgs {
     let args: Vec<String> = std::env::args().collect();
     let mut cli = CliArgs {
         task: None,
+        chat: false,
         run_now: false,
         hiro_round: None,
         hiro_limit: None,
@@ -86,6 +90,10 @@ fn parse_args() -> CliArgs {
             "--task" if i + 1 < args.len() => {
                 cli.task = Some(args[i + 1].clone());
                 i += 2;
+            }
+            "--chat" | "--task-interactive" => {
+                cli.chat = true;
+                i += 1;
             }
             "--run-now" => {
                 cli.run_now = true;
@@ -152,7 +160,8 @@ fn parse_args() -> CliArgs {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = parse_args();
-    let inspect_mode = cli.status || cli.events_limit.is_some() || cli.watch || cli.observe || cli.lab;
+    let inspect_mode =
+        cli.status || cli.events_limit.is_some() || cli.watch || cli.observe || cli.lab || cli.chat;
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| {
@@ -307,6 +316,19 @@ async fn main() -> Result<()> {
     if let Some(task_desc) = cli.task {
         return run_single_task(
             task_desc,
+            Arc::clone(&ollama),
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            Arc::clone(&transcripts),
+            cancel,
+        )
+        .await;
+    }
+
+    if cli.chat {
+        return run_interactive_tasks(
             Arc::clone(&ollama),
             Arc::clone(&registry),
             Arc::clone(&policy),
@@ -980,6 +1002,101 @@ async fn run_single_task(
     Ok(())
 }
 
+async fn run_interactive_tasks(
+    ollama: Arc<ollama::OllamaClient>,
+    registry: Arc<std::sync::RwLock<ToolRegistry>>,
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    transcripts: Arc<TranscriptStore>,
+    cancel: CancellationToken,
+) -> Result<()> {
+    events.append(
+        None,
+        None,
+        "chat.started",
+        "interactive task session started",
+        serde_json::json!({}),
+    )?;
+
+    println!("Professor X interactive task mode");
+    println!("Type a task and press Enter. Commands: /status, /events [n], /quit");
+
+    loop {
+        if cancel.is_cancelled() {
+            break;
+        }
+        print!("prof-x> ");
+        io::stdout().flush()?;
+
+        let mut line = String::new();
+        if io::stdin().read_line(&mut line)? == 0 {
+            break;
+        }
+        let input = line.trim();
+        if input.is_empty() {
+            continue;
+        }
+        if matches!(input, "/quit" | "/exit" | "quit" | "exit") {
+            break;
+        }
+        if input == "/status" {
+            observer::print_snapshot(Arc::clone(&memory), Arc::clone(&events))?;
+            continue;
+        }
+        if let Some(rest) = input.strip_prefix("/events") {
+            let limit = rest.trim().parse::<usize>().unwrap_or(10);
+            print_events(Arc::clone(&events), limit)?;
+            continue;
+        }
+
+        events.append(
+            None,
+            None,
+            "chat.task_received",
+            format!("interactive task received: {}", truncate(input, 120)),
+            serde_json::json!({"task": input}),
+        )?;
+
+        match run_single_task(
+            input.to_string(),
+            Arc::clone(&ollama),
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            Arc::clone(&transcripts),
+            cancel.clone(),
+        )
+        .await
+        {
+            Ok(()) => {
+                println!("done");
+            }
+            Err(e) => {
+                println!("task error: {e}");
+                events.append(
+                    None,
+                    None,
+                    "chat.task_error",
+                    format!("interactive task error: {}", truncate(&e.to_string(), 160)),
+                    serde_json::json!({"error": e.to_string()}),
+                )?;
+            }
+        }
+    }
+
+    events.append(
+        None,
+        None,
+        "chat.stopped",
+        "interactive task session stopped",
+        serde_json::json!({}),
+    )?;
+    println!("Professor X interactive task mode stopped");
+    Ok(())
+}
+
 // ── HIRO benchmark mode ───────────────────────────────────────────────────────
 
 async fn run_hiro_benchmark(
@@ -1116,6 +1233,15 @@ fn format_event(event: &memd::events::AgentEvent) -> String {
         session,
         event.summary
     )
+}
+
+fn truncate(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let mut out = text.chars().take(max_chars).collect::<String>();
+    out.push_str("...");
+    out
 }
 
 // ── Signal handlers ───────────────────────────────────────────────────────────
