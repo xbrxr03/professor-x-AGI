@@ -58,6 +58,7 @@ impl ToolRegistry {
             ("fs.read",          "Read file contents",                    10, 5_000),
             ("fs.list",          "List directory contents",               8,  5_000),
             ("fs.write",         "Write content to a file",               45, 10_000),
+            ("fs.replace",       "Replace exactly one text span in a file", 42, 10_000),
             ("fs.delete",        "Delete a file or directory",            70, 10_000),
             ("fs.search",        "Search for files matching a pattern",   12, 15_000),
             ("web.search",       "Search the web for information",        15, 30_000),

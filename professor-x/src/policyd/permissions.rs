@@ -26,6 +26,7 @@ impl PermissionScope {
                 "fs.read".to_string(),
                 "fs.list".to_string(),
                 "fs.write".to_string(),
+                "fs.replace".to_string(),
                 "fs.delete".to_string(),
                 "web.search".to_string(),
                 "web.fetch".to_string(),

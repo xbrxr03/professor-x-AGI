@@ -926,6 +926,7 @@ const TOOLS_DESCRIPTION: &str = "Available tools:
 - fs.read       {\"path\": \"<path>\"} — read file contents
 - fs.list       {\"path\": \"<path>\"} — list directory
 - fs.write      {\"path\": \"<path>\", \"content\": \"<text>\"} — write file
+- fs.replace    {\"path\": \"<path>\", \"old\": \"<exact text>\", \"new\": \"<replacement>\", \"mode\": \"check|apply\"} — replace exactly one matching text span
 - fs.delete     {\"path\": \"<path>\"} — delete file (risk: high, may require approval)
 - web.search    {\"query\": \"<q>\", \"num_results\": 5} — search the web
 - web.fetch     {\"url\": \"<url>\"} — fetch a URL

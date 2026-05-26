@@ -207,6 +207,45 @@ impl ToolExecutor {
                     content.len()
                 )))
             }
+            "fs.replace" => {
+                let path = req_str(&action.params, "path")?;
+                let old = req_str(&action.params, "old")?;
+                let new = req_str(&action.params, "new")?;
+                if old.is_empty() {
+                    anyhow::bail!("fs.replace requires non-empty 'old' text");
+                }
+                let mode = action.params["mode"].as_str().unwrap_or("apply");
+                if !matches!(mode, "check" | "apply") {
+                    anyhow::bail!("fs.replace mode must be 'check' or 'apply'");
+                }
+                let path_ref = std::path::Path::new(path);
+                let resolved_path = if path_ref.is_absolute() {
+                    path_ref.to_path_buf()
+                } else {
+                    self.workspace_root.join(path_ref)
+                };
+                let original = std::fs::read_to_string(&resolved_path)?;
+                let matches = original.match_indices(old).count();
+                if matches != 1 {
+                    anyhow::bail!(
+                        "fs.replace expected exactly one match for old text, found {matches}"
+                    );
+                }
+                let updated = original.replacen(old, new, 1);
+                let diff_artifact = self.write_replace_artifact(path, &original, &updated)?;
+                if mode == "apply" {
+                    std::fs::write(&resolved_path, updated)?;
+                }
+                Ok(ToolDispatch::with_artifact(
+                    format!(
+                        "replace {mode} succeeded for {path}; old_bytes={} new_bytes={}; artifact={}",
+                        old.len(),
+                        new.len(),
+                        diff_artifact.display()
+                    ),
+                    diff_artifact,
+                ))
+            }
             "fs.delete" => {
                 let path = req_str(&action.params, "path")?;
                 let p = std::path::Path::new(path);
@@ -428,6 +467,20 @@ impl ToolExecutor {
         Ok(path)
     }
 
+    fn write_replace_artifact(&self, path: &str, before: &str, after: &str) -> Result<PathBuf> {
+        let dir = artifact_root(&self.workspace_root)
+            .join("replacements")
+            .join(chrono::Utc::now().format("%Y-%m-%d").to_string());
+        std::fs::create_dir_all(&dir)?;
+        let path_out = dir.join(format!("{}.diff", uuid::Uuid::new_v4()));
+        let mut file = std::fs::File::create(&path_out)?;
+        writeln!(file, "--- {path}.before")?;
+        writeln!(file, "+++ {path}.after")?;
+        writeln!(file, "@@ exact replacement preview @@")?;
+        writeln!(file, "{}", text_preview_diff(before, after))?;
+        Ok(path_out)
+    }
+
     fn write_command_artifact(
         &self,
         command: &str,
@@ -616,6 +669,12 @@ fn truncate_text(text: &str, max_chars: usize) -> String {
     out
 }
 
+fn text_preview_diff(before: &str, after: &str) -> String {
+    let before = truncate_text(before, 2000);
+    let after = truncate_text(after, 2000);
+    format!("- before:\n{before}\n+ after:\n{after}")
+}
+
 fn default_workspace_root() -> PathBuf {
     let mut dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     loop {
@@ -662,6 +721,19 @@ mod tests {
             tool_name: "shell.restricted".to_string(),
             params: json!({"command": command}),
             risk_score: 60,
+        }
+    }
+
+    fn replace_action(mode: &str, old: &str, new: &str) -> Action {
+        Action {
+            tool_name: "fs.replace".to_string(),
+            params: json!({
+                "path": "src/lib.rs",
+                "old": old,
+                "new": new,
+                "mode": mode,
+            }),
+            risk_score: 42,
         }
     }
 
@@ -717,6 +789,47 @@ mod tests {
         assert_eq!(artifact["command"], "printf 'hello professor x'");
         assert_eq!(artifact["success"], true);
         assert_eq!(artifact["stdout"], "hello professor x");
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn fs_replace_requires_exactly_one_match_and_writes_artifact() {
+        let root = temp_workspace();
+        let registry = Arc::new(std::sync::RwLock::new(ToolRegistry::new()));
+        let executor = ToolExecutor::new(registry).with_workspace_root(root.clone());
+
+        let check = executor
+            .execute(&replace_action("check", "pub fn x() {}", "pub fn x() { }"))
+            .await;
+        assert!(check.success, "{:?}", check.error);
+        assert!(check.output.contains("replace check succeeded"));
+        assert_eq!(
+            std::fs::read_to_string(root.join("src/lib.rs")).unwrap(),
+            "pub fn x() {}\n"
+        );
+
+        let apply = executor
+            .execute(&replace_action("apply", "pub fn x() {}", "pub fn x() { }"))
+            .await;
+        assert!(apply.success, "{:?}", apply.error);
+        assert!(apply.output.contains("replace apply succeeded"));
+        assert_eq!(apply.artifacts.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(root.join("src/lib.rs")).unwrap(),
+            "pub fn x() { }\n"
+        );
+
+        std::fs::write(root.join("src/lib.rs"), "same\nsame\n").unwrap();
+        let ambiguous = executor
+            .execute(&replace_action("apply", "same", "changed"))
+            .await;
+        assert!(!ambiguous.success);
+        assert!(ambiguous
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("expected exactly one match"));
 
         let _ = std::fs::remove_dir_all(root);
     }

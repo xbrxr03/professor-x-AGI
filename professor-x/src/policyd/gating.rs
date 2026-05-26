@@ -49,6 +49,7 @@ pub fn tool_risk_score(tool: &str) -> u8 {
         "memory.write" => 10,
         "web.fetch" => 20,
         "ollama.complete" => 15,
+        "fs.replace" => 42,
         "fs.write" => 45,
         "shell.restricted" => 60,
         "patch.apply" => 62,
@@ -252,7 +253,7 @@ enum FileAccess {
 fn path_denied_reason(tool: &str, path: &str, scope: &PermissionScope) -> Option<String> {
     let access = match tool {
         "fs.read" | "fs.list" => FileAccess::Read,
-        "fs.write" | "fs.delete" => FileAccess::Write,
+        "fs.write" | "fs.replace" | "fs.delete" => FileAccess::Write,
         _ => return None,
     };
     path_access_denied_reason(path, access, scope)
@@ -602,6 +603,23 @@ mod tests {
         .await;
         assert_eq!(escape.decision, Decision::Deny);
         assert!(escape.reason.contains("outside workspace"));
+
+        let replace = gate(
+            "fs.replace",
+            json!({"path": "src/lib.rs", "old": "x", "new": "y"}),
+            &scope,
+        )
+        .await;
+        assert_eq!(replace.decision, Decision::Allow);
+
+        let replace_escape = gate(
+            "fs.replace",
+            json!({"path": "../outside.txt", "old": "x", "new": "y"}),
+            &scope,
+        )
+        .await;
+        assert_eq!(replace_escape.decision, Decision::Deny);
+        assert!(replace_escape.reason.contains("outside workspace"));
     }
 
     #[tokio::test]
