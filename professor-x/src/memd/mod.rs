@@ -7,6 +7,7 @@ pub mod semantic;
 pub mod task_runs;
 pub mod transcripts;
 pub mod working;
+pub mod work_loops;
 
 use anyhow::Result;
 use rusqlite::Connection;
@@ -197,6 +198,21 @@ CREATE TABLE IF NOT EXISTS coding_smokes (
     recorded_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_coding_smokes_generated ON coding_smokes(generated_at);
+
+CREATE TABLE IF NOT EXISTS work_loop_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL UNIQUE,
+    started_at TEXT NOT NULL,
+    completed_at TEXT NOT NULL,
+    requested_cycles INTEGER NOT NULL DEFAULT 0,
+    completed_cycles INTEGER NOT NULL DEFAULT 0,
+    passed_cycles INTEGER NOT NULL DEFAULT 0,
+    failed_cycles INTEGER NOT NULL DEFAULT 0,
+    report_path TEXT NOT NULL,
+    smoke_records TEXT NOT NULL DEFAULT '[]',
+    recorded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_work_loop_runs_recorded ON work_loop_runs(recorded_at);
 
 CREATE TABLE IF NOT EXISTS cron_jobs (
     id TEXT PRIMARY KEY,

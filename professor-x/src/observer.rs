@@ -20,6 +20,7 @@ use crate::memd::coding_smoke::{CodingSmokeRecord, CodingSmokeStore};
 use crate::memd::events::{AgentEvent, EventStore};
 use crate::memd::task_runs::{TaskRun, TaskRunStore};
 use crate::memd::transcripts::{TranscriptStore, TranscriptSummary};
+use crate::memd::work_loops::{WorkLoopRunRecord, WorkLoopRunStore};
 use crate::memd::MemoryManager;
 
 const TICK_RATE: Duration = Duration::from_millis(750);
@@ -69,6 +70,17 @@ pub fn print_snapshot(memory: Arc<MemoryManager>, events: Arc<EventStore>) -> Re
         .map(|v| format!("{v:.3}"))
         .unwrap_or_else(|| "not run".to_string());
     println!("  HIRO: {} rounds, pass@3 {pass}", snapshot.hiro_rounds);
+    println!("  work loops: {} runs", snapshot.work_loop_count);
+    if let Some(run) = &snapshot.latest_work_loop {
+        println!(
+            "    latest loop: {} / {}/{} passed / {} failed / report {}",
+            short_id(&run.run_id),
+            run.passed_cycles,
+            run.completed_cycles,
+            run.failed_cycles,
+            run.report_path,
+        );
+    }
     println!(
         "  coding smoke: {} runs, {} passed",
         snapshot.coding_smoke_count, snapshot.coding_smoke_passed
@@ -280,6 +292,7 @@ struct ObserverSnapshot {
     task_run_count: i64,
     hiro_rounds: i64,
     latest_pass_at_3: Option<f64>,
+    work_loop_count: i64,
     coding_smoke_count: i64,
     coding_smoke_passed: i64,
     task_events: usize,
@@ -306,6 +319,7 @@ struct ObserverSnapshot {
     latest_run: Option<TaskRun>,
     latest_transcript_summary: Option<TranscriptSummary>,
     latest_coding_smoke: Option<CodingSmokeRecord>,
+    latest_work_loop: Option<WorkLoopRunRecord>,
 }
 
 impl ObserverSnapshot {
@@ -382,6 +396,9 @@ impl ObserverSnapshot {
         snapshot.coding_smoke_count = smoke_store.count()?;
         snapshot.coding_smoke_passed = smoke_store.pass_count()?;
         snapshot.latest_coding_smoke = smoke_store.latest()?;
+        let work_loop_store = WorkLoopRunStore::new(Arc::clone(&memory.db));
+        snapshot.work_loop_count = work_loop_store.count()?;
+        snapshot.latest_work_loop = work_loop_store.latest()?;
 
         let repo = repo_root();
         snapshot.git_branch = git_output(&repo, &["branch", "--show-current"])
@@ -500,6 +517,7 @@ impl Default for ObserverSnapshot {
             task_run_count: 0,
             hiro_rounds: 0,
             latest_pass_at_3: None,
+            work_loop_count: 0,
             coding_smoke_count: 0,
             coding_smoke_passed: 0,
             task_events: 0,
@@ -526,6 +544,7 @@ impl Default for ObserverSnapshot {
             latest_run: None,
             latest_transcript_summary: None,
             latest_coding_smoke: None,
+            latest_work_loop: None,
         }
     }
 }

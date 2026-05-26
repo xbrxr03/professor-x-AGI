@@ -33,6 +33,7 @@ use memd::coding_smoke::{CodingSmokeRecord, CodingSmokeStore};
 use memd::events::EventStore;
 use memd::task_runs::{TaskRun, TaskRunStore};
 use memd::transcripts::{TranscriptStore, TranscriptSummary};
+use memd::work_loops::{WorkLoopRunRecord, WorkLoopRunStore, WorkLoopSmokeRecord};
 use memd::MemoryManager;
 use policyd::{AuditStore, Decision, PermissionScope, PolicyEngine};
 use toolbridge::executor::{Action, Observation};
@@ -65,6 +66,8 @@ struct CliArgs {
     transcripts_limit: Option<usize>,
     /// Print the last N task runs and exit.
     task_runs_limit: Option<usize>,
+    /// Print the last N supervised work-loop runs and exit.
+    work_loops_limit: Option<usize>,
     /// Print a task transcript review by task id prefix, or 'latest'.
     task_review: Option<String>,
     /// Follow agent events until interrupted.
@@ -100,6 +103,7 @@ fn parse_args() -> CliArgs {
         work_feed_limit: None,
         transcripts_limit: None,
         task_runs_limit: None,
+        work_loops_limit: None,
         task_review: None,
         watch: false,
         watch_work: false,
@@ -177,6 +181,14 @@ fn parse_args() -> CliArgs {
                 cli.task_runs_limit = Some(limit.unwrap_or(10));
                 i += if limit.is_some() { 2 } else { 1 };
             }
+            "--work-loops" => {
+                let limit = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .and_then(|next| next.parse::<usize>().ok());
+                cli.work_loops_limit = Some(limit.unwrap_or(10));
+                i += if limit.is_some() { 2 } else { 1 };
+            }
             "--task-review" if i + 1 < args.len() => {
                 cli.task_review = Some(args[i + 1].clone());
                 i += 2;
@@ -235,6 +247,7 @@ async fn main() -> Result<()> {
         || cli.work_feed_limit.is_some()
         || cli.transcripts_limit.is_some()
         || cli.task_runs_limit.is_some()
+        || cli.work_loops_limit.is_some()
         || cli.task_review.is_some()
         || cli.watch
         || cli.watch_work
@@ -299,6 +312,10 @@ async fn main() -> Result<()> {
 
     if let Some(limit) = cli.task_runs_limit {
         return print_task_runs(Arc::clone(&memory), limit);
+    }
+
+    if let Some(limit) = cli.work_loops_limit {
+        return print_work_loops(Arc::clone(&memory), limit);
     }
 
     if let Some(task_ref) = cli.task_review {
@@ -745,17 +762,7 @@ struct SupervisedLoopReport {
     completed_cycles: u32,
     passed_cycles: u32,
     failed_cycles: u32,
-    smoke_records: Vec<SupervisedLoopSmokeRecord>,
-}
-
-#[derive(serde::Serialize)]
-struct SupervisedLoopSmokeRecord {
-    cycle: u32,
-    smoke_id: Option<i64>,
-    passed: bool,
-    report_path: String,
-    transcript_path: Option<String>,
-    workspace: String,
+    smoke_records: Vec<WorkLoopSmokeRecord>,
 }
 
 async fn run_supervised_loop(
@@ -807,7 +814,7 @@ async fn run_supervised_loop(
             failed_cycles += 1;
         }
         if let Some(record) = latest {
-            records.push(SupervisedLoopSmokeRecord {
+            records.push(WorkLoopSmokeRecord {
                 cycle,
                 smoke_id: record.id,
                 passed: record.passed,
@@ -850,6 +857,21 @@ async fn run_supervised_loop(
         smoke_records: records,
     };
     let report_path = write_supervised_loop_report(&report)?;
+    WorkLoopRunStore::new(Arc::clone(&memory.db)).insert(&WorkLoopRunRecord {
+        id: None,
+        run_id: report.run_id.clone(),
+        started_at,
+        completed_at: chrono::DateTime::parse_from_rfc3339(&report.completed_at)
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(|_| chrono::Utc::now()),
+        requested_cycles: report.requested_cycles,
+        completed_cycles: report.completed_cycles,
+        passed_cycles: report.passed_cycles,
+        failed_cycles: report.failed_cycles,
+        report_path: report_path.display().to_string(),
+        smoke_records: report.smoke_records.clone(),
+        recorded_at: chrono::Utc::now(),
+    })?;
     events.append(
         None,
         None,
@@ -2041,6 +2063,43 @@ fn print_task_runs(memory: Arc<MemoryManager>, limit: usize) -> Result<()> {
         }
         if let Some(error) = &run.last_error {
             println!("  last error: {}", truncate(error, 160));
+        }
+    }
+    Ok(())
+}
+
+fn print_work_loops(memory: Arc<MemoryManager>, limit: usize) -> Result<()> {
+    let runs = WorkLoopRunStore::new(Arc::clone(&memory.db)).recent(limit)?;
+    if runs.is_empty() {
+        println!("No supervised work-loop runs recorded yet.");
+        return Ok(());
+    }
+    println!("Recent supervised work loops");
+    for run in runs {
+        println!(
+            "#{} {} loop={} cycles={}/{} passed={} failed={} report={}",
+            run.id
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "?".to_string()),
+            run.recorded_at.format("%Y-%m-%d %H:%M:%S"),
+            &run.run_id[..8.min(run.run_id.len())],
+            run.completed_cycles,
+            run.requested_cycles,
+            run.passed_cycles,
+            run.failed_cycles,
+            run.report_path,
+        );
+        if let Some(smoke) = run.smoke_records.last() {
+            println!(
+                "  latest cycle {}: smoke={} {} transcript={}",
+                smoke.cycle,
+                smoke
+                    .smoke_id
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| "none".to_string()),
+                if smoke.passed { "passed" } else { "failed" },
+                smoke.transcript_path.as_deref().unwrap_or("none"),
+            );
         }
     }
     Ok(())
