@@ -202,6 +202,8 @@ CREATE INDEX IF NOT EXISTS idx_coding_smokes_generated ON coding_smokes(generate
 CREATE TABLE IF NOT EXISTS work_loop_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id TEXT NOT NULL UNIQUE,
+    run_kind TEXT NOT NULL DEFAULT 'supervised',
+    profile TEXT NOT NULL DEFAULT 'basic',
     started_at TEXT NOT NULL,
     completed_at TEXT NOT NULL,
     requested_cycles INTEGER NOT NULL DEFAULT 0,
@@ -334,6 +336,14 @@ impl MemoryManager {
             &conn,
             "coding_smokes",
             &[("transcript_path", "TEXT")],
+        )?;
+        ensure_columns(
+            &conn,
+            "work_loop_runs",
+            &[
+                ("run_kind", "TEXT NOT NULL DEFAULT 'supervised'"),
+                ("profile", "TEXT NOT NULL DEFAULT 'basic'"),
+            ],
         )?;
         info!("memd: database opened at {}", db_path.display());
 

@@ -87,6 +87,8 @@ struct CliArgs {
     supervised_loop_cycles: Option<u32>,
     /// Select supervised loop job mix: basic or core.
     supervised_loop_profile: WorkLoopProfile,
+    /// Run N bounded Prof X operator cycles using the core safety profile and exit.
+    operator_run_cycles: Option<u32>,
     /// Run one seeded autonomous evolution cycle and exit.
     evolution_cycle: bool,
 }
@@ -95,6 +97,28 @@ struct CliArgs {
 enum WorkLoopProfile {
     Basic,
     Core,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkLoopRunKind {
+    Supervised,
+    Operator,
+}
+
+impl WorkLoopRunKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Supervised => "supervised",
+            Self::Operator => "operator",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Supervised => "supervised work loop",
+            Self::Operator => "Prof X operator run",
+        }
+    }
 }
 
 impl WorkLoopProfile {
@@ -140,6 +164,7 @@ fn parse_args() -> CliArgs {
         coding_smoke: false,
         supervised_loop_cycles: None,
         supervised_loop_profile: WorkLoopProfile::Basic,
+        operator_run_cycles: None,
         evolution_cycle: false,
     };
     let mut i = 1;
@@ -262,6 +287,14 @@ fn parse_args() -> CliArgs {
                     cli.supervised_loop_profile = profile;
                 }
                 i += 2;
+            }
+            "--operator-run" => {
+                let cycles = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .and_then(|next| next.parse::<u32>().ok());
+                cli.operator_run_cycles = Some(cycles.unwrap_or(3));
+                i += if cycles.is_some() { 2 } else { 1 };
             }
             "--evolution-cycle" => {
                 cli.evolution_cycle = true;
@@ -452,6 +485,7 @@ async fn main() -> Result<()> {
 
     if let Some(cycles) = cli.supervised_loop_cycles {
         return run_supervised_loop(
+            WorkLoopRunKind::Supervised,
             Arc::clone(&registry),
             Arc::clone(&policy),
             Arc::clone(&memory),
@@ -459,6 +493,20 @@ async fn main() -> Result<()> {
             Arc::clone(&transcripts),
             cycles,
             cli.supervised_loop_profile,
+        )
+        .await;
+    }
+
+    if let Some(cycles) = cli.operator_run_cycles {
+        return run_supervised_loop(
+            WorkLoopRunKind::Operator,
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            Arc::clone(&transcripts),
+            cycles,
+            WorkLoopProfile::Core,
         )
         .await;
     }
@@ -903,6 +951,7 @@ struct CodingSmokeReport {
 #[derive(serde::Serialize)]
 struct SupervisedLoopReport {
     run_id: String,
+    run_kind: String,
     started_at: String,
     completed_at: String,
     requested_cycles: u32,
@@ -954,6 +1003,7 @@ fn work_loop_job_for_cycle(profile: WorkLoopProfile, cycle: u32) -> WorkLoopJob 
 }
 
 async fn run_supervised_loop(
+    run_kind: WorkLoopRunKind,
     registry: Arc<std::sync::RwLock<ToolRegistry>>,
     policy: Arc<PolicyEngine>,
     memory: Arc<MemoryManager>,
@@ -970,10 +1020,16 @@ async fn run_supervised_loop(
         None,
         "work_loop.started",
         format!(
-            "starting supervised {} work loop with {cycles} cycle(s)",
+            "starting {} with {} profile and {cycles} cycle(s)",
+            run_kind.label(),
             profile.as_str()
         ),
-        serde_json::json!({"run_id": run_id, "cycles": cycles, "profile": profile.as_str()}),
+        serde_json::json!({
+            "run_id": run_id,
+            "run_kind": run_kind.as_str(),
+            "cycles": cycles,
+            "profile": profile.as_str(),
+        }),
     )?;
 
     let smoke_store = CodingSmokeStore::new(Arc::clone(&memory.db));
@@ -988,11 +1044,13 @@ async fn run_supervised_loop(
             None,
             "work_loop.cycle.started",
             format!(
-                "supervised work-loop cycle {cycle}/{cycles} started: {}",
+                "{} cycle {cycle}/{cycles} started: {}",
+                run_kind.label(),
                 job.label()
             ),
             serde_json::json!({
                 "run_id": run_id,
+                "run_kind": run_kind.as_str(),
                 "cycle": cycle,
                 "cycles": cycles,
                 "job": job.kind(),
@@ -1032,11 +1090,13 @@ async fn run_supervised_loop(
                 "work_loop.cycle.failed"
             },
             format!(
-                "supervised work-loop cycle {cycle}/{cycles} {}",
+                "{} cycle {cycle}/{cycles} {}",
+                run_kind.label(),
                 if passed { "passed" } else { "failed" }
             ),
             serde_json::json!({
                 "run_id": run_id,
+                "run_kind": run_kind.as_str(),
                 "cycle": cycle,
                 "cycles": cycles,
                 "job": job.kind(),
@@ -1048,6 +1108,7 @@ async fn run_supervised_loop(
 
     let report = SupervisedLoopReport {
         run_id: run_id.clone(),
+        run_kind: run_kind.as_str().to_string(),
         started_at: started_at.to_rfc3339(),
         completed_at: chrono::Utc::now().to_rfc3339(),
         requested_cycles: cycles,
@@ -1061,6 +1122,8 @@ async fn run_supervised_loop(
     WorkLoopRunStore::new(Arc::clone(&memory.db)).insert(&WorkLoopRunRecord {
         id: None,
         run_id: report.run_id.clone(),
+        run_kind: report.run_kind.clone(),
+        profile: report.profile.clone(),
         started_at,
         completed_at: chrono::DateTime::parse_from_rfc3339(&report.completed_at)
             .map(|dt| dt.with_timezone(&chrono::Utc))
@@ -1082,24 +1145,28 @@ async fn run_supervised_loop(
             "work_loop.completed_with_failures"
         },
         format!(
-            "supervised work-loop report written to {}",
+            "{} report written to {}",
+            run_kind.label(),
             report_path.display()
         ),
         serde_json::json!({
             "run_id": run_id,
+            "run_kind": run_kind.as_str(),
             "report_path": report_path,
             "passed_cycles": report.passed_cycles,
             "failed_cycles": report.failed_cycles,
         }),
     )?;
 
-    println!("Supervised loop: {} cycle(s)", report.completed_cycles);
+    println!("{}: {} cycle(s)", run_kind.label(), report.completed_cycles);
+    println!("  profile: {}", report.profile);
     println!("  passed: {}", report.passed_cycles);
     println!("  failed: {}", report.failed_cycles);
     println!("  report: {}", report_path.display());
     if report.failed_cycles > 0 {
         anyhow::bail!(
-            "supervised loop completed with {} failed cycle(s)",
+            "{} completed with {} failed cycle(s)",
+            run_kind.label(),
             report.failed_cycles
         );
     }
@@ -2380,14 +2447,16 @@ fn print_work_loops(memory: Arc<MemoryManager>, limit: usize) -> Result<()> {
         println!("No supervised work-loop runs recorded yet.");
         return Ok(());
     }
-    println!("Recent supervised work loops");
+    println!("Recent work/operator loops");
     for run in runs {
         println!(
-            "#{} {} loop={} cycles={}/{} passed={} failed={} report={}",
+            "#{} {} {}:{} loop={} cycles={}/{} passed={} failed={} report={}",
             run.id
                 .map(|id| id.to_string())
                 .unwrap_or_else(|| "?".to_string()),
             run.recorded_at.format("%Y-%m-%d %H:%M:%S"),
+            run.run_kind,
+            run.profile,
             &run.run_id[..8.min(run.run_id.len())],
             run.completed_cycles,
             run.requested_cycles,

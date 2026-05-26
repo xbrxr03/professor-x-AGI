@@ -73,7 +73,9 @@ pub fn print_snapshot(memory: Arc<MemoryManager>, events: Arc<EventStore>) -> Re
     println!("  work loops: {} runs", snapshot.work_loop_count);
     if let Some(run) = &snapshot.latest_work_loop {
         println!(
-            "    latest loop: {} / {}/{} passed / {} failed / report {}",
+            "    latest loop: {}:{} {} / {}/{} passed / {} failed / report {}",
+            run.run_kind,
+            run.profile,
             short_id(&run.run_id),
             run.passed_cycles,
             run.completed_cycles,

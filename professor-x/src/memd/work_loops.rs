@@ -22,6 +22,8 @@ pub struct WorkLoopSmokeRecord {
 pub struct WorkLoopRunRecord {
     pub id: Option<i64>,
     pub run_id: String,
+    pub run_kind: String,
+    pub profile: String,
     pub started_at: DateTime<Utc>,
     pub completed_at: DateTime<Utc>,
     pub requested_cycles: u32,
@@ -48,11 +50,13 @@ impl WorkLoopRunStore {
         let db = self.db.lock().unwrap();
         db.execute(
             "INSERT INTO work_loop_runs
-             (run_id, started_at, completed_at, requested_cycles, completed_cycles,
-              passed_cycles, failed_cycles, report_path, smoke_records, recorded_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+             (run_id, run_kind, profile, started_at, completed_at, requested_cycles,
+              completed_cycles, passed_cycles, failed_cycles, report_path, smoke_records, recorded_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 record.run_id,
+                record.run_kind,
+                record.profile,
                 record.started_at.to_rfc3339(),
                 record.completed_at.to_rfc3339(),
                 record.requested_cycles as i64,
@@ -79,8 +83,9 @@ impl WorkLoopRunStore {
     pub fn recent(&self, limit: usize) -> Result<Vec<WorkLoopRunRecord>> {
         let db = self.db.lock().unwrap();
         let mut stmt = db.prepare(
-            "SELECT id, run_id, started_at, completed_at, requested_cycles, completed_cycles,
-                    passed_cycles, failed_cycles, report_path, smoke_records, recorded_at
+            "SELECT id, run_id, run_kind, profile, started_at, completed_at, requested_cycles,
+                    completed_cycles, passed_cycles, failed_cycles, report_path, smoke_records,
+                    recorded_at
              FROM work_loop_runs
              ORDER BY recorded_at DESC, id DESC
              LIMIT ?1",
@@ -91,20 +96,22 @@ impl WorkLoopRunStore {
 }
 
 fn parse_record(row: &rusqlite::Row) -> rusqlite::Result<WorkLoopRunRecord> {
-    let started_at_raw: String = row.get(2)?;
-    let completed_at_raw: String = row.get(3)?;
-    let smoke_records_raw: String = row.get(9)?;
-    let recorded_at_raw: String = row.get(10)?;
+    let started_at_raw: String = row.get(4)?;
+    let completed_at_raw: String = row.get(5)?;
+    let smoke_records_raw: String = row.get(11)?;
+    let recorded_at_raw: String = row.get(12)?;
     Ok(WorkLoopRunRecord {
         id: row.get(0)?,
         run_id: row.get(1)?,
+        run_kind: row.get(2)?,
+        profile: row.get(3)?,
         started_at: parse_time(&started_at_raw),
         completed_at: parse_time(&completed_at_raw),
-        requested_cycles: row.get::<_, i64>(4)? as u32,
-        completed_cycles: row.get::<_, i64>(5)? as u32,
-        passed_cycles: row.get::<_, i64>(6)? as u32,
-        failed_cycles: row.get::<_, i64>(7)? as u32,
-        report_path: row.get(8)?,
+        requested_cycles: row.get::<_, i64>(6)? as u32,
+        completed_cycles: row.get::<_, i64>(7)? as u32,
+        passed_cycles: row.get::<_, i64>(8)? as u32,
+        failed_cycles: row.get::<_, i64>(9)? as u32,
+        report_path: row.get(10)?,
         smoke_records: serde_json::from_str(&smoke_records_raw).unwrap_or_default(),
         recorded_at: parse_time(&recorded_at_raw),
     })
@@ -133,6 +140,8 @@ mod tests {
                 "CREATE TABLE work_loop_runs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     run_id TEXT NOT NULL UNIQUE,
+                    run_kind TEXT NOT NULL DEFAULT 'supervised',
+                    profile TEXT NOT NULL DEFAULT 'basic',
                     started_at TEXT NOT NULL,
                     completed_at TEXT NOT NULL,
                     requested_cycles INTEGER NOT NULL DEFAULT 0,
@@ -151,6 +160,8 @@ mod tests {
             .insert(&WorkLoopRunRecord {
                 id: None,
                 run_id: "run-1".to_string(),
+                run_kind: "operator".to_string(),
+                profile: "core".to_string(),
                 started_at: now,
                 completed_at: now,
                 requested_cycles: 1,
@@ -175,6 +186,8 @@ mod tests {
         assert_eq!(store.count().unwrap(), 1);
         let latest = store.latest().unwrap().unwrap();
         assert_eq!(latest.run_id, "run-1");
+        assert_eq!(latest.run_kind, "operator");
+        assert_eq!(latest.profile, "core");
         assert_eq!(latest.passed_cycles, 1);
         assert_eq!(latest.smoke_records[0].smoke_id, Some(7));
     }
