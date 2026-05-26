@@ -31,8 +31,9 @@ use evolved::{EvolvedLoop, HiroRunner};
 use memd::events::EventStore;
 use memd::transcripts::TranscriptStore;
 use memd::MemoryManager;
-use policyd::{AuditStore, PolicyEngine};
-use toolbridge::ToolRegistry;
+use policyd::{AuditStore, Decision, PermissionScope, PolicyEngine};
+use toolbridge::executor::{Action, Observation};
+use toolbridge::{ToolExecutor, ToolRegistry};
 
 // ── CLI args ──────────────────────────────────────────────────────────────────
 
@@ -63,6 +64,8 @@ struct CliArgs {
     lab: bool,
     /// Run deterministic evolution accept/reject smoke checks and exit.
     evolution_smoke: bool,
+    /// Run deterministic local coding-agent edit/verify smoke and exit.
+    coding_smoke: bool,
     /// Run one seeded autonomous evolution cycle and exit.
     evolution_cycle: bool,
 }
@@ -83,6 +86,7 @@ fn parse_args() -> CliArgs {
         observe: false,
         lab: false,
         evolution_smoke: false,
+        coding_smoke: false,
         evolution_cycle: false,
     };
     let mut i = 1;
@@ -142,6 +146,10 @@ fn parse_args() -> CliArgs {
             }
             "--evolution-smoke" => {
                 cli.evolution_smoke = true;
+                i += 1;
+            }
+            "--coding-smoke" => {
+                cli.coding_smoke = true;
                 i += 1;
             }
             "--evolution-cycle" => {
@@ -287,6 +295,16 @@ async fn main() -> Result<()> {
             }
             Err(e) => warn!("policyd: chain verification error: {e}"),
         }
+    }
+
+    if cli.coding_smoke {
+        return run_coding_smoke(
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+        )
+        .await;
     }
 
     // ── evolved: seed cognition base ──────────────────────────────────────
@@ -601,6 +619,191 @@ fn git_head(repo_root: &std::path::Path) -> Result<String> {
         anyhow::bail!("git rev-parse failed: {}", String::from_utf8_lossy(&output.stderr));
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+#[derive(serde::Serialize)]
+struct CodingSmokeReport {
+    generated_at: String,
+    workspace: String,
+    passed: bool,
+    initial_test_failed: bool,
+    edit_applied: bool,
+    final_test_passed: bool,
+    artifacts: Vec<String>,
+}
+
+async fn run_coding_smoke(
+    registry: Arc<std::sync::RwLock<ToolRegistry>>,
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+) -> Result<()> {
+    let workspace = std::env::temp_dir().join(format!("px-coding-smoke-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(workspace.join("src"))?;
+    std::fs::write(
+        workspace.join("Cargo.toml"),
+        "[package]\nname = \"px-coding-smoke\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )?;
+    std::fs::write(
+        workspace.join("src/lib.rs"),
+        "pub fn add(left: i32, right: i32) -> i32 {\n    left - right\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn adds_numbers() {\n        assert_eq!(add(2, 3), 5);\n    }\n}\n",
+    )?;
+
+    events.append(
+        None,
+        None,
+        "coding.smoke.started",
+        "starting deterministic coding-agent smoke",
+        serde_json::json!({"workspace": workspace}),
+    )?;
+
+    let mut scope = PermissionScope::default_autonomous().with_workspace_root(workspace.clone());
+    scope.approval_threshold = 100;
+    let executor = ToolExecutor::new(registry).with_workspace_root(workspace.clone());
+    let session_id = uuid::Uuid::new_v4();
+    let task_id = uuid::Uuid::new_v4();
+    let mut artifacts = Vec::new();
+
+    let initial = run_smoke_tool(
+        &executor,
+        Arc::clone(&policy),
+        Arc::clone(&memory),
+        &scope,
+        session_id,
+        task_id,
+        Action {
+            tool_name: "shell.restricted".to_string(),
+            params: serde_json::json!({"command": "cargo test"}),
+            risk_score: 60,
+        },
+    )
+    .await?;
+    artifacts.extend(initial.artifacts.clone());
+    let initial_test_failed = !initial.success;
+
+    let edit = run_smoke_tool(
+        &executor,
+        Arc::clone(&policy),
+        Arc::clone(&memory),
+        &scope,
+        session_id,
+        task_id,
+        Action {
+            tool_name: "fs.replace".to_string(),
+            params: serde_json::json!({
+                "path": "src/lib.rs",
+                "old": "    left - right",
+                "new": "    left + right",
+                "mode": "apply",
+            }),
+            risk_score: 42,
+        },
+    )
+    .await?;
+    artifacts.extend(edit.artifacts.clone());
+
+    let final_test = run_smoke_tool(
+        &executor,
+        Arc::clone(&policy),
+        Arc::clone(&memory),
+        &scope,
+        session_id,
+        task_id,
+        Action {
+            tool_name: "shell.restricted".to_string(),
+            params: serde_json::json!({"command": "cargo test"}),
+            risk_score: 60,
+        },
+    )
+    .await?;
+    artifacts.extend(final_test.artifacts.clone());
+    let final_test_passed = final_test.success;
+    let passed = initial_test_failed && edit.success && final_test_passed;
+    let report = CodingSmokeReport {
+        generated_at: chrono::Utc::now().to_rfc3339(),
+        workspace: workspace.display().to_string(),
+        passed,
+        initial_test_failed,
+        edit_applied: edit.success,
+        final_test_passed,
+        artifacts,
+    };
+    let report_path = write_coding_smoke_report(&report)?;
+
+    events.append(
+        None,
+        None,
+        if passed {
+            "coding.smoke.passed"
+        } else {
+            "coding.smoke.failed"
+        },
+        format!("coding smoke report written to {}", report_path.display()),
+        serde_json::to_value(&report)?,
+    )?;
+
+    println!("Coding smoke: {}", if passed { "passed" } else { "failed" });
+    println!("  workspace: {}", workspace.display());
+    println!("  report: {}", report_path.display());
+    println!("  initial cargo test failed: {initial_test_failed}");
+    println!("  fs.replace applied: {}", edit.success);
+    println!("  final cargo test passed: {final_test_passed}");
+
+    if !passed {
+        anyhow::bail!("coding smoke failed");
+    }
+    Ok(())
+}
+
+async fn run_smoke_tool(
+    executor: &ToolExecutor,
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    scope: &PermissionScope,
+    session_id: uuid::Uuid,
+    task_id: uuid::Uuid,
+    action: Action,
+) -> Result<Observation> {
+    let gate = policy
+        .gate(&action.tool_name, &action.params, session_id, scope)
+        .await;
+    let audit = AuditStore::new(Arc::clone(&memory.db));
+    let _ = audit.append(
+        session_id,
+        Some(task_id),
+        &action.tool_name,
+        &action.params,
+        gate.risk_score,
+        gate.decision.clone(),
+        &gate.reason,
+        None,
+    );
+    if gate.decision != Decision::Allow {
+        anyhow::bail!("policy denied {}: {}", action.tool_name, gate.reason);
+    }
+
+    let obs = executor.execute(&action).await;
+    let _ = audit.append(
+        session_id,
+        Some(task_id),
+        &action.tool_name,
+        &action.params,
+        gate.risk_score,
+        gate.decision,
+        obs.error.as_deref().unwrap_or("executed"),
+        Some(obs.execution_ms),
+    );
+    Ok(obs)
+}
+
+fn write_coding_smoke_report(report: &CodingSmokeReport) -> Result<PathBuf> {
+    let dir = PathBuf::from("artifacts")
+        .join("coding-smoke")
+        .join(chrono::Utc::now().format("%Y-%m-%d").to_string());
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("smoke-{}.json", chrono::Utc::now().format("%H%M%S")));
+    std::fs::write(&path, serde_json::to_string_pretty(report)?)?;
+    Ok(path)
 }
 
 async fn run_one_evolution_cycle(
