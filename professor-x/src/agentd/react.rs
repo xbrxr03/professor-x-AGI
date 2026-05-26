@@ -901,6 +901,7 @@ const TOOLS_DESCRIPTION: &str = "Available tools:
 - web.search    {\"query\": \"<q>\", \"num_results\": 5} — search the web
 - web.fetch     {\"url\": \"<url>\"} — fetch a URL
 - shell.restricted {\"command\": \"<cmd>\"} — run a shell command (sandboxed)
+- patch.apply  {\"mode\": \"check|apply\", \"patch\": \"<unified diff>\"} — check or apply a reviewable git-style patch
 - memory.read   {\"query\": \"<q>\", \"layer\": \"episodic|semantic|procedural\"} — search memory
 - memory.write  {\"content\": \"<text>\", \"layer\": \"semantic\", \"source\": \"<src>\"} — store knowledge
 - git.commit    {\"message\": \"<msg>\"} — commit current changes

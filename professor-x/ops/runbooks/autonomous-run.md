@@ -90,6 +90,14 @@ find artifacts/validation -type f | sort
 
 Transcript and validation paths are emitted as `transcript.written`, `artifact.valid`, or `artifact.invalid` events, so they are visible from `--lab`, `--events`, and `--status`.
 
+Patch artifacts from the reviewable patch tool are stored here:
+
+```bash
+find artifacts/patches -type f | sort
+```
+
+Autonomous coding tasks should prefer `patch.apply` with `mode=check` before `mode=apply`, then run compile/tests before any commit.
+
 ## Kill Switch
 
 Use Ctrl+C for foreground runs, or send SIGUSR2 to the process for a graceful shutdown.

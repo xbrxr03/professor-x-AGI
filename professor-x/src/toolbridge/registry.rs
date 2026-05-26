@@ -63,6 +63,7 @@ impl ToolRegistry {
             ("web.search",       "Search the web for information",        15, 30_000),
             ("web.fetch",        "Fetch content from a URL",              20, 30_000),
             ("shell.restricted", "Run a sandboxed shell command",         60, 60_000),
+            ("patch.apply",      "Check or apply a unified diff patch",   62, 30_000),
             ("shell.elevated",   "Run a privileged shell command",        90, 60_000),
             ("memory.read",      "Query Professor X memory layers",       5,  5_000),
             ("memory.write",     "Write an entry to Professor X memory",  10, 5_000),

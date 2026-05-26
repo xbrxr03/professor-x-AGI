@@ -4,6 +4,7 @@
 /// Circuit breaker lives in the ReAct loop — executor is pure dispatch.
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -186,6 +187,49 @@ impl ToolExecutor {
                     0,
                 ))
             }
+            "patch.apply" => {
+                let patch = req_str(&action.params, "patch")?;
+                let mode = action.params["mode"].as_str().unwrap_or("check");
+                if !matches!(mode, "check" | "apply") {
+                    anyhow::bail!("patch.apply mode must be 'check' or 'apply'");
+                }
+                let paths = validate_patch_paths(patch)?;
+                let artifact_path = self.write_patch_artifact(patch)?;
+                let check = tokio::process::Command::new("git")
+                    .args(["apply", "--check"])
+                    .arg(&artifact_path)
+                    .current_dir(&self.workspace_root)
+                    .output()
+                    .await?;
+                if !check.status.success() {
+                    anyhow::bail!(
+                        "git apply --check failed: {}",
+                        String::from_utf8_lossy(&check.stderr)
+                    );
+                }
+                if mode == "apply" {
+                    let apply = tokio::process::Command::new("git")
+                        .arg("apply")
+                        .arg(&artifact_path)
+                        .current_dir(&self.workspace_root)
+                        .output()
+                        .await?;
+                    if !apply.status.success() {
+                        anyhow::bail!(
+                            "git apply failed: {}",
+                            String::from_utf8_lossy(&apply.stderr)
+                        );
+                    }
+                }
+                Ok((
+                    format!(
+                        "patch {mode} succeeded for {} path(s); artifact={}",
+                        paths.len(),
+                        artifact_path.display()
+                    ),
+                    0,
+                ))
+            }
             "web.search" => {
                 let query = req_str(&action.params, "query")?;
                 let n = action.params["num_results"].as_u64().unwrap_or(5) as usize;
@@ -298,6 +342,81 @@ impl ToolExecutor {
             }
         }
     }
+
+    fn write_patch_artifact(&self, patch: &str) -> Result<PathBuf> {
+        let dir = artifact_root(&self.workspace_root)
+            .join("patches")
+            .join(chrono::Utc::now().format("%Y-%m-%d").to_string());
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join(format!("{}.diff", uuid::Uuid::new_v4()));
+        let mut file = std::fs::File::create(&path)?;
+        writeln!(file, "{patch}")?;
+        Ok(path)
+    }
+}
+
+fn artifact_root(workspace_root: &std::path::Path) -> PathBuf {
+    let nested = workspace_root.join("professor-x/artifacts");
+    if nested.exists() {
+        nested
+    } else {
+        workspace_root.join("artifacts")
+    }
+}
+
+fn validate_patch_paths(patch: &str) -> Result<Vec<String>> {
+    let mut paths = patch_touched_paths(patch);
+    if paths.is_empty() {
+        anyhow::bail!("patch contains no file paths");
+    }
+    for path in &paths {
+        if path == "/dev/null" {
+            continue;
+        }
+        if path.starts_with('/') || path.contains('\0') {
+            anyhow::bail!("patch path '{path}' is not relative");
+        }
+        if path.split('/').any(|part| part == ".." || part == ".git") {
+            anyhow::bail!("patch path '{path}' contains blocked component");
+        }
+    }
+    paths.retain(|path| path != "/dev/null");
+    Ok(paths)
+}
+
+fn patch_touched_paths(patch: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    for line in patch.lines() {
+        if let Some(rest) = line.strip_prefix("diff --git ") {
+            let mut parts = rest.split_whitespace();
+            for raw in [parts.next(), parts.next()].into_iter().flatten() {
+                if let Some(path) = raw.strip_prefix("a/").or_else(|| raw.strip_prefix("b/")) {
+                    paths.push(path.to_string());
+                }
+            }
+        } else if let Some(raw) = line.strip_prefix("+++ ") {
+            if let Some(path) = clean_patch_header_path(raw) {
+                paths.push(path);
+            }
+        } else if let Some(raw) = line.strip_prefix("--- ") {
+            if let Some(path) = clean_patch_header_path(raw) {
+                paths.push(path);
+            }
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn clean_patch_header_path(raw: &str) -> Option<String> {
+    let path = raw.split_whitespace().next()?;
+    if path == "/dev/null" {
+        return Some(path.to_string());
+    }
+    path.strip_prefix("a/")
+        .or_else(|| path.strip_prefix("b/"))
+        .map(ToString::to_string)
 }
 
 async fn web_search(query: &str, n: usize) -> Result<String> {
@@ -395,5 +514,61 @@ fn default_workspace_root() -> PathBuf {
         if !dir.pop() {
             return std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn temp_workspace() -> PathBuf {
+        let root = std::env::temp_dir().join(format!("px-patch-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/lib.rs"), "pub fn x() {}\n").unwrap();
+        let init = std::process::Command::new("git")
+            .arg("init")
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert!(init.status.success(), "{}", String::from_utf8_lossy(&init.stderr));
+        root
+    }
+
+    fn patch_action(mode: &str) -> Action {
+        Action {
+            tool_name: "patch.apply".to_string(),
+            params: json!({
+                "mode": mode,
+                "patch": "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-pub fn x() {}\n+pub fn x() { }\n",
+            }),
+            risk_score: 62,
+        }
+    }
+
+    #[tokio::test]
+    async fn patch_apply_checks_and_applies_reviewable_diff() {
+        let root = temp_workspace();
+        let registry = Arc::new(std::sync::RwLock::new(ToolRegistry::new()));
+        let executor = ToolExecutor::new(registry).with_workspace_root(root.clone());
+
+        let check = executor.execute(&patch_action("check")).await;
+        assert!(check.success, "{:?}", check.error);
+        assert!(check.output.contains("patch check succeeded"));
+        assert_eq!(
+            std::fs::read_to_string(root.join("src/lib.rs")).unwrap(),
+            "pub fn x() {}\n"
+        );
+
+        let apply = executor.execute(&patch_action("apply")).await;
+        assert!(apply.success, "{:?}", apply.error);
+        assert!(apply.output.contains("patch apply succeeded"));
+        assert_eq!(
+            std::fs::read_to_string(root.join("src/lib.rs")).unwrap(),
+            "pub fn x() { }\n"
+        );
+        assert!(root.join("artifacts/patches").exists());
+
+        let _ = std::fs::remove_dir_all(root);
     }
 }

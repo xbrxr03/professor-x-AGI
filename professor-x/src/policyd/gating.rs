@@ -51,6 +51,7 @@ pub fn tool_risk_score(tool: &str) -> u8 {
         "ollama.complete" => 15,
         "fs.write" => 45,
         "shell.restricted" => 60,
+        "patch.apply" => 62,
         "fs.delete" => 70,
         "git.commit" => 50,
         "harness.modify" => 85,
@@ -112,6 +113,24 @@ impl PolicyEngine {
                         risk_score: risk,
                     };
                 }
+            }
+        }
+
+        if tool == "patch.apply" {
+            if let Some(patch) = params.get("patch").and_then(|v| v.as_str()) {
+                if let Some(reason) = patch_denied_reason(patch, scope) {
+                    return GateResult {
+                        decision: Decision::Deny,
+                        reason,
+                        risk_score: risk,
+                    };
+                }
+            } else {
+                return GateResult {
+                    decision: Decision::Deny,
+                    reason: "patch.apply requires string param 'patch'".to_string(),
+                    risk_score: risk,
+                };
             }
         }
 
@@ -281,6 +300,65 @@ fn blocked_sensitive_path(path: &Path, scope: &PermissionScope) -> bool {
         .blocked_paths
         .iter()
         .any(|blocked| path_matches_prefix(path, blocked, scope))
+}
+
+fn patch_denied_reason(patch: &str, scope: &PermissionScope) -> Option<String> {
+    let paths = patch_touched_paths(patch);
+    if paths.is_empty() {
+        return Some("patch contains no file paths".to_string());
+    }
+
+    for path in paths {
+        if path == "/dev/null" {
+            continue;
+        }
+        if path.starts_with('/') || path.contains('\0') {
+            return Some(format!("patch path '{}' is not a relative workspace path", path));
+        }
+        if path.split('/').any(|part| part == ".." || part == ".git") {
+            return Some(format!("patch path '{}' contains a blocked component", path));
+        }
+        if let Some(reason) = path_access_denied_reason(&path, FileAccess::Write, scope) {
+            return Some(format!("patch path denied: {reason}"));
+        }
+    }
+
+    None
+}
+
+fn patch_touched_paths(patch: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    for line in patch.lines() {
+        if let Some(rest) = line.strip_prefix("diff --git ") {
+            let mut parts = rest.split_whitespace();
+            for raw in [parts.next(), parts.next()].into_iter().flatten() {
+                if let Some(path) = raw.strip_prefix("a/").or_else(|| raw.strip_prefix("b/")) {
+                    paths.push(path.to_string());
+                }
+            }
+        } else if let Some(raw) = line.strip_prefix("+++ ") {
+            if let Some(path) = clean_patch_header_path(raw) {
+                paths.push(path);
+            }
+        } else if let Some(raw) = line.strip_prefix("--- ") {
+            if let Some(path) = clean_patch_header_path(raw) {
+                paths.push(path);
+            }
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn clean_patch_header_path(raw: &str) -> Option<String> {
+    let path = raw.split_whitespace().next()?;
+    if path == "/dev/null" {
+        return Some(path.to_string());
+    }
+    path.strip_prefix("a/")
+        .or_else(|| path.strip_prefix("b/"))
+        .map(ToString::to_string)
 }
 
 fn path_matches_prefix(path: &Path, prefix: &str, scope: &PermissionScope) -> bool {
@@ -603,5 +681,26 @@ mod tests {
 
         let git_push = gate("shell.restricted", json!({"command": "git push"}), &scope).await;
         assert_eq!(git_push.decision, Decision::Deny);
+    }
+
+    #[tokio::test]
+    async fn patch_policy_keeps_paths_inside_workspace() {
+        let scope = test_scope();
+
+        let allowed = gate(
+            "patch.apply",
+            json!({"mode": "check", "patch": "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-pub fn x() {}\n+pub fn x() { }\n"}),
+            &scope,
+        )
+        .await;
+        assert_eq!(allowed.decision, Decision::Allow, "{}", allowed.reason);
+
+        let denied = gate(
+            "patch.apply",
+            json!({"mode": "check", "patch": "diff --git a/../escape.txt b/../escape.txt\n--- a/../escape.txt\n+++ b/../escape.txt\n@@ -1 +1 @@\n-a\n+b\n"}),
+            &scope,
+        )
+        .await;
+        assert_eq!(denied.decision, Decision::Deny);
     }
 }
