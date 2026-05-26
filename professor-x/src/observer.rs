@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 use crate::memd::coding_smoke::{CodingSmokeRecord, CodingSmokeStore};
 use crate::memd::events::{AgentEvent, EventStore};
 use crate::memd::task_runs::{TaskRun, TaskRunStore};
+use crate::memd::transcripts::{TranscriptStore, TranscriptSummary};
 use crate::memd::MemoryManager;
 
 const TICK_RATE: Duration = Duration::from_millis(750);
@@ -88,6 +89,16 @@ pub fn print_snapshot(memory: Arc<MemoryManager>, events: Arc<EventStore>) -> Re
     }
     println!("  audit entries: {}", snapshot.audit_entries);
     println!("  task transcripts: {}", snapshot.transcript_count);
+    if let Some(transcript) = &snapshot.latest_transcript_summary {
+        println!(
+            "    latest transcript: {} / task {} / {} steps / {}",
+            transcript.status,
+            short_id(&transcript.task_id),
+            transcript.step_count,
+            truncate(&transcript.task_description, 90),
+        );
+        println!("    review: {}", transcript.transcript_path);
+    }
     if let Some(run) = &snapshot.latest_run {
         println!(
             "  latest task: {} {} / p{} / {} attempts / {} steps / {}",
@@ -281,6 +292,7 @@ struct ObserverSnapshot {
     latest_evolution: Option<AgentEvent>,
     latest_transcript: Option<AgentEvent>,
     latest_run: Option<TaskRun>,
+    latest_transcript_summary: Option<TranscriptSummary>,
     latest_coding_smoke: Option<CodingSmokeRecord>,
 }
 
@@ -347,6 +359,13 @@ impl ObserverSnapshot {
             ..Self::default()
         };
         snapshot.latest_run = TaskRunStore::new(Arc::clone(&memory.db)).latest()?;
+        snapshot.latest_transcript_summary = TranscriptStore::new(
+            Arc::clone(&memory.db),
+            std::env::var("PROFESSOR_X_TRANSCRIPT_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| PathBuf::from("artifacts/transcripts")),
+        )
+        .latest()?;
         let smoke_store = CodingSmokeStore::new(Arc::clone(&memory.db));
         snapshot.coding_smoke_count = smoke_store.count()?;
         snapshot.coding_smoke_passed = smoke_store.pass_count()?;
@@ -493,6 +512,7 @@ impl Default for ObserverSnapshot {
             latest_evolution: None,
             latest_transcript: None,
             latest_run: None,
+            latest_transcript_summary: None,
             latest_coding_smoke: None,
         }
     }
@@ -680,7 +700,7 @@ fn draw_activity(frame: &mut Frame, area: Rect, app: &ObserverApp) {
         latest_line("task", &app.snapshot.latest_task),
         latest_line("tool", &app.snapshot.latest_tool),
         latest_line("policy", &app.snapshot.latest_policy),
-        latest_line("trace", &app.snapshot.latest_transcript),
+        latest_transcript_line(&app.snapshot.latest_transcript_summary),
         latest_line("evolve", &app.snapshot.latest_evolution),
         latest_coding_smoke_line(&app.snapshot.latest_coding_smoke),
         Line::from(vec![
@@ -750,6 +770,7 @@ fn draw_science(frame: &mut Frame, area: Rect, app: &ObserverApp) {
             app.snapshot.command_artifacts,
         )),
         latest_coding_smoke_detail(&app.snapshot.latest_coding_smoke),
+        latest_transcript_detail(&app.snapshot.latest_transcript_summary),
         Line::from(
             "Run --lab --run-now for daemon plus observer; --observe follows an existing run.",
         ),
@@ -950,11 +971,29 @@ fn latest_coding_smoke_line(smoke: &Option<CodingSmokeRecord>) -> Line<'static> 
     }
 }
 
+fn latest_transcript_line(transcript: &Option<TranscriptSummary>) -> Line<'static> {
+    match transcript {
+        Some(transcript) => Line::from(vec![
+            Span::styled("trace   ", label()),
+            Span::styled(format!("{:<10}", transcript.status), status_style(&transcript.status)),
+            Span::raw(format!(
+                "{}s {}",
+                transcript.step_count,
+                truncate(&transcript.task_description, 58),
+            )),
+        ]),
+        None => Line::from(vec![
+            Span::styled("trace   ", label()),
+            Span::styled("waiting", Style::default().fg(Color::DarkGray)),
+        ]),
+    }
+}
+
 fn status_style(status: &str) -> Style {
     let color = match status {
-        "Complete" => Color::Green,
+        "Complete" | "succeeded" => Color::Green,
         "Running" => Color::Cyan,
-        "Failed" | "Blocked" | "Cancelled" => Color::Red,
+        "Failed" | "failed" | "Blocked" | "Cancelled" => Color::Red,
         _ => Color::Yellow,
     };
     Style::default().fg(color)
@@ -977,6 +1016,19 @@ fn latest_coding_smoke_detail(smoke: &Option<CodingSmokeRecord>) -> Line<'static
             ),
         )),
         None => Line::from("Coding smoke: waiting for first run."),
+    }
+}
+
+fn latest_transcript_detail(transcript: &Option<TranscriptSummary>) -> Line<'static> {
+    match transcript {
+        Some(transcript) => Line::from(format!(
+            "Latest transcript: {} / task {} / {} step(s) / {}",
+            transcript.status,
+            short_id(&transcript.task_id),
+            transcript.step_count,
+            truncate(&transcript.transcript_path, 80),
+        )),
+        None => Line::from("Latest transcript: waiting for first completed task."),
     }
 }
 
@@ -1111,4 +1163,8 @@ fn format_event_line(event: &AgentEvent) -> String {
         session,
         event.summary
     )
+}
+
+fn short_id(id: &str) -> &str {
+    &id[..8.min(id.len())]
 }
