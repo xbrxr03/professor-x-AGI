@@ -163,6 +163,10 @@ impl TaskRunStore {
     }
 
     pub fn latest(&self) -> Result<Option<TaskRun>> {
+        Ok(self.recent(1)?.into_iter().next())
+    }
+
+    pub fn recent(&self, limit: usize) -> Result<Vec<TaskRun>> {
         let db = self.db.lock().unwrap();
         let mut stmt = db.prepare(
             "SELECT task_id, description, task_type, status, priority, attempt_count, step_count,
@@ -172,13 +176,14 @@ impl TaskRunStore {
                     queued_at, started_at, updated_at, completed_at
              FROM task_runs
              ORDER BY updated_at DESC
-             LIMIT 1",
+             LIMIT ?1",
         )?;
-        let mut rows = stmt.query([])?;
-        let Some(row) = rows.next()? else {
-            return Ok(None);
-        };
-        Ok(Some(parse_run(row)?))
+        let rows = stmt.query_map([limit.max(1) as i64], parse_run)?;
+        let mut runs = Vec::new();
+        for row in rows {
+            runs.push(row?);
+        }
+        Ok(runs)
     }
 
     fn update_task(
@@ -442,5 +447,9 @@ mod tests {
             latest.transcript_path.as_deref(),
             Some("artifacts/transcripts/task.json")
         );
+
+        let recent = store.recent(5).unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].task_id, latest.task_id);
     }
 }

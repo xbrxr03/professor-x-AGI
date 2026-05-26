@@ -31,7 +31,7 @@ use evolved::CognitionStore;
 use evolved::{EvolvedLoop, HiroRunner};
 use memd::coding_smoke::{CodingSmokeRecord, CodingSmokeStore};
 use memd::events::EventStore;
-use memd::task_runs::TaskRunStore;
+use memd::task_runs::{TaskRun, TaskRunStore};
 use memd::transcripts::{TranscriptStore, TranscriptSummary};
 use memd::MemoryManager;
 use policyd::{AuditStore, Decision, PermissionScope, PolicyEngine};
@@ -61,6 +61,8 @@ struct CliArgs {
     events_limit: Option<usize>,
     /// Print the last N task transcripts and exit.
     transcripts_limit: Option<usize>,
+    /// Print the last N task runs and exit.
+    task_runs_limit: Option<usize>,
     /// Print a task transcript review by task id prefix, or 'latest'.
     task_review: Option<String>,
     /// Follow agent events until interrupted.
@@ -90,6 +92,7 @@ fn parse_args() -> CliArgs {
         status: false,
         events_limit: None,
         transcripts_limit: None,
+        task_runs_limit: None,
         task_review: None,
         watch: false,
         observe: false,
@@ -149,6 +152,14 @@ fn parse_args() -> CliArgs {
                 cli.transcripts_limit = Some(limit.unwrap_or(10));
                 i += if limit.is_some() { 2 } else { 1 };
             }
+            "--task-runs" => {
+                let limit = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .and_then(|next| next.parse::<usize>().ok());
+                cli.task_runs_limit = Some(limit.unwrap_or(10));
+                i += if limit.is_some() { 2 } else { 1 };
+            }
             "--task-review" if i + 1 < args.len() => {
                 cli.task_review = Some(args[i + 1].clone());
                 i += 2;
@@ -193,6 +204,7 @@ async fn main() -> Result<()> {
     let inspect_mode = cli.status
         || cli.events_limit.is_some()
         || cli.transcripts_limit.is_some()
+        || cli.task_runs_limit.is_some()
         || cli.task_review.is_some()
         || cli.watch
         || cli.observe
@@ -248,6 +260,10 @@ async fn main() -> Result<()> {
 
     if let Some(limit) = cli.transcripts_limit {
         return print_transcripts(Arc::clone(&transcripts), limit);
+    }
+
+    if let Some(limit) = cli.task_runs_limit {
+        return print_task_runs(Arc::clone(&memory), limit);
     }
 
     if let Some(task_ref) = cli.task_review {
@@ -1698,6 +1714,31 @@ fn print_transcripts(transcripts: Arc<TranscriptStore>, limit: usize) -> Result<
     Ok(())
 }
 
+fn print_task_runs(memory: Arc<MemoryManager>, limit: usize) -> Result<()> {
+    let runs = TaskRunStore::new(Arc::clone(&memory.db)).recent(limit)?;
+    if runs.is_empty() {
+        println!("No task runs recorded yet.");
+        return Ok(());
+    }
+    println!("Recent task runs");
+    for run in runs {
+        println!("{}", format_task_run_summary(&run));
+        if !run.verification_summary.is_empty() {
+            println!("  verification: {}", truncate(&run.verification_summary, 140));
+        }
+        if let Some(path) = &run.transcript_path {
+            println!("  transcript: {path}");
+        }
+        if !run.verification_artifacts.is_empty() {
+            println!("  proof artifacts: {}", run.verification_artifacts.len());
+        }
+        if let Some(error) = &run.last_error {
+            println!("  last error: {}", truncate(error, 160));
+        }
+    }
+    Ok(())
+}
+
 fn print_task_review(transcripts: Arc<TranscriptStore>, task_ref: &str) -> Result<()> {
     let transcript = if task_ref == "latest" {
         transcripts.latest()?
@@ -1746,6 +1787,23 @@ fn format_transcript_summary(transcript: &TranscriptSummary) -> String {
         transcript.attempt_count,
         transcript.step_count,
         truncate(&transcript.task_description, 96),
+    )
+}
+
+fn format_task_run_summary(run: &TaskRun) -> String {
+    format!(
+        "{} {} task={} type={} p{} attempts={} steps={}{} {}",
+        run.updated_at.format("%Y-%m-%d %H:%M:%S"),
+        run.status,
+        &run.task_id[..8.min(run.task_id.len())],
+        run.task_type,
+        run.priority,
+        run.attempt_count,
+        run.step_count,
+        run.outcome_score
+            .map(|score| format!(" score={score:.2}"))
+            .unwrap_or_default(),
+        truncate(&run.description, 96),
     )
 }
 
