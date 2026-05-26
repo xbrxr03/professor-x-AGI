@@ -79,6 +79,8 @@ struct CliArgs {
     evolution_smoke: bool,
     /// Run deterministic local coding-agent edit/verify smoke and exit.
     coding_smoke: bool,
+    /// Run N bounded local supervised work-loop cycles and exit.
+    supervised_loop_cycles: Option<u32>,
     /// Run one seeded autonomous evolution cycle and exit.
     evolution_cycle: bool,
 }
@@ -105,6 +107,7 @@ fn parse_args() -> CliArgs {
         lab: false,
         evolution_smoke: false,
         coding_smoke: false,
+        supervised_loop_cycles: None,
         evolution_cycle: false,
     };
     let mut i = 1;
@@ -201,6 +204,14 @@ fn parse_args() -> CliArgs {
             "--coding-smoke" => {
                 cli.coding_smoke = true;
                 i += 1;
+            }
+            "--supervised-loop" => {
+                let cycles = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .and_then(|next| next.parse::<u32>().ok());
+                cli.supervised_loop_cycles = Some(cycles.unwrap_or(1));
+                i += if cycles.is_some() { 2 } else { 1 };
             }
             "--evolution-cycle" => {
                 cli.evolution_cycle = true;
@@ -383,6 +394,18 @@ async fn main() -> Result<()> {
             Arc::clone(&memory),
             Arc::clone(&events),
             Arc::clone(&transcripts),
+        )
+        .await;
+    }
+
+    if let Some(cycles) = cli.supervised_loop_cycles {
+        return run_supervised_loop(
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            Arc::clone(&transcripts),
+            cycles,
         )
         .await;
     }
@@ -711,6 +734,147 @@ struct CodingSmokeReport {
     final_test_passed: bool,
     transcript_path: Option<String>,
     artifacts: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
+struct SupervisedLoopReport {
+    run_id: String,
+    started_at: String,
+    completed_at: String,
+    requested_cycles: u32,
+    completed_cycles: u32,
+    passed_cycles: u32,
+    failed_cycles: u32,
+    smoke_records: Vec<SupervisedLoopSmokeRecord>,
+}
+
+#[derive(serde::Serialize)]
+struct SupervisedLoopSmokeRecord {
+    cycle: u32,
+    smoke_id: Option<i64>,
+    passed: bool,
+    report_path: String,
+    transcript_path: Option<String>,
+    workspace: String,
+}
+
+async fn run_supervised_loop(
+    registry: Arc<std::sync::RwLock<ToolRegistry>>,
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    transcripts: Arc<TranscriptStore>,
+    cycles: u32,
+) -> Result<()> {
+    let run_id = uuid::Uuid::new_v4().to_string();
+    let started_at = chrono::Utc::now();
+    let cycles = cycles.clamp(1, 50);
+    events.append(
+        None,
+        None,
+        "work_loop.started",
+        format!("starting supervised work loop with {cycles} cycle(s)"),
+        serde_json::json!({"run_id": run_id, "cycles": cycles}),
+    )?;
+
+    let smoke_store = CodingSmokeStore::new(Arc::clone(&memory.db));
+    let mut records = Vec::new();
+    let mut failed_cycles = 0u32;
+
+    for cycle in 1..=cycles {
+        let before_smoke_id = smoke_store.latest()?.and_then(|record| record.id);
+        events.append(
+            None,
+            None,
+            "work_loop.cycle.started",
+            format!("supervised work-loop cycle {cycle}/{cycles} started"),
+            serde_json::json!({"run_id": run_id, "cycle": cycle, "cycles": cycles}),
+        )?;
+        let result = run_coding_smoke(
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            Arc::clone(&transcripts),
+        )
+        .await;
+
+        let latest = smoke_store
+            .latest()?
+            .filter(|record| record.id != before_smoke_id);
+        let passed = result.is_ok() && latest.as_ref().map(|record| record.passed).unwrap_or(false);
+        if !passed {
+            failed_cycles += 1;
+        }
+        if let Some(record) = latest {
+            records.push(SupervisedLoopSmokeRecord {
+                cycle,
+                smoke_id: record.id,
+                passed: record.passed,
+                report_path: record.report_path,
+                transcript_path: record.transcript_path,
+                workspace: record.workspace,
+            });
+        }
+
+        events.append(
+            None,
+            None,
+            if passed {
+                "work_loop.cycle.passed"
+            } else {
+                "work_loop.cycle.failed"
+            },
+            format!(
+                "supervised work-loop cycle {cycle}/{cycles} {}",
+                if passed { "passed" } else { "failed" }
+            ),
+            serde_json::json!({
+                "run_id": run_id,
+                "cycle": cycle,
+                "cycles": cycles,
+                "passed": passed,
+                "error": result.err().map(|e| e.to_string()),
+            }),
+        )?;
+    }
+
+    let report = SupervisedLoopReport {
+        run_id: run_id.clone(),
+        started_at: started_at.to_rfc3339(),
+        completed_at: chrono::Utc::now().to_rfc3339(),
+        requested_cycles: cycles,
+        completed_cycles: records.len() as u32,
+        passed_cycles: records.iter().filter(|record| record.passed).count() as u32,
+        failed_cycles,
+        smoke_records: records,
+    };
+    let report_path = write_supervised_loop_report(&report)?;
+    events.append(
+        None,
+        None,
+        if report.failed_cycles == 0 {
+            "work_loop.completed"
+        } else {
+            "work_loop.completed_with_failures"
+        },
+        format!("supervised work-loop report written to {}", report_path.display()),
+        serde_json::json!({
+            "run_id": run_id,
+            "report_path": report_path,
+            "passed_cycles": report.passed_cycles,
+            "failed_cycles": report.failed_cycles,
+        }),
+    )?;
+
+    println!("Supervised loop: {} cycle(s)", report.completed_cycles);
+    println!("  passed: {}", report.passed_cycles);
+    println!("  failed: {}", report.failed_cycles);
+    println!("  report: {}", report_path.display());
+    if report.failed_cycles > 0 {
+        anyhow::bail!("supervised loop completed with {} failed cycle(s)", report.failed_cycles);
+    }
+    Ok(())
 }
 
 async fn run_coding_smoke(
@@ -1072,6 +1236,20 @@ fn write_coding_smoke_report(report: &CodingSmokeReport) -> Result<PathBuf> {
         .join(chrono::Utc::now().format("%Y-%m-%d").to_string());
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(format!("smoke-{}.json", chrono::Utc::now().format("%H%M%S")));
+    std::fs::write(&path, serde_json::to_string_pretty(report)?)?;
+    Ok(path)
+}
+
+fn write_supervised_loop_report(report: &SupervisedLoopReport) -> Result<PathBuf> {
+    let dir = std::env::var("PROFESSOR_X_WORK_LOOP_REPORT_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            PathBuf::from("artifacts")
+                .join("work-loop")
+                .join(chrono::Utc::now().format("%Y-%m-%d").to_string())
+        });
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("loop-{}.json", chrono::Utc::now().format("%H%M%S")));
     std::fs::write(&path, serde_json::to_string_pretty(report)?)?;
     Ok(path)
 }
@@ -2068,6 +2246,8 @@ fn work_event_label(event_type: &str) -> &'static str {
         "SMOKE"
     } else if event_type.starts_with("evolution.") {
         "EVOLVE"
+    } else if event_type.starts_with("work_loop.") {
+        "LOOP"
     } else if event_type == "transcript.written" {
         "TRACE"
     } else {

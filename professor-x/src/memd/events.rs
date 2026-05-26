@@ -185,6 +185,7 @@ fn work_event_where_clause() -> &'static str {
       OR event_type LIKE 'react.%'
       OR event_type LIKE 'coding.smoke.%'
       OR event_type LIKE 'evolution.%'
+      OR event_type LIKE 'work_loop.%'
       OR event_type = 'transcript.written'"
 }
 
