@@ -34,6 +34,7 @@ use crate::evolved::lcap::LcapPolicy;
 use crate::evolved::tracker::TaskOutcome;
 use crate::memd::episodic::EpisodicEntry;
 use crate::memd::events::EventStore;
+use crate::memd::task_runs::TaskRunStore;
 use crate::memd::transcripts::TranscriptStore;
 use crate::memd::MemoryManager;
 use crate::ollama::{ModelOptions, OllamaClient};
@@ -100,8 +101,11 @@ impl ReactLoop {
 
     /// Run a task to completion or exhaustion. Returns outcome for the tracker.
     pub async fn run(&self, task: &mut TaskNode) -> Result<TaskOutcome> {
+        let task_runs = TaskRunStore::new(Arc::clone(&self.memory.db));
+        let _ = task_runs.queued(task);
         task.status = TaskStatus::Running;
         task.started_at = Some(Utc::now());
+        let _ = task_runs.started(task);
         self.emit_event(
             None,
             Some(task.id),
@@ -142,6 +146,7 @@ impl ReactLoop {
                 format!("attempt {}/{} started", attempt + 1, task.max_attempts),
                 json!({"attempt": attempt + 1}),
             );
+            let _ = task_runs.attempt_started(task);
 
             let outcome = self
                 .run_attempt(task, &ice_examples, &cognition_context, num_ctx)
@@ -154,7 +159,9 @@ impl ReactLoop {
                     task.outcome_score = Some(1.0);
 
                     self.write_episodic(task, true).await;
-                    self.record_transcript(task, "succeeded", "task completed successfully");
+                    let transcript_path =
+                        self.record_transcript(task, "succeeded", "task completed successfully");
+                    let _ = task_runs.finished(task, None, transcript_path.as_deref());
                     self.emit_event(
                         None,
                         Some(task.id),
@@ -197,7 +204,11 @@ impl ReactLoop {
                         None,
                         Some(task.id),
                         "task.attempt.error",
-                        format!("attempt {} errored: {}", attempt + 1, truncate(&e.to_string(), 160)),
+                        format!(
+                            "attempt {} errored: {}",
+                            attempt + 1,
+                            truncate(&e.to_string(), 160)
+                        ),
                         json!({"attempt": attempt + 1, "error": e.to_string()}),
                     );
                     if attempt + 1 < task.max_attempts {
@@ -224,7 +235,8 @@ impl ReactLoop {
         task.outcome_score = Some(0.0);
 
         self.write_episodic(task, false).await;
-        self.record_transcript(task, "failed", &failure_mode);
+        let transcript_path = self.record_transcript(task, "failed", &failure_mode);
+        let _ = task_runs.finished(task, Some(&failure_mode), transcript_path.as_deref());
         self.emit_event(
             None,
             Some(task.id),
@@ -460,7 +472,11 @@ impl ReactLoop {
                             self.emit_event(
                                 Some(session_id),
                                 Some(task.id),
-                                if obs.success { "tool.succeeded" } else { "tool.failed" },
+                                if obs.success {
+                                    "tool.succeeded"
+                                } else {
+                                    "tool.failed"
+                                },
                                 format!(
                                     "tool '{}' {} in {}ms",
                                     parsed.tool_name,
@@ -510,6 +526,7 @@ impl ReactLoop {
                         timestamp: Utc::now(),
                     };
                     task.steps.push(step);
+                    let _ = TaskRunStore::new(Arc::clone(&self.memory.db)).step_recorded(task);
 
                     // Check if the observation signals completion
                     if is_completion_signal(&observation) {
@@ -549,23 +566,34 @@ impl ReactLoop {
         }
     }
 
-    fn record_transcript(&self, task: &TaskNode, status: &str, summary: &str) {
+    fn record_transcript(
+        &self,
+        task: &TaskNode,
+        status: &str,
+        summary: &str,
+    ) -> Option<std::path::PathBuf> {
         let (Some(transcripts), Some(events)) = (&self.transcripts, &self.events) else {
-            return;
+            return None;
         };
         match transcripts.record_task(task, status, summary, events) {
-            Ok(path) => self.emit_event(
-                None,
-                Some(task.id),
-                "transcript.written",
-                format!("task transcript written to {}", path.display()),
-                json!({
-                    "path": path,
-                    "status": status,
-                    "summary": summary,
-                }),
-            ),
-            Err(e) => warn!("task transcript write failed: {e}"),
+            Ok(path) => {
+                self.emit_event(
+                    None,
+                    Some(task.id),
+                    "transcript.written",
+                    format!("task transcript written to {}", path.display()),
+                    json!({
+                        "path": path,
+                        "status": status,
+                        "summary": summary,
+                    }),
+                );
+                Some(path)
+            }
+            Err(e) => {
+                warn!("task transcript write failed: {e}");
+                None
+            }
         }
     }
 

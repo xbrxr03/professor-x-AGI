@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::memd::events::{AgentEvent, EventStore};
+use crate::memd::task_runs::{TaskRun, TaskRunStore};
 use crate::memd::MemoryManager;
 
 const TICK_RATE: Duration = Duration::from_millis(750);
@@ -68,6 +69,31 @@ pub fn print_snapshot(memory: Arc<MemoryManager>, events: Arc<EventStore>) -> Re
     println!("  HIRO: {} rounds, pass@3 {pass}", snapshot.hiro_rounds);
     println!("  audit entries: {}", snapshot.audit_entries);
     println!("  task transcripts: {}", snapshot.transcript_count);
+    if let Some(run) = &snapshot.latest_run {
+        println!(
+            "  latest task: {} {} / p{} / {} attempts / {} steps / {}",
+            run.task_type,
+            run.status,
+            run.priority,
+            run.attempt_count,
+            run.step_count,
+            truncate(&run.description, 90)
+        );
+        println!(
+            "    {}{}{}",
+            truncate(&run.last_summary, 90),
+            run.last_tool
+                .as_ref()
+                .map(|tool| format!(" / tool {tool}"))
+                .unwrap_or_default(),
+            run.outcome_score
+                .map(|score| format!(" / score {score:.2}"))
+                .unwrap_or_default(),
+        );
+        if let Some(path) = &run.transcript_path {
+            println!("    transcript: {path}");
+        }
+    }
     println!("  events: {}", snapshot.total_events);
     println!("  recent events:");
     for event in snapshot.events.iter().rev().take(8).rev() {
@@ -200,6 +226,7 @@ struct ObserverSnapshot {
     paused_jobs: i64,
     audit_entries: i64,
     transcript_count: i64,
+    task_run_count: i64,
     hiro_rounds: i64,
     latest_pass_at_3: Option<f64>,
     task_events: usize,
@@ -223,6 +250,7 @@ struct ObserverSnapshot {
     latest_policy: Option<AgentEvent>,
     latest_evolution: Option<AgentEvent>,
     latest_transcript: Option<AgentEvent>,
+    latest_run: Option<TaskRun>,
 }
 
 impl ObserverSnapshot {
@@ -245,6 +273,8 @@ impl ObserverSnapshot {
             db.query_row("SELECT COUNT(*) FROM task_transcripts", [], |row| {
                 row.get(0)
             })?;
+        let task_run_count: i64 =
+            db.query_row("SELECT COUNT(*) FROM task_runs", [], |row| row.get(0))?;
         let hiro_rounds: i64 =
             db.query_row("SELECT COUNT(*) FROM hiro_rounds", [], |row| row.get(0))?;
         let evolution_nodes: i64 =
@@ -277,6 +307,7 @@ impl ObserverSnapshot {
             paused_jobs,
             audit_entries,
             transcript_count,
+            task_run_count,
             hiro_rounds,
             evolution_nodes,
             accepted_nodes,
@@ -284,6 +315,7 @@ impl ObserverSnapshot {
             latest_pass_at_3,
             ..Self::default()
         };
+        snapshot.latest_run = TaskRunStore::new(Arc::clone(&memory.db)).latest()?;
 
         let repo = repo_root();
         snapshot.git_branch = git_output(&repo, &["branch", "--show-current"])
@@ -304,7 +336,8 @@ impl ObserverSnapshot {
         snapshot.verification_artifacts = count_json_files(&artifact_root.join("verifications"));
         snapshot.accepted_artifacts = count_json_files(&artifact_root.join("accepted"));
         snapshot.rejected_artifacts = count_json_files(&artifact_root.join("rejections"));
-        snapshot.command_artifacts = count_json_files(&generic_artifact_root(&repo).join("commands"));
+        snapshot.command_artifacts =
+            count_json_files(&generic_artifact_root(&repo).join("commands"));
 
         for event in &snapshot.events {
             if event.event_type.starts_with("task.") {
@@ -398,6 +431,7 @@ impl Default for ObserverSnapshot {
             paused_jobs: 0,
             audit_entries: 0,
             transcript_count: 0,
+            task_run_count: 0,
             hiro_rounds: 0,
             latest_pass_at_3: None,
             task_events: 0,
@@ -421,6 +455,7 @@ impl Default for ObserverSnapshot {
             latest_policy: None,
             latest_evolution: None,
             latest_transcript: None,
+            latest_run: None,
         }
     }
 }
@@ -567,7 +602,10 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &ObserverApp) {
         ]),
         Line::from(vec![
             Span::styled("Transcripts ", label()),
-            Span::raw(format!("{} tasks", app.snapshot.transcript_count)),
+            Span::raw(format!(
+                "{} runs / {} transcripts",
+                app.snapshot.task_run_count, app.snapshot.transcript_count
+            )),
         ]),
         Line::from(vec![
             Span::styled("Git         ", label()),
@@ -593,6 +631,7 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &ObserverApp) {
 
 fn draw_activity(frame: &mut Frame, area: Rect, app: &ObserverApp) {
     let lines = vec![
+        latest_run_line(&app.snapshot.latest_run),
         latest_line("task", &app.snapshot.latest_task),
         latest_line("tool", &app.snapshot.latest_tool),
         latest_line("policy", &app.snapshot.latest_policy),
@@ -652,7 +691,7 @@ fn draw_science(frame: &mut Frame, area: Rect, app: &ObserverApp) {
             .data(&app.sparkline),
         chunks[1],
     );
-    let note = Paragraph::new(vec![
+    let mut note_lines = vec![
         Line::from(format!(
             "Evolution artifacts: {} proposed / {} verified / {} accepted / {} rejected",
             app.snapshot.proposal_artifacts,
@@ -667,14 +706,16 @@ fn draw_science(frame: &mut Frame, area: Rect, app: &ObserverApp) {
         Line::from(
             "Run --lab --run-now for daemon plus observer; --observe follows an existing run.",
         ),
-    ])
-    .style(Style::default().fg(Color::Gray))
-    .block(
-        Block::default()
-            .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
-            .border_style(Style::default().fg(Color::DarkGray)),
-    )
-    .wrap(Wrap { trim: true });
+    ];
+    note_lines.extend(latest_run_detail(&app.snapshot.latest_run));
+    let note = Paragraph::new(note_lines)
+        .style(Style::default().fg(Color::Gray))
+        .block(
+            Block::default()
+                .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        )
+        .wrap(Wrap { trim: true });
     frame.render_widget(note, chunks[2]);
 }
 
@@ -816,6 +857,81 @@ fn latest_line(label_text: &str, event: &Option<AgentEvent>) -> Line<'static> {
             Span::styled(format!("{label_text:<8}"), label()),
             Span::styled("waiting", Style::default().fg(Color::DarkGray)),
         ]),
+    }
+}
+
+fn latest_run_line(run: &Option<TaskRun>) -> Line<'static> {
+    match run {
+        Some(run) => Line::from(vec![
+            Span::styled("run     ", label()),
+            Span::styled(format!("{:<10}", run.status), status_style(&run.status)),
+            Span::raw(format!(
+                "{} p{} {}a/{}s  {}",
+                run.task_type,
+                run.priority,
+                run.attempt_count,
+                run.step_count,
+                truncate(&run.description, 54),
+            )),
+        ]),
+        None => Line::from(vec![
+            Span::styled("run     ", label()),
+            Span::styled("waiting", Style::default().fg(Color::DarkGray)),
+        ]),
+    }
+}
+
+fn status_style(status: &str) -> Style {
+    let color = match status {
+        "Complete" => Color::Green,
+        "Running" => Color::Cyan,
+        "Failed" | "Blocked" | "Cancelled" => Color::Red,
+        _ => Color::Yellow,
+    };
+    Style::default().fg(color)
+}
+
+fn latest_run_detail(run: &Option<TaskRun>) -> Vec<Line<'static>> {
+    match run {
+        Some(run) => {
+            let mut lines = vec![
+                Line::from(vec![
+                    Span::styled("updated ", label()),
+                    Span::raw(run.updated_at.format("%H:%M:%S").to_string()),
+                    Span::raw("   "),
+                    Span::styled("queued ", label()),
+                    Span::raw(run.queued_at.format("%H:%M:%S").to_string()),
+                ]),
+                Line::from(vec![
+                    Span::styled("id      ", label()),
+                    Span::raw(run.task_id.clone()),
+                ]),
+                Line::from(vec![
+                    Span::styled("summary ", label()),
+                    Span::raw(truncate(&run.last_summary, 96)),
+                ]),
+            ];
+            if let Some(started_at) = run.started_at {
+                lines.push(Line::from(vec![
+                    Span::styled("started ", label()),
+                    Span::raw(started_at.format("%H:%M:%S").to_string()),
+                ]));
+            }
+            if let Some(completed_at) = run.completed_at {
+                lines.push(Line::from(vec![
+                    Span::styled("done    ", label()),
+                    Span::raw(completed_at.format("%H:%M:%S").to_string()),
+                ]));
+            }
+            if let Some(failure) = &run.failure_mode {
+                lines.push(Line::from(vec![
+                    Span::styled("failure ", label()),
+                    Span::raw(truncate(failure, 96)),
+                ]));
+            }
+            lines
+        }
+        None => vec![Line::from("No task runs recorded yet.")],
     }
 }
 

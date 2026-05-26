@@ -973,17 +973,20 @@ async fn run_single_task(
     cancel: CancellationToken,
 ) -> Result<()> {
     info!("one-shot task: {description}");
+    let mut task = TaskNode::new(description, TaskType::UserRequest, 100);
     events.append(
         None,
-        None,
+        Some(task.id),
         "task.queued",
-        format!("queued one-shot task: {description}"),
-        serde_json::json!({"task_type": "UserRequest"}),
+        format!("queued one-shot task: {}", task.description),
+        serde_json::json!({
+            "task_type": "UserRequest",
+            "task_id": task.id,
+        }),
     )?;
     let react = ReactLoop::new(ollama, registry, policy, memory, cancel)
         .with_events(events)
         .with_transcripts(transcripts);
-    let mut task = TaskNode::new(description, TaskType::UserRequest, 100);
     let outcome = react.run(&mut task).await?;
     info!(
         "task {}: score={:.2} steps={} attempts={}",

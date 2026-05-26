@@ -3,6 +3,7 @@ pub mod episodic;
 pub mod pinned;
 pub mod procedural;
 pub mod semantic;
+pub mod task_runs;
 pub mod transcripts;
 pub mod working;
 
@@ -154,6 +155,27 @@ CREATE TABLE IF NOT EXISTS task_transcripts (
 );
 CREATE INDEX IF NOT EXISTS idx_task_transcripts_task ON task_transcripts(task_id);
 CREATE INDEX IF NOT EXISTS idx_task_transcripts_recorded ON task_transcripts(recorded_at);
+
+CREATE TABLE IF NOT EXISTS task_runs (
+    task_id TEXT PRIMARY KEY,
+    description TEXT NOT NULL,
+    task_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    priority INTEGER NOT NULL DEFAULT 0,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    step_count INTEGER NOT NULL DEFAULT 0,
+    last_tool TEXT,
+    last_summary TEXT NOT NULL DEFAULT '',
+    outcome_score REAL,
+    failure_mode TEXT,
+    transcript_path TEXT,
+    queued_at TEXT NOT NULL,
+    started_at TEXT,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_task_runs_updated ON task_runs(updated_at);
+CREATE INDEX IF NOT EXISTS idx_task_runs_status ON task_runs(status);
 
 CREATE TABLE IF NOT EXISTS cron_jobs (
     id TEXT PRIMARY KEY,
