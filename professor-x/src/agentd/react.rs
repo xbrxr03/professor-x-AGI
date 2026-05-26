@@ -24,7 +24,7 @@
 ///   Action Input: <json>
 use anyhow::Result;
 use chrono::Utc;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -33,6 +33,7 @@ use crate::agentd::graph::{ExecutionStep, TaskNode, TaskStatus};
 use crate::evolved::lcap::LcapPolicy;
 use crate::evolved::tracker::TaskOutcome;
 use crate::memd::episodic::EpisodicEntry;
+use crate::memd::events::EventStore;
 use crate::memd::MemoryManager;
 use crate::ollama::{ModelOptions, OllamaClient};
 use crate::policyd::{AuditStore, Decision, PermissionScope, PolicyEngine};
@@ -55,6 +56,7 @@ pub struct ReactLoop {
     cancel: CancellationToken,
     lcap: Arc<std::sync::Mutex<LcapPolicy>>,
     current_round: u32,
+    events: Option<Arc<EventStore>>,
 }
 
 impl ReactLoop {
@@ -73,6 +75,7 @@ impl ReactLoop {
             cancel,
             lcap: Arc::new(std::sync::Mutex::new(LcapPolicy::new())),
             current_round: 0,
+            events: None,
         }
     }
 
@@ -82,10 +85,26 @@ impl ReactLoop {
         self
     }
 
+    pub fn with_events(mut self, events: Arc<EventStore>) -> Self {
+        self.events = Some(events);
+        self
+    }
+
     /// Run a task to completion or exhaustion. Returns outcome for the tracker.
     pub async fn run(&self, task: &mut TaskNode) -> Result<TaskOutcome> {
         task.status = TaskStatus::Running;
         task.started_at = Some(Utc::now());
+        self.emit_event(
+            None,
+            Some(task.id),
+            "task.started",
+            format!("started task: {}", truncate(&task.description, 120)),
+            json!({
+                "task_type": format!("{:?}", task.task_type),
+                "priority": task.priority,
+                "max_attempts": task.max_attempts,
+            }),
+        );
 
         // ICE: retrieve similar past tasks from episodic memory
         let ice_examples = self.retrieve_ice(&task.description).await;
@@ -108,6 +127,13 @@ impl ReactLoop {
                 attempt + 1,
                 task.max_attempts
             );
+            self.emit_event(
+                None,
+                Some(task.id),
+                "task.attempt.started",
+                format!("attempt {}/{} started", attempt + 1, task.max_attempts),
+                json!({"attempt": attempt + 1}),
+            );
 
             let outcome = self
                 .run_attempt(task, &ice_examples, &cognition_context, num_ctx)
@@ -120,6 +146,17 @@ impl ReactLoop {
                     task.outcome_score = Some(1.0);
 
                     self.write_episodic(task, true).await;
+                    self.emit_event(
+                        None,
+                        Some(task.id),
+                        "task.succeeded",
+                        format!("completed task in {} step(s)", task.steps.len()),
+                        json!({
+                            "attempts": task.attempt_count,
+                            "steps": task.steps.len(),
+                            "score": 1.0,
+                        }),
+                    );
 
                     // LCAP: reward successful budget selection
                     {
@@ -147,6 +184,13 @@ impl ReactLoop {
                 }
                 Err(e) => {
                     warn!("react: attempt {} error: {e}", attempt + 1);
+                    self.emit_event(
+                        None,
+                        Some(task.id),
+                        "task.attempt.error",
+                        format!("attempt {} errored: {}", attempt + 1, truncate(&e.to_string(), 160)),
+                        json!({"attempt": attempt + 1, "error": e.to_string()}),
+                    );
                     if attempt + 1 < task.max_attempts {
                         task.push_reflection(format!("Error on attempt {}: {e}", attempt + 1));
                     }
@@ -171,6 +215,17 @@ impl ReactLoop {
         task.outcome_score = Some(0.0);
 
         self.write_episodic(task, false).await;
+        self.emit_event(
+            None,
+            Some(task.id),
+            "task.failed",
+            format!("task failed after {} attempt(s)", task.attempt_count),
+            json!({
+                "attempts": task.attempt_count,
+                "steps": task.steps.len(),
+                "failure_mode": failure_mode,
+            }),
+        );
 
         // LCAP: penalize failed budget selection
         {
@@ -206,6 +261,13 @@ impl ReactLoop {
             .with_ollama(Arc::clone(&self.ollama));
         let audit = AuditStore::new(Arc::clone(&self.memory.db));
         let session_id = Uuid::new_v4();
+        self.emit_event(
+            Some(session_id),
+            Some(task.id),
+            "react.session.started",
+            "started ReAct session",
+            json!({"num_ctx": num_ctx}),
+        );
 
         // Circuit breaker: pause after 3 consecutive tool failures
         let mut consecutive_failures: u8 = 0;
@@ -229,6 +291,17 @@ impl ReactLoop {
                 .await?;
 
             let (_, answer) = resp.split_thinking();
+            self.emit_event(
+                Some(session_id),
+                Some(task.id),
+                "llm.response",
+                format!("model response received ({} chars)", answer.len()),
+                json!({
+                    "step": step_idx + 1,
+                    "response_chars": answer.len(),
+                    "preview": truncate(&answer, 300),
+                }),
+            );
 
             debug!(
                 "react step {}: raw response length={}",
@@ -244,18 +317,57 @@ impl ReactLoop {
                         || answer.to_lowercase().contains("finish")
                         || answer.to_lowercase().contains("final answer")
                     {
+                        self.emit_event(
+                            Some(session_id),
+                            Some(task.id),
+                            "llm.finish_detected",
+                            "finish detected in unparsed model output",
+                            json!({"step": step_idx + 1}),
+                        );
                         return Ok(true);
                     }
                     warn!("react: could not parse step output, retrying step");
+                    self.emit_event(
+                        Some(session_id),
+                        Some(task.id),
+                        "llm.parse_failed",
+                        "could not parse ReAct step",
+                        json!({"step": step_idx + 1, "preview": truncate(&answer, 300)}),
+                    );
                     continue;
                 }
 
                 Some(parsed) => {
+                    self.emit_event(
+                        Some(session_id),
+                        Some(task.id),
+                        "tool.requested",
+                        format!("requested tool '{}'", parsed.tool_name),
+                        json!({
+                            "step": step_idx + 1,
+                            "tool": parsed.tool_name,
+                            "params": parsed.params,
+                        }),
+                    );
                     // Special finish actions
                     if parsed.tool_name == "finish" || parsed.tool_name == "done" {
+                        self.emit_event(
+                            Some(session_id),
+                            Some(task.id),
+                            "task.finish_requested",
+                            "model requested finish",
+                            json!({"step": step_idx + 1}),
+                        );
                         return Ok(true);
                     }
                     if parsed.tool_name == "fail" {
+                        self.emit_event(
+                            Some(session_id),
+                            Some(task.id),
+                            "task.fail_requested",
+                            "model requested failure",
+                            json!({"step": step_idx + 1}),
+                        );
                         return Ok(false);
                     }
 
@@ -275,6 +387,27 @@ impl ReactLoop {
                         gate.decision.clone(),
                         &gate.reason,
                         None,
+                    );
+                    self.emit_event(
+                        Some(session_id),
+                        Some(task.id),
+                        match gate.decision {
+                            Decision::Allow => "policy.allowed",
+                            Decision::Deny => "policy.denied",
+                            Decision::PendingApproval => "policy.pending",
+                        },
+                        format!(
+                            "policy {:?} for '{}': {}",
+                            gate.decision,
+                            parsed.tool_name,
+                            truncate(&gate.reason, 140)
+                        ),
+                        json!({
+                            "step": step_idx + 1,
+                            "tool": parsed.tool_name,
+                            "risk_score": gate.risk_score,
+                            "reason": gate.reason,
+                        }),
                     );
 
                     let observation = match gate.decision {
@@ -314,6 +447,25 @@ impl ReactLoop {
                                 exec_reason,
                                 Some(obs.execution_ms),
                             );
+                            self.emit_event(
+                                Some(session_id),
+                                Some(task.id),
+                                if obs.success { "tool.succeeded" } else { "tool.failed" },
+                                format!(
+                                    "tool '{}' {} in {}ms",
+                                    parsed.tool_name,
+                                    if obs.success { "succeeded" } else { "failed" },
+                                    obs.execution_ms
+                                ),
+                                json!({
+                                    "step": step_idx + 1,
+                                    "tool": parsed.tool_name,
+                                    "success": obs.success,
+                                    "execution_ms": obs.execution_ms,
+                                    "output_preview": truncate(&obs.output, 300),
+                                    "error": obs.error,
+                                }),
+                            );
                             obs
                         }
                     };
@@ -323,6 +475,13 @@ impl ReactLoop {
                         warn!(
                             "react: circuit breaker tripped (3 consecutive failures) on task '{}'",
                             task.description
+                        );
+                        self.emit_event(
+                            Some(session_id),
+                            Some(task.id),
+                            "react.circuit_breaker",
+                            "circuit breaker tripped after 3 consecutive failures",
+                            json!({"step": step_idx + 1}),
                         );
                         return Ok(false);
                     }
@@ -354,7 +513,29 @@ impl ReactLoop {
             "react: max steps ({MAX_STEPS}) reached for task '{}'",
             task.description
         );
+        self.emit_event(
+            Some(session_id),
+            Some(task.id),
+            "react.max_steps",
+            format!("max steps ({MAX_STEPS}) reached"),
+            json!({"max_steps": MAX_STEPS}),
+        );
         Ok(false)
+    }
+
+    fn emit_event(
+        &self,
+        session_id: Option<Uuid>,
+        task_id: Option<Uuid>,
+        event_type: &str,
+        summary: impl AsRef<str>,
+        payload: Value,
+    ) {
+        if let Some(events) = &self.events {
+            if let Err(e) = events.append(session_id, task_id, event_type, summary, payload) {
+                warn!("agent event write failed: {e}");
+            }
+        }
     }
 
     fn build_step_prompt(
@@ -644,6 +825,14 @@ fn extract_keywords(text: &str) -> Vec<String> {
     words.dedup();
     words.truncate(10);
     words
+}
+
+fn truncate(text: &str, max_chars: usize) -> String {
+    let mut out = text.chars().take(max_chars).collect::<String>();
+    if text.chars().count() > max_chars {
+        out.push_str("...");
+    }
+    out
 }
 
 /// Map a num_ctx token ceiling back to the nearest BudgetArm for LCAP reward tracking.

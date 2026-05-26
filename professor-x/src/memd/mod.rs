@@ -1,3 +1,4 @@
+pub mod events;
 pub mod episodic;
 pub mod pinned;
 pub mod procedural;
@@ -122,6 +123,19 @@ CREATE TABLE IF NOT EXISTS audit_log (
     reason TEXT NOT NULL,
     execution_ms INTEGER
 );
+
+CREATE TABLE IF NOT EXISTS agent_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    session_id TEXT,
+    task_id TEXT,
+    event_type TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    payload TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_agent_events_timestamp ON agent_events(timestamp);
+CREATE INDEX IF NOT EXISTS idx_agent_events_type ON agent_events(event_type);
+CREATE INDEX IF NOT EXISTS idx_agent_events_task ON agent_events(task_id);
 
 CREATE TABLE IF NOT EXISTS cron_jobs (
     id TEXT PRIMARY KEY,

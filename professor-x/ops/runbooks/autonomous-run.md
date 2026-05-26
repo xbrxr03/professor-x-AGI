@@ -46,6 +46,34 @@ cargo run -- --run-now
 
 `--run-now` schedules the seven explicit daily jobs from `ops/schedules/daily-cycle.toml` starting immediately. Without `--run-now`, the same jobs start at the next 22:00 UTC daily cycle and repeat every 24 hours.
 
+## Observe Prof X
+
+For the normal “agent lab” experience, start the daemon and observer together:
+
+```bash
+cd professor-x
+cargo run -- --lab --run-now
+```
+
+Use `q`, Esc, or Ctrl+C to close the observer and stop the daemon cleanly.
+
+Open the full-screen terminal observer in a second shell:
+
+```bash
+cd professor-x
+cargo run -- --observe
+```
+
+Useful inspection commands:
+
+```bash
+cargo run -- --status
+cargo run -- --events 25
+cargo run -- --watch
+```
+
+The observer follows the same durable event stream that is written to SQLite and mirrored as JSONL under `artifacts/events/`. It shows scheduler state, audit counts, HIRO status, recent task/tool/policy/evolution activity, a live event timeline, and the selected event payload.
+
 ## Kill Switch
 
 Use Ctrl+C for foreground runs, or send SIGUSR2 to the process for a graceful shutdown.

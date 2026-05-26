@@ -79,6 +79,22 @@ impl CronScheduler {
         Ok(())
     }
 
+    pub fn disable_legacy_daily_cycle(&self) -> Result<usize> {
+        let db = self.db.lock().unwrap();
+        let disabled = db.execute(
+            "UPDATE cron_jobs
+             SET enabled = 0, state = 'Paused', last_status = 'disabled: legacy daily cycle'
+             WHERE enabled = 1
+               AND (
+                   id = 'daily-autonomous-cycle'
+                   OR name = 'Daily research cycle'
+                   OR prompt LIKE 'Run the daily autonomous research cycle:%'
+               )",
+            [],
+        )?;
+        Ok(disabled)
+    }
+
     /// Called every 60 seconds. Returns jobs that are due.
     /// Advances next_run_at FIRST (Hermes crash-safety pattern).
     pub fn tick(&self) -> Result<Vec<CronJob>> {
