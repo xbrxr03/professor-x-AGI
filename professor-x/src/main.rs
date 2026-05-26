@@ -1,9 +1,9 @@
-mod artifacts;
 mod agentd;
+mod artifacts;
 mod evolved;
 mod memd;
-mod ollama;
 mod observer;
+mod ollama;
 mod policyd;
 mod toolbridge;
 
@@ -22,9 +22,7 @@ use agentd::react::ReactLoop;
 use agentd::{TaskNode, TaskQueue, TaskType};
 use artifacts::ArtifactValidator;
 use evolved::cognition_base::CognitionItem;
-use evolved::proposer::{
-    ChangeManifest, EvolutionNode, HarnessComponent, VerificationStatus,
-};
+use evolved::proposer::{ChangeManifest, EvolutionNode, HarnessComponent, VerificationStatus};
 use evolved::tracker::{OutcomeTracker, TaskOutcome};
 use evolved::verify_node_in_sandbox;
 use evolved::CognitionStore;
@@ -84,8 +82,33 @@ struct CliArgs {
     coding_smoke: bool,
     /// Run N bounded local supervised work-loop cycles and exit.
     supervised_loop_cycles: Option<u32>,
+    /// Select supervised loop job mix: basic or core.
+    supervised_loop_profile: WorkLoopProfile,
     /// Run one seeded autonomous evolution cycle and exit.
     evolution_cycle: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkLoopProfile {
+    Basic,
+    Core,
+}
+
+impl WorkLoopProfile {
+    fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "basic" => Some(Self::Basic),
+            "core" => Some(Self::Core),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Basic => "basic",
+            Self::Core => "core",
+        }
+    }
 }
 
 fn parse_args() -> CliArgs {
@@ -112,6 +135,7 @@ fn parse_args() -> CliArgs {
         evolution_smoke: false,
         coding_smoke: false,
         supervised_loop_cycles: None,
+        supervised_loop_profile: WorkLoopProfile::Basic,
         evolution_cycle: false,
     };
     let mut i = 1;
@@ -225,6 +249,12 @@ fn parse_args() -> CliArgs {
                 cli.supervised_loop_cycles = Some(cycles.unwrap_or(1));
                 i += if cycles.is_some() { 2 } else { 1 };
             }
+            "--supervised-loop-profile" if i + 1 < args.len() => {
+                if let Some(profile) = WorkLoopProfile::parse(&args[i + 1]) {
+                    cli.supervised_loop_profile = profile;
+                }
+                i += 2;
+            }
             "--evolution-cycle" => {
                 cli.evolution_cycle = true;
                 i += 1;
@@ -255,15 +285,13 @@ async fn main() -> Result<()> {
         || cli.lab
         || cli.chat;
     tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                if inspect_mode {
-                    EnvFilter::new("error")
-                } else {
-                    EnvFilter::new("professor_x=info,warn")
-                }
-            }),
-        )
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+            if inspect_mode {
+                EnvFilter::new("error")
+            } else {
+                EnvFilter::new("professor_x=info,warn")
+            }
+        }))
         .init();
 
     info!("Professor X starting — single binary, five modules");
@@ -278,16 +306,11 @@ async fn main() -> Result<()> {
     let event_log_dir = std::env::var("PROFESSOR_X_EVENT_LOG_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("artifacts/events"));
-    let events = Arc::new(
-        EventStore::new(Arc::clone(&memory.db)).with_jsonl_mirror(event_log_dir),
-    );
+    let events = Arc::new(EventStore::new(Arc::clone(&memory.db)).with_jsonl_mirror(event_log_dir));
     let transcript_dir = std::env::var("PROFESSOR_X_TRANSCRIPT_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("artifacts/transcripts"));
-    let transcripts = Arc::new(TranscriptStore::new(
-        Arc::clone(&memory.db),
-        transcript_dir,
-    ));
+    let transcripts = Arc::new(TranscriptStore::new(Arc::clone(&memory.db), transcript_dir));
     let artifact_report_dir = std::env::var("PROFESSOR_X_ARTIFACT_REPORT_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("artifacts/validation"));
@@ -423,6 +446,7 @@ async fn main() -> Result<()> {
             Arc::clone(&events),
             Arc::clone(&transcripts),
             cycles,
+            cli.supervised_loop_profile,
         )
         .await;
     }
@@ -558,6 +582,40 @@ struct EvolutionSmokeReport {
 }
 
 async fn run_evolution_smoke(events: Arc<EventStore>) -> Result<()> {
+    let (report, path) = execute_evolution_smoke(events).await?;
+
+    println!(
+        "Evolution sandbox smoke: {}",
+        if report.passed { "passed" } else { "failed" }
+    );
+    println!("  report: {}", path.display());
+    for case in &report.cases {
+        println!(
+            "  {}: {} (expected {}) — {}",
+            case.name,
+            if case.accepted {
+                "accepted"
+            } else {
+                "rejected"
+            },
+            if case.expected_accepted {
+                "accepted"
+            } else {
+                "rejected"
+            },
+            case.reason
+        );
+    }
+
+    if !report.passed {
+        anyhow::bail!("evolution sandbox smoke failed");
+    }
+    Ok(())
+}
+
+async fn execute_evolution_smoke(
+    events: Arc<EventStore>,
+) -> Result<(EvolutionSmokeReport, PathBuf)> {
     let repo_root = default_repo_root();
     let cases = evolution_smoke_cases();
     events.append(
@@ -627,29 +685,16 @@ async fn run_evolution_smoke(events: Arc<EventStore>) -> Result<()> {
         } else {
             "evolution.smoke.failed"
         },
-        format!("evolution sandbox smoke report written to {}", path.display()),
+        format!(
+            "evolution sandbox smoke report written to {}",
+            path.display()
+        ),
         serde_json::json!({
             "passed": passed,
             "report_path": path,
         }),
     )?;
-
-    println!("Evolution sandbox smoke: {}", if passed { "passed" } else { "failed" });
-    println!("  report: {}", path.display());
-    for case in &report.cases {
-        println!(
-            "  {}: {} (expected {}) — {}",
-            case.name,
-            if case.accepted { "accepted" } else { "rejected" },
-            if case.expected_accepted { "accepted" } else { "rejected" },
-            case.reason
-        );
-    }
-
-    if !passed {
-        anyhow::bail!("evolution sandbox smoke failed");
-    }
-    Ok(())
+    Ok((report, path))
 }
 
 fn evolution_smoke_cases() -> Vec<(&'static str, bool, EvolutionNode)> {
@@ -706,7 +751,10 @@ fn write_evolution_smoke_report(report: &EvolutionSmokeReport) -> Result<PathBuf
         .join("evolution")
         .join(chrono::Utc::now().format("%Y-%m-%d").to_string());
     std::fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("smoke-{}.json", chrono::Utc::now().format("%H%M%S")));
+    let path = dir.join(format!(
+        "smoke-{}.json",
+        chrono::Utc::now().format("%H%M%S")
+    ));
     std::fs::write(&path, serde_json::to_string_pretty(report)?)?;
     Ok(path)
 }
@@ -736,7 +784,10 @@ fn git_head(repo_root: &std::path::Path) -> Result<String> {
         .current_dir(repo_root)
         .output()?;
     if !output.status.success() {
-        anyhow::bail!("git rev-parse failed: {}", String::from_utf8_lossy(&output.stderr));
+        anyhow::bail!(
+            "git rev-parse failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
@@ -762,7 +813,43 @@ struct SupervisedLoopReport {
     completed_cycles: u32,
     passed_cycles: u32,
     failed_cycles: u32,
+    profile: String,
     smoke_records: Vec<WorkLoopSmokeRecord>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum WorkLoopJob {
+    CodingSmoke,
+    EvolutionSmoke,
+}
+
+impl WorkLoopJob {
+    fn kind(self) -> &'static str {
+        match self {
+            Self::CodingSmoke => "coding_smoke",
+            Self::EvolutionSmoke => "evolution_smoke",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::CodingSmoke => "coding-agent smoke",
+            Self::EvolutionSmoke => "evolution sandbox smoke",
+        }
+    }
+}
+
+fn work_loop_job_for_cycle(profile: WorkLoopProfile, cycle: u32) -> WorkLoopJob {
+    match profile {
+        WorkLoopProfile::Basic => WorkLoopJob::CodingSmoke,
+        WorkLoopProfile::Core => {
+            if cycle % 2 == 0 {
+                WorkLoopJob::EvolutionSmoke
+            } else {
+                WorkLoopJob::CodingSmoke
+            }
+        }
+    }
 }
 
 async fn run_supervised_loop(
@@ -772,6 +859,7 @@ async fn run_supervised_loop(
     events: Arc<EventStore>,
     transcripts: Arc<TranscriptStore>,
     cycles: u32,
+    profile: WorkLoopProfile,
 ) -> Result<()> {
     let run_id = uuid::Uuid::new_v4().to_string();
     let started_at = chrono::Utc::now();
@@ -780,8 +868,11 @@ async fn run_supervised_loop(
         None,
         None,
         "work_loop.started",
-        format!("starting supervised work loop with {cycles} cycle(s)"),
-        serde_json::json!({"run_id": run_id, "cycles": cycles}),
+        format!(
+            "starting supervised {} work loop with {cycles} cycle(s)",
+            profile.as_str()
+        ),
+        serde_json::json!({"run_id": run_id, "cycles": cycles, "profile": profile.as_str()}),
     )?;
 
     let smoke_store = CodingSmokeStore::new(Arc::clone(&memory.db));
@@ -789,39 +880,46 @@ async fn run_supervised_loop(
     let mut failed_cycles = 0u32;
 
     for cycle in 1..=cycles {
+        let job = work_loop_job_for_cycle(profile, cycle);
         let before_smoke_id = smoke_store.latest()?.and_then(|record| record.id);
         events.append(
             None,
             None,
             "work_loop.cycle.started",
-            format!("supervised work-loop cycle {cycle}/{cycles} started"),
-            serde_json::json!({"run_id": run_id, "cycle": cycle, "cycles": cycles}),
+            format!(
+                "supervised work-loop cycle {cycle}/{cycles} started: {}",
+                job.label()
+            ),
+            serde_json::json!({
+                "run_id": run_id,
+                "cycle": cycle,
+                "cycles": cycles,
+                "job": job.kind(),
+                "profile": profile.as_str(),
+            }),
         )?;
-        let result = run_coding_smoke(
+
+        let outcome = run_work_loop_job(
+            job,
             Arc::clone(&registry),
             Arc::clone(&policy),
             Arc::clone(&memory),
             Arc::clone(&events),
             Arc::clone(&transcripts),
+            &smoke_store,
+            before_smoke_id,
         )
         .await;
-
-        let latest = smoke_store
-            .latest()?
-            .filter(|record| record.id != before_smoke_id);
-        let passed = result.is_ok() && latest.as_ref().map(|record| record.passed).unwrap_or(false);
+        let (passed, record, error) = match outcome {
+            Ok(record) => (record.passed, Some(record), None),
+            Err(err) => (false, None, Some(err.to_string())),
+        };
         if !passed {
             failed_cycles += 1;
         }
-        if let Some(record) = latest {
-            records.push(WorkLoopSmokeRecord {
-                cycle,
-                smoke_id: record.id,
-                passed: record.passed,
-                report_path: record.report_path,
-                transcript_path: record.transcript_path,
-                workspace: record.workspace,
-            });
+        if let Some(mut record) = record {
+            record.cycle = cycle;
+            records.push(record);
         }
 
         events.append(
@@ -840,8 +938,9 @@ async fn run_supervised_loop(
                 "run_id": run_id,
                 "cycle": cycle,
                 "cycles": cycles,
+                "job": job.kind(),
                 "passed": passed,
-                "error": result.err().map(|e| e.to_string()),
+                "error": error,
             }),
         )?;
     }
@@ -854,6 +953,7 @@ async fn run_supervised_loop(
         completed_cycles: records.len() as u32,
         passed_cycles: records.iter().filter(|record| record.passed).count() as u32,
         failed_cycles,
+        profile: profile.as_str().to_string(),
         smoke_records: records,
     };
     let report_path = write_supervised_loop_report(&report)?;
@@ -880,7 +980,10 @@ async fn run_supervised_loop(
         } else {
             "work_loop.completed_with_failures"
         },
-        format!("supervised work-loop report written to {}", report_path.display()),
+        format!(
+            "supervised work-loop report written to {}",
+            report_path.display()
+        ),
         serde_json::json!({
             "run_id": run_id,
             "report_path": report_path,
@@ -894,9 +997,63 @@ async fn run_supervised_loop(
     println!("  failed: {}", report.failed_cycles);
     println!("  report: {}", report_path.display());
     if report.failed_cycles > 0 {
-        anyhow::bail!("supervised loop completed with {} failed cycle(s)", report.failed_cycles);
+        anyhow::bail!(
+            "supervised loop completed with {} failed cycle(s)",
+            report.failed_cycles
+        );
     }
     Ok(())
+}
+
+async fn run_work_loop_job(
+    job: WorkLoopJob,
+    registry: Arc<std::sync::RwLock<ToolRegistry>>,
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    transcripts: Arc<TranscriptStore>,
+    smoke_store: &CodingSmokeStore,
+    before_smoke_id: Option<i64>,
+) -> Result<WorkLoopSmokeRecord> {
+    match job {
+        WorkLoopJob::CodingSmoke => {
+            run_coding_smoke(
+                registry,
+                policy,
+                Arc::clone(&memory),
+                Arc::clone(&events),
+                transcripts,
+            )
+            .await?;
+            let record = smoke_store
+                .latest()?
+                .filter(|record| record.id != before_smoke_id)
+                .ok_or_else(|| anyhow::anyhow!("coding smoke did not record a new smoke row"))?;
+            Ok(WorkLoopSmokeRecord {
+                cycle: 0,
+                kind: job.kind().to_string(),
+                smoke_id: record.id,
+                passed: record.passed,
+                report_path: record.report_path,
+                transcript_path: record.transcript_path,
+                workspace: record.workspace,
+                detail: "deterministic coding smoke".to_string(),
+            })
+        }
+        WorkLoopJob::EvolutionSmoke => {
+            let (report, path) = execute_evolution_smoke(Arc::clone(&events)).await?;
+            Ok(WorkLoopSmokeRecord {
+                cycle: 0,
+                kind: job.kind().to_string(),
+                smoke_id: None,
+                passed: report.passed,
+                report_path: path.display().to_string(),
+                transcript_path: None,
+                workspace: report.workspace,
+                detail: format!("{} sandbox case(s)", report.cases.len()),
+            })
+        }
+    }
 }
 
 async fn run_coding_smoke(
@@ -992,7 +1149,13 @@ async fn run_coding_smoke(
         initial_action.clone(),
     )
     .await?;
-    record_smoke_step(&mut task, 1, "run the failing test before editing", initial_action, &initial);
+    record_smoke_step(
+        &mut task,
+        1,
+        "run the failing test before editing",
+        initial_action,
+        &initial,
+    );
     task_runs.step_recorded(&task)?;
     emit_smoke_tool_event(&events, session_id, task.id, 1, &task.steps[0])?;
     artifacts.extend(initial.artifacts.clone());
@@ -1018,7 +1181,13 @@ async fn run_coding_smoke(
         edit_action.clone(),
     )
     .await?;
-    record_smoke_step(&mut task, 2, "apply the minimal exact replacement", edit_action, &edit);
+    record_smoke_step(
+        &mut task,
+        2,
+        "apply the minimal exact replacement",
+        edit_action,
+        &edit,
+    );
     task_runs.step_recorded(&task)?;
     emit_smoke_tool_event(&events, session_id, task.id, 2, &task.steps[1])?;
     artifacts.extend(edit.artifacts.clone());
@@ -1038,7 +1207,13 @@ async fn run_coding_smoke(
         final_action.clone(),
     )
     .await?;
-    record_smoke_step(&mut task, 3, "rerun tests after the fix", final_action, &final_test);
+    record_smoke_step(
+        &mut task,
+        3,
+        "rerun tests after the fix",
+        final_action,
+        &final_test,
+    );
     task_runs.step_recorded(&task)?;
     emit_smoke_tool_event(&events, session_id, task.id, 3, &task.steps[2])?;
     artifacts.extend(final_test.artifacts.clone());
@@ -1196,7 +1371,11 @@ fn emit_smoke_tool_event(
         format!(
             "tool '{}' {} in {}ms",
             execution.action.tool_name,
-            if observation.success { "succeeded" } else { "failed" },
+            if observation.success {
+                "succeeded"
+            } else {
+                "failed"
+            },
             observation.execution_ms
         ),
         serde_json::json!({
@@ -1257,7 +1436,10 @@ fn write_coding_smoke_report(report: &CodingSmokeReport) -> Result<PathBuf> {
         .join("coding-smoke")
         .join(chrono::Utc::now().format("%Y-%m-%d").to_string());
     std::fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("smoke-{}.json", chrono::Utc::now().format("%H%M%S")));
+    let path = dir.join(format!(
+        "smoke-{}.json",
+        chrono::Utc::now().format("%H%M%S")
+    ));
     std::fs::write(&path, serde_json::to_string_pretty(report)?)?;
     Ok(path)
 }
@@ -1318,7 +1500,11 @@ async fn run_one_evolution_cycle(
 
     println!(
         "Evolution cycle: {}",
-        if applied { "applied change" } else { "no change" }
+        if applied {
+            "applied change"
+        } else {
+            "no change"
+        }
     );
     println!("  events: cargo run -- --events 20");
     println!("  artifacts: find artifacts/evolution -type f | sort");
@@ -2053,7 +2239,10 @@ fn print_task_runs(memory: Arc<MemoryManager>, limit: usize) -> Result<()> {
     for run in runs {
         println!("{}", format_task_run_summary(&run));
         if !run.verification_summary.is_empty() {
-            println!("  verification: {}", truncate(&run.verification_summary, 140));
+            println!(
+                "  verification: {}",
+                truncate(&run.verification_summary, 140)
+            );
         }
         if let Some(path) = &run.transcript_path {
             println!("  transcript: {path}");
@@ -2091,14 +2280,16 @@ fn print_work_loops(memory: Arc<MemoryManager>, limit: usize) -> Result<()> {
         );
         if let Some(smoke) = run.smoke_records.last() {
             println!(
-                "  latest cycle {}: smoke={} {} transcript={}",
+                "  latest cycle {}: {} smoke={} {} transcript={} detail={}",
                 smoke.cycle,
+                smoke.kind,
                 smoke
                     .smoke_id
                     .map(|id| id.to_string())
                     .unwrap_or_else(|| "none".to_string()),
                 if smoke.passed { "passed" } else { "failed" },
                 smoke.transcript_path.as_deref().unwrap_or("none"),
+                truncate(&smoke.detail, 80),
             );
         }
     }
@@ -2401,7 +2592,6 @@ fn seed_daily_schedule(scheduler: &agentd::CronScheduler, fire_now: bool) -> Res
     info!("scheduler: registered {job_count} daily job(s)");
     Ok(())
 }
-
 
 // ── Cognition base ────────────────────────────────────────────────────────────
 

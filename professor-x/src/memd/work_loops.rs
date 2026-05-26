@@ -7,11 +7,15 @@ use std::sync::{Arc, Mutex};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkLoopSmokeRecord {
     pub cycle: u32,
+    #[serde(default = "default_cycle_kind")]
+    pub kind: String,
     pub smoke_id: Option<i64>,
     pub passed: bool,
     pub report_path: String,
     pub transcript_path: Option<String>,
     pub workspace: String,
+    #[serde(default)]
+    pub detail: String,
 }
 
 #[derive(Debug, Clone)]
@@ -112,6 +116,10 @@ fn parse_time(raw: &str) -> DateTime<Utc> {
         .unwrap_or_else(|_| Utc::now())
 }
 
+fn default_cycle_kind() -> String {
+    "coding_smoke".to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,11 +160,13 @@ mod tests {
                 report_path: "artifacts/work-loop/loop.json".to_string(),
                 smoke_records: vec![WorkLoopSmokeRecord {
                     cycle: 1,
+                    kind: "coding_smoke".to_string(),
                     smoke_id: Some(7),
                     passed: true,
                     report_path: "artifacts/coding-smoke/smoke.json".to_string(),
                     transcript_path: Some("artifacts/transcripts/task.json".to_string()),
                     workspace: "/tmp/px".to_string(),
+                    detail: "coding smoke passed".to_string(),
                 }],
                 recorded_at: now,
             })
