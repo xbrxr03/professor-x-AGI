@@ -152,7 +152,7 @@ async fn verify_node_inside_worktree(
         });
     }
 
-    let paths = changed_paths_for_node(node);
+    let paths = changed_paths_for_node_at(worktree, node);
     if paths.is_empty() {
         return Ok(SandboxVerification {
             outcome: VerificationOutcome {
@@ -204,16 +204,21 @@ async fn verify_node_inside_worktree(
 fn apply_node_change_at(root: &Path, node: &EvolutionNode) -> Result<bool> {
     match &node.target_component {
         HarnessComponent::SystemPrompt => {
-            write_workspace_file(root, Path::new("personas/professor_x.md"), &node.diff)?;
+            let path = component_relative_path(root, node)
+                .unwrap_or_else(|| PathBuf::from("personas/professor_x.md"));
+            write_workspace_file(root, &path, &sanitize_generated_content(&node.diff))?;
             Ok(true)
         }
         HarnessComponent::HarnessConfig => {
-            write_workspace_file(root, Path::new("config/hardware.toml"), &node.diff)?;
+            let path = component_relative_path(root, node)
+                .unwrap_or_else(|| PathBuf::from("config/hardware.toml"));
+            write_workspace_file(root, &path, &sanitize_generated_content(&node.diff))?;
             Ok(true)
         }
         HarnessComponent::SkillDefinition(name) => {
-            let path = PathBuf::from("skills").join(format!("{name}.md"));
-            write_workspace_file(root, &path, &node.diff)?;
+            let path = component_relative_path(root, node)
+                .unwrap_or_else(|| PathBuf::from("skills").join(format!("{name}.md")));
+            write_workspace_file(root, &path, &sanitize_generated_content(&node.diff))?;
             Ok(true)
         }
         HarnessComponent::ToolDescription(_) => Ok(false),
@@ -239,6 +244,38 @@ fn write_workspace_file(root: &Path, relative: &Path, content: &str) -> Result<(
     }
     std::fs::write(path, content)?;
     Ok(())
+}
+
+fn component_relative_path(root: &Path, node: &EvolutionNode) -> Option<PathBuf> {
+    let nested_prefix = if root.join("professor-x").exists() {
+        Some(PathBuf::from("professor-x"))
+    } else {
+        None
+    };
+    let path = match &node.target_component {
+        HarnessComponent::SystemPrompt => PathBuf::from("personas/professor_x.md"),
+        HarnessComponent::HarnessConfig => PathBuf::from("config/hardware.toml"),
+        HarnessComponent::SkillDefinition(name) => PathBuf::from("skills").join(format!("{name}.md")),
+        _ => return None,
+    };
+    Some(match nested_prefix {
+        Some(prefix) => prefix.join(path),
+        None => path,
+    })
+}
+
+fn sanitize_generated_content(content: &str) -> String {
+    let trimmed = content.trim();
+    let without_open = trimmed
+        .strip_prefix("```markdown")
+        .or_else(|| trimmed.strip_prefix("```"))
+        .unwrap_or(trimmed)
+        .trim_start();
+    let without_close = without_open
+        .strip_suffix("```")
+        .unwrap_or(without_open)
+        .trim_end();
+    format!("{without_close}\n")
 }
 
 async fn mark_intent_to_add(worktree: &Path, paths: &[PathBuf]) -> Result<()> {
@@ -800,7 +837,7 @@ impl EvolvedLoop {
     }
 
     async fn commit_node(&self, node: &EvolutionNode) -> Result<Option<String>> {
-        let paths = changed_paths_for_node(node);
+        let paths = changed_paths_for_node_at(&default_repo_root(), node);
         if paths.is_empty() {
             warn!("evolved: accepted node has no known changed paths; skipping commit");
             return Ok(None);
@@ -956,13 +993,8 @@ fn parse_component(s: &str) -> HarnessComponent {
     }
 }
 
-fn changed_paths_for_node(node: &EvolutionNode) -> Vec<PathBuf> {
-    match &node.target_component {
-        HarnessComponent::SystemPrompt => vec![PathBuf::from("personas/professor_x.md")],
-        HarnessComponent::SkillDefinition(name) => vec![PathBuf::from(format!("skills/{name}.md"))],
-        HarnessComponent::HarnessConfig => vec![PathBuf::from("config/hardware.toml")],
-        _ => Vec::new(),
-    }
+fn changed_paths_for_node_at(root: &Path, node: &EvolutionNode) -> Vec<PathBuf> {
+    component_relative_path(root, node).into_iter().collect()
 }
 
 fn analyze_reward_hacking_text(diff: &str) -> RewardHackingAnalysis {
@@ -1187,5 +1219,23 @@ mod tests {
         assert!(fix.contains("# retry"));
         assert!(fix.contains("## Purpose"));
         assert!(!fix.contains("PREDICTS_FIX"));
+    }
+
+    #[test]
+    fn component_paths_follow_repo_layout_and_strip_code_fences() {
+        let root = std::env::temp_dir().join(format!("px-path-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("professor-x/skills")).unwrap();
+        let node = skill_node("RetryPlanGeneration", "content");
+
+        assert_eq!(
+            changed_paths_for_node_at(&root, &node),
+            vec![PathBuf::from("professor-x/skills/RetryPlanGeneration.md")]
+        );
+        assert_eq!(
+            sanitize_generated_content("```markdown\n# Skill\nbody\n```"),
+            "# Skill\nbody\n"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
     }
 }
