@@ -108,6 +108,14 @@ PROFESSOR_X_DATA_DIR=/tmp/px-evolution-smoke cargo run -- --evolution-smoke
 
 This verifies one safe proposal, one no-op rejection, and one reward-hacking rejection through the sandbox worktree gate. It writes events to `artifacts/events/` and a report under `artifacts/evolution/YYYY-MM-DD/`.
 
+Live evolution cycles also write proposal, verification, accepted, and rejected node records under:
+
+```bash
+find artifacts/evolution -type f | sort
+```
+
+Runtime observability files under `artifacts/events/` and `artifacts/evolution/` do not by themselves block the clean-worktree safety gate, but source/config/skill changes still do.
+
 ## Kill Switch
 
 Use Ctrl+C for foreground runs, or send SIGUSR2 to the process for a graceful shutdown.

@@ -22,6 +22,7 @@ use crate::evolved::proposer::{
     ChangeManifest, EvolutionNode, HarnessComponent, NodeDatabase, VerificationStatus,
 };
 use crate::evolved::tracker::OutcomeTracker;
+use crate::memd::events::EventStore;
 use crate::memd::MemoryManager;
 use crate::ollama::{ChatMessage, ModelOptions, OllamaClient};
 
@@ -43,6 +44,21 @@ pub struct RewardHackingAnalysis {
     pub suspicious: bool,
     pub confidence: f32,
     pub reason: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct EvolutionArtifact {
+    generated_at: String,
+    artifact_id: String,
+    node_id: Option<i64>,
+    status: String,
+    target_component: String,
+    motivation: String,
+    manifest: ChangeManifest,
+    verification: Option<VerificationOutcome>,
+    analysis: String,
+    diff_hash: Option<String>,
+    diff_bytes: usize,
 }
 
 // Parse "[DHE:layer=X,lever=Y]" from failure pattern strings.
@@ -342,6 +358,61 @@ async fn apply_verified_diff(repo_root: &Path, diff: &str) -> Result<()> {
     Ok(())
 }
 
+fn evolution_artifact_root(repo_root: &Path) -> PathBuf {
+    let nested = repo_root.join("professor-x/artifacts/evolution");
+    if nested.exists() {
+        nested
+    } else {
+        repo_root.join("artifacts/evolution")
+    }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hex::encode(hasher.finalize())
+}
+
+async fn git_head(repo_root: &Path) -> Result<String> {
+    let output = tokio::process::Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .current_dir(repo_root)
+        .output()
+        .await?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git rev-parse failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+async fn git_worktree_clean_at(repo_root: &Path) -> Result<bool> {
+    let out = tokio::process::Command::new("git")
+        .args([
+            "status",
+            "--porcelain",
+            "--",
+            ".",
+            ":!professor-x/artifacts/events",
+            ":!professor-x/artifacts/evolution",
+            ":!artifacts/events",
+            ":!artifacts/evolution",
+        ])
+        .current_dir(repo_root)
+        .output()
+        .await?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "git status failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().is_empty())
+}
+
 async fn cleanup_worktree(repo_root: &Path, worktree: &Path) -> Result<()> {
     let remove = tokio::process::Command::new("git")
         .args(["worktree", "remove", "--force"])
@@ -370,6 +441,7 @@ fn default_repo_root() -> PathBuf {
 pub struct EvolvedLoop {
     ollama: Arc<OllamaClient>,
     memory: Arc<MemoryManager>,
+    events: Option<Arc<EventStore>>,
     node_db: NodeDatabase,
     cognition: CognitionStore,
 }
@@ -381,9 +453,15 @@ impl EvolvedLoop {
         Self {
             ollama,
             memory,
+            events: None,
             node_db,
             cognition,
         }
+    }
+
+    pub fn with_events(mut self, events: Arc<EventStore>) -> Self {
+        self.events = Some(events);
+        self
     }
 
     /// Run one evolution cycle. Returns Ok(true) if a change was applied.
@@ -414,6 +492,16 @@ impl EvolvedLoop {
             info!("evolved: Researcher produced no actionable proposal");
             return Ok(false);
         };
+        let proposal_artifact = self.write_node_artifact(&node, "proposal")?;
+        self.emit_event(
+            "evolution.proposed",
+            format!("proposed change for {:?}", node.target_component),
+            serde_json::json!({
+                "target_component": format!("{:?}", node.target_component),
+                "motivation": node.motivation,
+                "artifact_path": proposal_artifact,
+            }),
+        );
 
         // ── Engineer/Analyzer: verify in sandbox, then apply verified diff ─
         if let Err(e) = self.verify_then_apply(&mut node, tracker).await {
@@ -421,16 +509,56 @@ impl EvolvedLoop {
             node.status = crate::evolved::proposer::NodeStatus::Rejected;
             node.manifest.verification_status = VerificationStatus::Rejected;
             node.analysis = format!("verification error: {e}");
+            let artifact = self.write_node_artifact(&node, "rejection")?;
+            self.emit_event(
+                "evolution.rejected",
+                format!("evolution proposal rejected: {}", node.analysis),
+                serde_json::json!({
+                    "target_component": format!("{:?}", node.target_component),
+                    "reason": node.analysis,
+                    "artifact_path": artifact,
+                }),
+            );
             self.node_db.insert(&mut node)?;
             return Ok(false);
         }
 
         match node.status {
             crate::evolved::proposer::NodeStatus::Accepted => {
-                self.commit_node(&node).await?;
+                let verification_artifact = self.write_node_artifact(&node, "verification")?;
+                self.emit_event(
+                    "evolution.verified",
+                    "evolution proposal passed sandbox verification",
+                    serde_json::json!({
+                        "target_component": format!("{:?}", node.target_component),
+                        "artifact_path": verification_artifact,
+                        "results": node.results,
+                    }),
+                );
+                let commit = self.commit_node(&node).await?;
+                let accepted_artifact = self.write_node_artifact(&node, "accepted")?;
+                self.emit_event(
+                    "evolution.committed",
+                    format!("committed accepted evolution proposal {}", commit.as_deref().unwrap_or("without-new-commit")),
+                    serde_json::json!({
+                        "target_component": format!("{:?}", node.target_component),
+                        "commit": commit,
+                        "artifact_path": accepted_artifact,
+                    }),
+                );
                 self.node_db.insert(&mut node)?;
             }
             crate::evolved::proposer::NodeStatus::Rejected => {
+                let artifact = self.write_node_artifact(&node, "rejection")?;
+                self.emit_event(
+                    "evolution.rejected",
+                    format!("evolution proposal rejected: {}", node.analysis),
+                    serde_json::json!({
+                        "target_component": format!("{:?}", node.target_component),
+                        "reason": node.analysis,
+                        "artifact_path": artifact,
+                    }),
+                );
                 self.node_db.insert(&mut node)?;
                 return Ok(false);
             }
@@ -666,24 +794,14 @@ impl EvolvedLoop {
     }
 
     async fn git_worktree_clean(&self) -> Result<bool> {
-        let out = tokio::process::Command::new("git")
-            .args(["status", "--porcelain"])
-            .output()
-            .await?;
-        if !out.status.success() {
-            anyhow::bail!(
-                "git status failed: {}",
-                String::from_utf8_lossy(&out.stderr)
-            );
-        }
-        Ok(String::from_utf8_lossy(&out.stdout).trim().is_empty())
+        git_worktree_clean_at(&default_repo_root()).await
     }
 
-    async fn commit_node(&self, node: &EvolutionNode) -> Result<()> {
+    async fn commit_node(&self, node: &EvolutionNode) -> Result<Option<String>> {
         let paths = changed_paths_for_node(node);
         if paths.is_empty() {
             warn!("evolved: accepted node has no known changed paths; skipping commit");
-            return Ok(());
+            return Ok(None);
         }
 
         let mut add = tokio::process::Command::new("git");
@@ -709,11 +827,67 @@ impl EvolvedLoop {
             let err = String::from_utf8_lossy(&commit.stderr);
             if err.contains("nothing to commit") {
                 warn!("evolved: accepted proposal produced no commit-worthy diff");
-                return Ok(());
+                return Ok(None);
             }
             anyhow::bail!("git commit failed: {err}");
         }
-        Ok(())
+        Ok(Some(git_head(&default_repo_root()).await?))
+    }
+
+    fn emit_event(
+        &self,
+        event_type: &str,
+        summary: impl AsRef<str>,
+        payload: serde_json::Value,
+    ) {
+        let Some(events) = &self.events else {
+            return;
+        };
+        if let Err(e) = events.append(None, None, event_type, summary.as_ref(), payload) {
+            warn!("evolved: failed to emit event {event_type}: {e}");
+        }
+    }
+
+    fn write_node_artifact(&self, node: &EvolutionNode, stage: &str) -> Result<PathBuf> {
+        let root = evolution_artifact_root(&default_repo_root());
+        let category = match stage {
+            "proposal" => "proposals",
+            "verification" => "verifications",
+            "accepted" => "accepted",
+            "rejection" => "rejections",
+            _ => "verifications",
+        };
+        let dir = root
+            .join(category)
+            .join(Utc::now().format("%Y-%m-%d").to_string());
+        std::fs::create_dir_all(&dir)?;
+        let artifact_id = uuid::Uuid::new_v4().to_string();
+        let path = dir.join(format!(
+            "{}-{}.json",
+            Utc::now().format("%H%M%S"),
+            artifact_id
+        ));
+        let diff_hash = if node.diff.is_empty() {
+            None
+        } else {
+            Some(sha256_hex(node.diff.as_bytes()))
+        };
+        let verification = serde_json::from_value::<VerificationOutcome>(node.results.clone()).ok();
+        let artifact = EvolutionArtifact {
+            generated_at: Utc::now().to_rfc3339(),
+            artifact_id,
+            node_id: node.id,
+            status: format!("{:?}", node.status),
+            target_component: format!("{:?}", node.target_component),
+            motivation: node.motivation.clone(),
+            manifest: node.manifest.clone(),
+            verification,
+            analysis: node.analysis.clone(),
+            diff_hash,
+            diff_bytes: node.diff.len(),
+        };
+        std::fs::write(&path, serde_json::to_string_pretty(&artifact)?)?;
+        Ok(path)
     }
 }
 
@@ -915,6 +1089,22 @@ mod tests {
 
         assert!(!verified.outcome.accepted);
         assert!(verified.outcome.reason.contains("reward-hacking"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn worktree_clean_ignores_runtime_observability_artifacts_only() {
+        let root = temp_git_repo();
+        std::fs::create_dir_all(root.join("artifacts/events")).unwrap();
+        std::fs::create_dir_all(root.join("artifacts/evolution")).unwrap();
+        std::fs::write(root.join("artifacts/events/today.jsonl"), "{}\n").unwrap();
+        std::fs::write(root.join("artifacts/evolution/report.json"), "{}\n").unwrap();
+
+        assert!(git_worktree_clean_at(&root).await.unwrap());
+
+        std::fs::write(root.join("src/lib.rs"), "pub fn ok() -> bool { false }\n").unwrap();
+        assert!(!git_worktree_clean_at(&root).await.unwrap());
 
         let _ = std::fs::remove_dir_all(root);
     }

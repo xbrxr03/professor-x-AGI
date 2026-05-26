@@ -814,7 +814,7 @@ async fn run_daemon(
                             "starting evolution cycle",
                             serde_json::json!({"outcomes": snap.len()}),
                         );
-                        let evo = EvolvedLoop::new(ollama_e, memory_e);
+                        let evo = EvolvedLoop::new(ollama_e, memory_e).with_events(Arc::clone(&events_e));
                         match evo.run_cycle(&snap).await {
                             Ok(true)  => {
                                 let _ = events_e.append(None, None, "evolution.applied", "evolution cycle applied a change", serde_json::json!({}));
