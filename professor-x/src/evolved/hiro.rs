@@ -16,6 +16,7 @@ use chrono::Utc;
 use rusqlite::params;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{info, warn};
@@ -76,6 +77,15 @@ pub struct HiroAttemptResult {
     pub failure_reason: Option<String>,
     pub output_hash: String,
     pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct HiroTaskInventory {
+    pub task_count: usize,
+    pub tool_use: usize,
+    pub planning: usize,
+    pub self_correction: usize,
+    pub duplicate_ids: Vec<String>,
 }
 
 // ── Runner ────────────────────────────────────────────────────────────────────
@@ -362,6 +372,57 @@ fn load_tasks() -> Result<Vec<HiroTask>> {
     Ok(file.tasks)
 }
 
+pub fn load_task_inventory() -> Result<HiroTaskInventory> {
+    let tasks = load_tasks()?;
+    let mut seen = HashSet::new();
+    let mut duplicate_ids = Vec::new();
+    let mut tool_use = 0usize;
+    let mut planning = 0usize;
+    let mut self_correction = 0usize;
+
+    for task in &tasks {
+        if !seen.insert(task.id.clone()) {
+            duplicate_ids.push(task.id.clone());
+        }
+        match task.category {
+            HiroCategory::ToolUse => tool_use += 1,
+            HiroCategory::Planning => planning += 1,
+            HiroCategory::SelfCorrection => self_correction += 1,
+        }
+    }
+
+    let inventory = HiroTaskInventory {
+        task_count: tasks.len(),
+        tool_use,
+        planning,
+        self_correction,
+        duplicate_ids,
+    };
+    validate_task_inventory(&inventory)?;
+    Ok(inventory)
+}
+
+fn validate_task_inventory(inventory: &HiroTaskInventory) -> Result<()> {
+    if inventory.task_count == 0 {
+        bail!("HIRO inventory is empty");
+    }
+    if inventory.tool_use == 0 || inventory.planning == 0 || inventory.self_correction == 0 {
+        bail!(
+            "HIRO inventory missing category coverage: tool_use={} planning={} self_correction={}",
+            inventory.tool_use,
+            inventory.planning,
+            inventory.self_correction
+        );
+    }
+    if !inventory.duplicate_ids.is_empty() {
+        bail!(
+            "HIRO inventory has duplicate task ids: {:?}",
+            inventory.duplicate_ids
+        );
+    }
+    Ok(())
+}
+
 fn div_safe(pass: u32, total: u32) -> f32 {
     if total == 0 {
         0.0
@@ -560,6 +621,30 @@ mod tests {
         task.attempt_count = 1;
         task.steps = steps;
         task
+    }
+
+    #[test]
+    fn inventory_requires_all_categories_and_unique_ids() {
+        let valid = HiroTaskInventory {
+            task_count: 3,
+            tool_use: 1,
+            planning: 1,
+            self_correction: 1,
+            duplicate_ids: Vec::new(),
+        };
+        assert!(validate_task_inventory(&valid).is_ok());
+
+        let missing_category = HiroTaskInventory {
+            self_correction: 0,
+            ..valid.clone()
+        };
+        assert!(validate_task_inventory(&missing_category).is_err());
+
+        let duplicate = HiroTaskInventory {
+            duplicate_ids: vec!["tu_001".to_string()],
+            ..valid
+        };
+        assert!(validate_task_inventory(&duplicate).is_err());
     }
 
     fn step(tool_name: &str, success: bool) -> ExecutionStep {

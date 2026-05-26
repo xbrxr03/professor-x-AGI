@@ -22,6 +22,7 @@ use agentd::react::ReactLoop;
 use agentd::{TaskNode, TaskQueue, TaskType};
 use artifacts::ArtifactValidator;
 use evolved::cognition_base::CognitionItem;
+use evolved::hiro::load_task_inventory;
 use evolved::proposer::{ChangeManifest, EvolutionNode, HarnessComponent, VerificationStatus};
 use evolved::tracker::{OutcomeTracker, TaskOutcome};
 use evolved::verify_node_in_sandbox;
@@ -78,6 +79,8 @@ struct CliArgs {
     lab: bool,
     /// Run deterministic evolution accept/reject smoke checks and exit.
     evolution_smoke: bool,
+    /// Validate HIRO task inventory and evaluator substrate and exit.
+    hiro_smoke: bool,
     /// Run deterministic local coding-agent edit/verify smoke and exit.
     coding_smoke: bool,
     /// Run N bounded local supervised work-loop cycles and exit.
@@ -133,6 +136,7 @@ fn parse_args() -> CliArgs {
         observe: false,
         lab: false,
         evolution_smoke: false,
+        hiro_smoke: false,
         coding_smoke: false,
         supervised_loop_cycles: None,
         supervised_loop_profile: WorkLoopProfile::Basic,
@@ -235,6 +239,10 @@ fn parse_args() -> CliArgs {
             }
             "--evolution-smoke" => {
                 cli.evolution_smoke = true;
+                i += 1;
+            }
+            "--hiro-smoke" => {
+                cli.hiro_smoke = true;
                 i += 1;
             }
             "--coding-smoke" => {
@@ -395,6 +403,10 @@ async fn main() -> Result<()> {
 
     if cli.evolution_smoke {
         return run_evolution_smoke(Arc::clone(&events)).await;
+    }
+
+    if cli.hiro_smoke {
+        return run_hiro_inventory_smoke(Arc::clone(&events));
     }
 
     // ── kill switch ───────────────────────────────────────────────────────
@@ -581,6 +593,19 @@ struct EvolutionSmokeReport {
     cases: Vec<EvolutionSmokeCaseReport>,
 }
 
+#[derive(serde::Serialize)]
+struct HiroInventorySmokeReport {
+    generated_at: String,
+    tasks_path: String,
+    harness_commit: String,
+    passed: bool,
+    task_count: usize,
+    tool_use: usize,
+    planning: usize,
+    self_correction: usize,
+    duplicate_ids: Vec<String>,
+}
+
 async fn run_evolution_smoke(events: Arc<EventStore>) -> Result<()> {
     let (report, path) = execute_evolution_smoke(events).await?;
 
@@ -610,6 +635,20 @@ async fn run_evolution_smoke(events: Arc<EventStore>) -> Result<()> {
     if !report.passed {
         anyhow::bail!("evolution sandbox smoke failed");
     }
+    Ok(())
+}
+
+fn run_hiro_inventory_smoke(events: Arc<EventStore>) -> Result<()> {
+    let (report, path) = execute_hiro_inventory_smoke(events)?;
+    println!(
+        "HIRO inventory smoke: {}",
+        if report.passed { "passed" } else { "failed" }
+    );
+    println!("  report: {}", path.display());
+    println!(
+        "  tasks: {} (tool_use={}, planning={}, self_correction={})",
+        report.task_count, report.tool_use, report.planning, report.self_correction
+    );
     Ok(())
 }
 
@@ -697,6 +736,50 @@ async fn execute_evolution_smoke(
     Ok((report, path))
 }
 
+fn execute_hiro_inventory_smoke(
+    events: Arc<EventStore>,
+) -> Result<(HiroInventorySmokeReport, PathBuf)> {
+    let repo_root = default_repo_root();
+    events.append(
+        None,
+        None,
+        "hiro.smoke.started",
+        "starting HIRO task inventory smoke",
+        serde_json::json!({
+            "harness_commit": git_head(&repo_root).unwrap_or_else(|_| "unknown".to_string()),
+        }),
+    )?;
+
+    let inventory = load_task_inventory()?;
+    let report = HiroInventorySmokeReport {
+        generated_at: chrono::Utc::now().to_rfc3339(),
+        tasks_path: std::env::var("HIRO_TASKS_PATH")
+            .unwrap_or_else(|_| "hiro/tasks.json".to_string()),
+        harness_commit: git_head(&repo_root).unwrap_or_else(|_| "unknown".to_string()),
+        passed: true,
+        task_count: inventory.task_count,
+        tool_use: inventory.tool_use,
+        planning: inventory.planning,
+        self_correction: inventory.self_correction,
+        duplicate_ids: inventory.duplicate_ids,
+    };
+    let path = write_hiro_inventory_smoke_report(&report)?;
+    events.append(
+        None,
+        None,
+        "hiro.smoke.passed",
+        format!("HIRO inventory smoke report written to {}", path.display()),
+        serde_json::json!({
+            "report_path": path,
+            "task_count": report.task_count,
+            "tool_use": report.tool_use,
+            "planning": report.planning,
+            "self_correction": report.self_correction,
+        }),
+    )?;
+    Ok((report, path))
+}
+
 fn evolution_smoke_cases() -> Vec<(&'static str, bool, EvolutionNode)> {
     vec![
         (
@@ -749,6 +832,19 @@ fn smoke_node(name: &str, target: HarnessComponent, diff: &str) -> EvolutionNode
 fn write_evolution_smoke_report(report: &EvolutionSmokeReport) -> Result<PathBuf> {
     let dir = PathBuf::from("artifacts")
         .join("evolution")
+        .join(chrono::Utc::now().format("%Y-%m-%d").to_string());
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!(
+        "smoke-{}.json",
+        chrono::Utc::now().format("%H%M%S")
+    ));
+    std::fs::write(&path, serde_json::to_string_pretty(report)?)?;
+    Ok(path)
+}
+
+fn write_hiro_inventory_smoke_report(report: &HiroInventorySmokeReport) -> Result<PathBuf> {
+    let dir = PathBuf::from("artifacts")
+        .join("hiro")
         .join(chrono::Utc::now().format("%Y-%m-%d").to_string());
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(format!(
@@ -821,6 +917,7 @@ struct SupervisedLoopReport {
 enum WorkLoopJob {
     CodingSmoke,
     EvolutionSmoke,
+    HiroSmoke,
 }
 
 impl WorkLoopJob {
@@ -828,6 +925,7 @@ impl WorkLoopJob {
         match self {
             Self::CodingSmoke => "coding_smoke",
             Self::EvolutionSmoke => "evolution_smoke",
+            Self::HiroSmoke => "hiro_smoke",
         }
     }
 
@@ -835,6 +933,7 @@ impl WorkLoopJob {
         match self {
             Self::CodingSmoke => "coding-agent smoke",
             Self::EvolutionSmoke => "evolution sandbox smoke",
+            Self::HiroSmoke => "HIRO inventory smoke",
         }
     }
 }
@@ -843,7 +942,9 @@ fn work_loop_job_for_cycle(profile: WorkLoopProfile, cycle: u32) -> WorkLoopJob 
     match profile {
         WorkLoopProfile::Basic => WorkLoopJob::CodingSmoke,
         WorkLoopProfile::Core => {
-            if cycle % 2 == 0 {
+            if cycle % 3 == 0 {
+                WorkLoopJob::HiroSmoke
+            } else if cycle % 2 == 0 {
                 WorkLoopJob::EvolutionSmoke
             } else {
                 WorkLoopJob::CodingSmoke
@@ -1051,6 +1152,22 @@ async fn run_work_loop_job(
                 transcript_path: None,
                 workspace: report.workspace,
                 detail: format!("{} sandbox case(s)", report.cases.len()),
+            })
+        }
+        WorkLoopJob::HiroSmoke => {
+            let (report, path) = execute_hiro_inventory_smoke(Arc::clone(&events))?;
+            Ok(WorkLoopSmokeRecord {
+                cycle: 0,
+                kind: job.kind().to_string(),
+                smoke_id: None,
+                passed: report.passed,
+                report_path: path.display().to_string(),
+                transcript_path: None,
+                workspace: report.tasks_path,
+                detail: format!(
+                    "{} task(s): tool={} planning={} correction={}",
+                    report.task_count, report.tool_use, report.planning, report.self_correction
+                ),
             })
         }
     }
