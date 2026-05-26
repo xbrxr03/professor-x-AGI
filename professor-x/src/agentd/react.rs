@@ -474,6 +474,7 @@ impl ReactLoop {
                                     "execution_ms": obs.execution_ms,
                                     "output_preview": truncate(&obs.output, 300),
                                     "error": obs.error,
+                                    "artifacts": obs.artifacts,
                                 }),
                             );
                             obs

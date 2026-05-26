@@ -581,6 +581,7 @@ mod tests {
                 },
                 tokens_used: 0,
                 execution_ms: 1,
+                artifacts: Vec::new(),
             },
             timestamp: Utc::now(),
         }

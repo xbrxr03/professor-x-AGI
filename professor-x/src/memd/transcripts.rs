@@ -141,6 +141,7 @@ struct TranscriptStep {
     observation_success: bool,
     observation_output: String,
     observation_error: Option<String>,
+    observation_artifacts: Vec<String>,
     execution_ms: u64,
     timestamp: DateTime<Utc>,
 }
@@ -156,6 +157,7 @@ impl From<&ExecutionStep> for TranscriptStep {
             observation_success: step.observation.success,
             observation_output: step.observation.output.clone(),
             observation_error: step.observation.error.clone(),
+            observation_artifacts: step.observation.artifacts.clone(),
             execution_ms: step.observation.execution_ms,
             timestamp: step.timestamp,
         }

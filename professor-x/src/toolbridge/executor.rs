@@ -29,6 +29,8 @@ pub struct Observation {
     pub error: Option<String>,
     pub tokens_used: u32,
     pub execution_ms: u64,
+    #[serde(default)]
+    pub artifacts: Vec<String>,
 }
 
 impl Observation {
@@ -39,6 +41,7 @@ impl Observation {
             error: Some(format!("policy denied: {reason}")),
             tokens_used: 0,
             execution_ms: 0,
+            artifacts: Vec::new(),
         }
     }
     pub fn err(msg: &str) -> Self {
@@ -48,6 +51,39 @@ impl Observation {
             error: Some(msg.to_string()),
             tokens_used: 0,
             execution_ms: 0,
+            artifacts: Vec::new(),
+        }
+    }
+}
+
+struct ToolDispatch {
+    output: String,
+    tokens_used: u32,
+    artifacts: Vec<String>,
+}
+
+impl ToolDispatch {
+    fn output(output: impl Into<String>) -> Self {
+        Self {
+            output: output.into(),
+            tokens_used: 0,
+            artifacts: Vec::new(),
+        }
+    }
+
+    fn with_tokens(output: impl Into<String>, tokens_used: u32) -> Self {
+        Self {
+            output: output.into(),
+            tokens_used,
+            artifacts: Vec::new(),
+        }
+    }
+
+    fn with_artifact(output: impl Into<String>, artifact: PathBuf) -> Self {
+        Self {
+            output: output.into(),
+            tokens_used: 0,
+            artifacts: vec![artifact.to_string_lossy().to_string()],
         }
     }
 }
@@ -104,12 +140,13 @@ impl ToolExecutor {
         let result = self.dispatch(action).await;
         let elapsed = start.elapsed().as_millis() as u64;
         match result {
-            Ok((output, tokens)) => Observation {
+            Ok(result) => Observation {
                 success: true,
-                output,
+                output: result.output,
                 error: None,
-                tokens_used: tokens,
+                tokens_used: result.tokens_used,
                 execution_ms: elapsed,
+                artifacts: result.artifacts,
             },
             Err(e) => Observation {
                 success: false,
@@ -117,11 +154,12 @@ impl ToolExecutor {
                 error: Some(e.to_string()),
                 tokens_used: 0,
                 execution_ms: elapsed,
+                artifacts: Vec::new(),
             },
         }
     }
 
-    async fn dispatch(&self, action: &Action) -> Result<(String, u32)> {
+    async fn dispatch(&self, action: &Action) -> Result<ToolDispatch> {
         match action.tool_name.as_str() {
             "fs.read" => {
                 use std::io::Read;
@@ -140,7 +178,7 @@ impl ToolExecutor {
                 } else {
                     text
                 };
-                Ok((out, 0))
+                Ok(ToolDispatch::output(out))
             }
             "fs.list" => {
                 let path = req_str(&action.params, "path")?;
@@ -155,7 +193,7 @@ impl ToolExecutor {
                         }
                     })
                     .collect();
-                Ok((entries.join("\n"), 0))
+                Ok(ToolDispatch::output(entries.join("\n")))
             }
             "fs.write" => {
                 let path = req_str(&action.params, "path")?;
@@ -164,7 +202,10 @@ impl ToolExecutor {
                     std::fs::create_dir_all(p)?;
                 }
                 std::fs::write(path, content)?;
-                Ok((format!("wrote {} bytes to {path}", content.len()), 0))
+                Ok(ToolDispatch::output(format!(
+                    "wrote {} bytes to {path}",
+                    content.len()
+                )))
             }
             "fs.delete" => {
                 let path = req_str(&action.params, "path")?;
@@ -174,7 +215,7 @@ impl ToolExecutor {
                 } else {
                     std::fs::remove_file(p)?;
                 }
-                Ok((format!("deleted {path}"), 0))
+                Ok(ToolDispatch::output(format!("deleted {path}")))
             }
             "shell.restricted" => {
                 let cmd = req_str(&action.params, "command")?;
@@ -211,7 +252,10 @@ impl ToolExecutor {
                         truncate_text(&stderr, 2000)
                     )
                 };
-                Ok((format!("{preview}\n[full output: {}]", artifact_path.display()), 0))
+                Ok(ToolDispatch::with_artifact(
+                    format!("{preview}\n[full output: {}]", artifact_path.display()),
+                    artifact_path,
+                ))
             }
             "patch.apply" => {
                 let patch = req_str(&action.params, "patch")?;
@@ -247,19 +291,19 @@ impl ToolExecutor {
                         );
                     }
                 }
-                Ok((
+                Ok(ToolDispatch::with_artifact(
                     format!(
                         "patch {mode} succeeded for {} path(s); artifact={}",
                         paths.len(),
                         artifact_path.display()
                     ),
-                    0,
+                    artifact_path,
                 ))
             }
             "web.search" => {
                 let query = req_str(&action.params, "query")?;
                 let n = action.params["num_results"].as_u64().unwrap_or(5) as usize;
-                Ok((web_search(query, n).await?, 0))
+                Ok(ToolDispatch::output(web_search(query, n).await?))
             }
             "web.fetch" => {
                 let url = req_str(&action.params, "url")?;
@@ -273,7 +317,7 @@ impl ToolExecutor {
                 } else {
                     body
                 };
-                Ok((out, 0))
+                Ok(ToolDispatch::output(out))
             }
             "memory.read" => {
                 let mem = self
@@ -314,7 +358,7 @@ impl ToolExecutor {
                 } else {
                     format!("{layer} results for '{query}':\n{out}")
                 };
-                Ok((result, 0))
+                Ok(ToolDispatch::output(result))
             }
             "memory.write" => {
                 let mem = self
@@ -326,7 +370,9 @@ impl ToolExecutor {
                 let entry = SemanticEntry::new(content.to_string(), source.to_string());
                 let id = entry.id;
                 mem.semantic.insert(&entry)?;
-                Ok((format!("stored in semantic memory (id={id})"), 0))
+                Ok(ToolDispatch::output(format!(
+                    "stored in semantic memory (id={id})"
+                )))
             }
             "git.commit" => {
                 let message = req_str(&action.params, "message")?;
@@ -346,11 +392,13 @@ impl ToolExecutor {
                 if !commit.status.success() {
                     let err = String::from_utf8_lossy(&commit.stderr);
                     if err.contains("nothing to commit") {
-                        return Ok(("nothing to commit".to_string(), 0));
+                        return Ok(ToolDispatch::output("nothing to commit"));
                     }
                     anyhow::bail!("git commit: {err}");
                 }
-                Ok((String::from_utf8_lossy(&commit.stdout).to_string(), 0))
+                Ok(ToolDispatch::output(
+                    String::from_utf8_lossy(&commit.stdout).to_string(),
+                ))
             }
             "ollama.complete" => {
                 let ollama = self
@@ -360,7 +408,7 @@ impl ToolExecutor {
                 let prompt = req_str(&action.params, "prompt")?;
                 let resp = ollama.generate(prompt, None, None).await?;
                 let (_, answer) = resp.split_thinking();
-                Ok((answer, resp.tokens_used()))
+                Ok(ToolDispatch::with_tokens(answer, resp.tokens_used()))
             }
             _ => {
                 warn!("unimplemented tool: {}", action.tool_name);
@@ -626,6 +674,7 @@ mod tests {
         let check = executor.execute(&patch_action("check")).await;
         assert!(check.success, "{:?}", check.error);
         assert!(check.output.contains("patch check succeeded"));
+        assert_eq!(check.artifacts.len(), 1);
         assert_eq!(
             std::fs::read_to_string(root.join("src/lib.rs")).unwrap(),
             "pub fn x() {}\n"
@@ -634,6 +683,7 @@ mod tests {
         let apply = executor.execute(&patch_action("apply")).await;
         assert!(apply.success, "{:?}", apply.error);
         assert!(apply.output.contains("patch apply succeeded"));
+        assert_eq!(apply.artifacts.len(), 1);
         assert_eq!(
             std::fs::read_to_string(root.join("src/lib.rs")).unwrap(),
             "pub fn x() { }\n"
@@ -655,11 +705,13 @@ mod tests {
         assert!(obs.success, "{:?}", obs.error);
         assert!(obs.output.contains("hello professor x"));
         assert!(obs.output.contains("[full output:"));
+        assert_eq!(obs.artifacts.len(), 1);
 
         let artifacts = root.join("artifacts/commands");
         assert!(artifacts.exists());
         let files = collect_json_files(&artifacts);
         assert_eq!(files.len(), 1);
+        assert_eq!(obs.artifacts[0], files[0].to_string_lossy());
         let artifact: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&files[0]).unwrap()).unwrap();
         assert_eq!(artifact["command"], "printf 'hello professor x'");
