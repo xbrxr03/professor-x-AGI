@@ -194,7 +194,7 @@ async fn main() -> Result<()> {
     info!("memd: initialized at {}", data_dir.display());
 
     if cli.status {
-        return print_status(Arc::clone(&memory), Arc::clone(&events));
+        return observer::print_snapshot(Arc::clone(&memory), Arc::clone(&events));
     }
 
     if let Some(limit) = cli.events_limit {
@@ -1070,38 +1070,6 @@ fn load_daily_schedule() -> Result<DailyScheduleFile> {
     let raw = std::fs::read_to_string(&path)
         .map_err(|e| anyhow::anyhow!("cannot read daily schedule '{}': {e}", path.display()))?;
     Ok(toml::from_str(&raw)?)
-}
-
-fn print_status(memory: Arc<MemoryManager>, events: Arc<EventStore>) -> Result<()> {
-    let db = memory.db.lock().unwrap();
-    let active_jobs: i64 = db.query_row(
-        "SELECT COUNT(*) FROM cron_jobs WHERE enabled = 1 AND state = 'Scheduled'",
-        [],
-        |row| row.get(0),
-    )?;
-    let paused_jobs: i64 = db.query_row(
-        "SELECT COUNT(*) FROM cron_jobs WHERE enabled = 0 OR state = 'Paused'",
-        [],
-        |row| row.get(0),
-    )?;
-    let hiro_rounds: i64 =
-        db.query_row("SELECT COUNT(*) FROM hiro_rounds", [], |row| row.get(0))?;
-    let audit_entries: i64 =
-        db.query_row("SELECT COUNT(*) FROM audit_log", [], |row| row.get(0))?;
-    let transcripts: i64 =
-        db.query_row("SELECT COUNT(*) FROM task_transcripts", [], |row| row.get(0))?;
-    drop(db);
-
-    println!("Professor X status");
-    println!("  scheduled jobs: {active_jobs} active, {paused_jobs} paused");
-    println!("  HIRO rounds: {hiro_rounds}");
-    println!("  audit entries: {audit_entries}");
-    println!("  task transcripts: {transcripts}");
-    println!("  recent events:");
-    for event in events.tail(8)? {
-        println!("  {}", format_event(&event));
-    }
-    Ok(())
 }
 
 fn print_events(events: Arc<EventStore>, limit: usize) -> Result<()> {
