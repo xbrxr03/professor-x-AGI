@@ -93,6 +93,15 @@ pub fn print_snapshot(memory: Arc<MemoryManager>, events: Arc<EventStore>) -> Re
         if let Some(path) = &run.transcript_path {
             println!("    transcript: {path}");
         }
+        if let Some(output) = &run.last_output_preview {
+            println!("    output: {}", truncate(output, 110));
+        }
+        if let Some(error) = &run.last_error {
+            println!("    error: {}", truncate(error, 110));
+        }
+        if !run.last_artifacts.is_empty() {
+            println!("    artifacts: {}", run.last_artifacts.len());
+        }
     }
     println!("  events: {}", snapshot.total_events);
     println!("  recent events:");
@@ -927,6 +936,24 @@ fn latest_run_detail(run: &Option<TaskRun>) -> Vec<Line<'static>> {
                 lines.push(Line::from(vec![
                     Span::styled("failure ", label()),
                     Span::raw(truncate(failure, 96)),
+                ]));
+            }
+            if let Some(output) = &run.last_output_preview {
+                lines.push(Line::from(vec![
+                    Span::styled("output  ", label()),
+                    Span::raw(truncate(output, 96)),
+                ]));
+            }
+            if let Some(error) = &run.last_error {
+                lines.push(Line::from(vec![
+                    Span::styled("error   ", label()),
+                    Span::raw(truncate(error, 96)),
+                ]));
+            }
+            if !run.last_artifacts.is_empty() {
+                lines.push(Line::from(vec![
+                    Span::styled("files   ", label()),
+                    Span::raw(run.last_artifacts.len().to_string()),
                 ]));
             }
             lines

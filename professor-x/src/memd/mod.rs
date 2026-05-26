@@ -166,6 +166,9 @@ CREATE TABLE IF NOT EXISTS task_runs (
     step_count INTEGER NOT NULL DEFAULT 0,
     last_tool TEXT,
     last_summary TEXT NOT NULL DEFAULT '',
+    last_output_preview TEXT,
+    last_error TEXT,
+    last_artifacts TEXT NOT NULL DEFAULT '[]',
     outcome_score REAL,
     failure_mode TEXT,
     transcript_path TEXT,
@@ -279,6 +282,15 @@ impl MemoryManager {
 
         // Apply schema
         conn.execute_batch(SCHEMA_SQL)?;
+        ensure_columns(
+            &conn,
+            "task_runs",
+            &[
+                ("last_output_preview", "TEXT"),
+                ("last_error", "TEXT"),
+                ("last_artifacts", "TEXT NOT NULL DEFAULT '[]'"),
+            ],
+        )?;
         info!("memd: database opened at {}", db_path.display());
 
         let db = Arc::new(Mutex::new(conn));
@@ -321,4 +333,20 @@ impl MemoryManager {
 
         Ok(parts.join("\n\n"))
     }
+}
+
+fn ensure_columns(conn: &Connection, table: &str, columns: &[(&str, &str)]) -> Result<()> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let existing = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<std::collections::HashSet<_>, _>>()?;
+    for (name, definition) in columns {
+        if !existing.contains(*name) {
+            conn.execute(
+                &format!("ALTER TABLE {table} ADD COLUMN {name} {definition}"),
+                [],
+            )?;
+        }
+    }
+    Ok(())
 }

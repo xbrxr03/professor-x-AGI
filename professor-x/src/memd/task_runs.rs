@@ -17,6 +17,9 @@ pub struct TaskRun {
     pub step_count: usize,
     pub last_tool: Option<String>,
     pub last_summary: String,
+    pub last_output_preview: Option<String>,
+    pub last_error: Option<String>,
+    pub last_artifacts: Vec<String>,
     pub outcome_score: Option<f32>,
     pub failure_mode: Option<String>,
     pub transcript_path: Option<String>,
@@ -85,15 +88,27 @@ impl TaskRunStore {
         let last = task.steps.last();
         let last_tool = last.map(|step| step.action.tool_name.as_str());
         let summary = last
-            .map(|step| {
-                if step.observation.success {
-                    format!("step {}: {} succeeded", step.index, step.action.tool_name)
-                } else {
-                    format!("step {}: {} failed", step.index, step.action.tool_name)
-                }
-            })
+            .map(step_summary)
             .unwrap_or_else(|| "waiting for first step".to_string());
-        self.update_task(task, last_tool, summary)
+        let output_preview = last.and_then(|step| {
+            if step.observation.output.is_empty() {
+                None
+            } else {
+                Some(truncate(&step.observation.output, 360))
+            }
+        });
+        let error = last.and_then(|step| step.observation.error.as_deref());
+        let artifacts = last
+            .map(|step| step.observation.artifacts.clone())
+            .unwrap_or_default();
+        self.update_task_detail(
+            task,
+            last_tool,
+            summary,
+            output_preview.as_deref(),
+            error,
+            &artifacts,
+        )
     }
 
     pub fn finished(
@@ -142,7 +157,8 @@ impl TaskRunStore {
         let db = self.db.lock().unwrap();
         let mut stmt = db.prepare(
             "SELECT task_id, description, task_type, status, priority, attempt_count, step_count,
-                    last_tool, last_summary, outcome_score, failure_mode, transcript_path,
+                    last_tool, last_summary, last_output_preview, last_error, last_artifacts,
+                    outcome_score, failure_mode, transcript_path,
                     queued_at, started_at, updated_at, completed_at
              FROM task_runs
              ORDER BY updated_at DESC
@@ -186,13 +202,56 @@ impl TaskRunStore {
         )?;
         Ok(())
     }
+
+    fn update_task_detail(
+        &self,
+        task: &TaskNode,
+        last_tool: Option<&str>,
+        last_summary: impl AsRef<str>,
+        output_preview: Option<&str>,
+        error: Option<&str>,
+        artifacts: &[String],
+    ) -> Result<()> {
+        let now = Utc::now();
+        let artifacts_raw = serde_json::to_string(artifacts)?;
+        let db = self.db.lock().unwrap();
+        db.execute(
+            "UPDATE task_runs
+             SET status = ?2,
+                 attempt_count = ?3,
+                 step_count = ?4,
+                 last_tool = COALESCE(?5, last_tool),
+                 last_summary = ?6,
+                 last_output_preview = ?7,
+                 last_error = ?8,
+                 last_artifacts = ?9,
+                 started_at = COALESCE(started_at, ?10),
+                 updated_at = ?11
+             WHERE task_id = ?1",
+            params![
+                task.id.to_string(),
+                format!("{:?}", task.status),
+                task.attempt_count,
+                task.steps.len() as i64,
+                last_tool,
+                last_summary.as_ref(),
+                output_preview,
+                error,
+                artifacts_raw,
+                task.started_at.unwrap_or(now).to_rfc3339(),
+                now.to_rfc3339(),
+            ],
+        )?;
+        Ok(())
+    }
 }
 
 fn parse_run(row: &rusqlite::Row) -> rusqlite::Result<TaskRun> {
-    let queued_at_raw: String = row.get(12)?;
-    let started_at_raw: Option<String> = row.get(13)?;
-    let updated_at_raw: String = row.get(14)?;
-    let completed_at_raw: Option<String> = row.get(15)?;
+    let artifacts_raw: String = row.get(11)?;
+    let queued_at_raw: String = row.get(15)?;
+    let started_at_raw: Option<String> = row.get(16)?;
+    let updated_at_raw: String = row.get(17)?;
+    let completed_at_raw: Option<String> = row.get(18)?;
     Ok(TaskRun {
         task_id: row.get(0)?,
         description: row.get(1)?,
@@ -203,14 +262,34 @@ fn parse_run(row: &rusqlite::Row) -> rusqlite::Result<TaskRun> {
         step_count: row.get::<_, i64>(6)? as usize,
         last_tool: row.get(7)?,
         last_summary: row.get(8)?,
-        outcome_score: row.get(9)?,
-        failure_mode: row.get(10)?,
-        transcript_path: row.get(11)?,
+        last_output_preview: row.get(9)?,
+        last_error: row.get(10)?,
+        last_artifacts: serde_json::from_str(&artifacts_raw).unwrap_or_default(),
+        outcome_score: row.get(12)?,
+        failure_mode: row.get(13)?,
+        transcript_path: row.get(14)?,
         queued_at: parse_time(&queued_at_raw),
         started_at: started_at_raw.as_deref().map(parse_time),
         updated_at: parse_time(&updated_at_raw),
         completed_at: completed_at_raw.as_deref().map(parse_time),
     })
+}
+
+fn step_summary(step: &crate::agentd::graph::ExecutionStep) -> String {
+    if step.observation.success {
+        format!("step {}: {} succeeded", step.index, step.action.tool_name)
+    } else {
+        format!("step {}: {} failed", step.index, step.action.tool_name)
+    }
+}
+
+fn truncate(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let mut out = text.chars().take(max_chars).collect::<String>();
+    out.push_str("...");
+    out
 }
 
 fn parse_time(raw: &str) -> DateTime<Utc> {
@@ -242,6 +321,9 @@ mod tests {
                     step_count INTEGER NOT NULL DEFAULT 0,
                     last_tool TEXT,
                     last_summary TEXT NOT NULL DEFAULT '',
+                    last_output_preview TEXT,
+                    last_error TEXT,
+                    last_artifacts TEXT NOT NULL DEFAULT '[]',
                     outcome_score REAL,
                     failure_mode TEXT,
                     transcript_path TEXT,
@@ -297,6 +379,8 @@ mod tests {
         assert_eq!(latest.attempt_count, 1);
         assert_eq!(latest.step_count, 1);
         assert_eq!(latest.last_tool.as_deref(), Some("shell.restricted"));
+        assert_eq!(latest.last_output_preview.as_deref(), Some("clean"));
+        assert!(latest.last_artifacts.is_empty());
         assert_eq!(
             latest.transcript_path.as_deref(),
             Some("artifacts/transcripts/task.json")

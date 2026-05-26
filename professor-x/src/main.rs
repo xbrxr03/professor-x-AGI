@@ -11,6 +11,7 @@ use anyhow::Result;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -1005,6 +1006,71 @@ async fn run_single_task(
     Ok(())
 }
 
+async fn run_single_task_live(
+    description: String,
+    ollama: Arc<ollama::OllamaClient>,
+    registry: Arc<std::sync::RwLock<ToolRegistry>>,
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    transcripts: Arc<TranscriptStore>,
+    cancel: CancellationToken,
+) -> Result<()> {
+    info!("interactive task: {description}");
+    let mut task = TaskNode::new(description, TaskType::UserRequest, 100);
+    let task_id = task.id.to_string();
+    let mut last_event_id = events.tail(1)?.last().map(|event| event.id).unwrap_or(0);
+    events.append(
+        None,
+        Some(task.id),
+        "task.queued",
+        format!("queued interactive task: {}", task.description),
+        serde_json::json!({
+            "task_type": "UserRequest",
+            "task_id": task.id,
+        }),
+    )?;
+    drain_live_task_events(Arc::clone(&events), &mut last_event_id, &task_id)?;
+
+    let react = ReactLoop::new(ollama, registry, policy, memory, cancel)
+        .with_events(Arc::clone(&events))
+        .with_transcripts(transcripts);
+    let outcome = {
+        let run = react.run(&mut task);
+        tokio::pin!(run);
+        let mut ticker = tokio::time::interval(Duration::from_millis(500));
+        loop {
+            tokio::select! {
+                result = &mut run => break result,
+                _ = ticker.tick() => {
+                    drain_live_task_events(
+                        Arc::clone(&events),
+                        &mut last_event_id,
+                        &task_id,
+                    )?;
+                }
+            }
+        }
+    }?;
+    drain_live_task_events(Arc::clone(&events), &mut last_event_id, &task_id)?;
+
+    println!(
+        "task {}: score={:.2} steps={} attempts={}",
+        if outcome.success {
+            "succeeded"
+        } else {
+            "failed"
+        },
+        outcome.score,
+        outcome.steps_taken,
+        task.attempt_count,
+    );
+    if let Some(ref fm) = outcome.failure_mode {
+        println!("failure: {}", truncate(fm, 220));
+    }
+    Ok(())
+}
+
 async fn run_interactive_tasks(
     ollama: Arc<ollama::OllamaClient>,
     registry: Arc<std::sync::RwLock<ToolRegistry>>,
@@ -1061,7 +1127,7 @@ async fn run_interactive_tasks(
             serde_json::json!({"task": input}),
         )?;
 
-        match run_single_task(
+        match run_single_task_live(
             input.to_string(),
             Arc::clone(&ollama),
             Arc::clone(&registry),
@@ -1098,6 +1164,84 @@ async fn run_interactive_tasks(
     )?;
     println!("Professor X interactive task mode stopped");
     Ok(())
+}
+
+fn drain_live_task_events(
+    events: Arc<EventStore>,
+    last_event_id: &mut i64,
+    task_id: &str,
+) -> Result<()> {
+    for event in events.after_id(*last_event_id, 100)? {
+        *last_event_id = event.id;
+        if event.task_id.as_deref() == Some(task_id) {
+            if let Some(line) = format_live_task_event(&event) {
+                println!("{line}");
+            }
+        }
+    }
+    io::stdout().flush()?;
+    Ok(())
+}
+
+fn format_live_task_event(event: &memd::events::AgentEvent) -> Option<String> {
+    match event.event_type.as_str() {
+        "task.queued" | "task.started" | "task.succeeded" | "task.failed" => {
+            Some(format!("* {}", event.summary))
+        }
+        "task.attempt.started" => Some(format!("  -> {}", event.summary)),
+        "tool.requested" => event
+            .payload
+            .get("tool")
+            .and_then(|tool| tool.as_str())
+            .map(|tool| format!("  tool {tool}: requested")),
+        "policy.allowed" | "policy.denied" | "policy.pending" => {
+            Some(format!("  {}", event.summary))
+        }
+        "tool.succeeded" | "tool.failed" => {
+            let tool = event
+                .payload
+                .get("tool")
+                .and_then(|value| value.as_str())
+                .unwrap_or("tool");
+            let status = if event.event_type == "tool.succeeded" {
+                "ok"
+            } else {
+                "failed"
+            };
+            let elapsed = event
+                .payload
+                .get("execution_ms")
+                .and_then(|value| value.as_u64())
+                .unwrap_or_default();
+            let preview = event
+                .payload
+                .get("output_preview")
+                .and_then(|value| value.as_str())
+                .filter(|text| !text.is_empty())
+                .map(|text| format!(" - {}", one_line(text, 180)))
+                .unwrap_or_default();
+            let artifacts = event
+                .payload
+                .get("artifacts")
+                .and_then(|value| value.as_array())
+                .map(|items| items.len())
+                .filter(|count| *count > 0)
+                .map(|count| format!(" ({count} artifact{})", if count == 1 { "" } else { "s" }))
+                .unwrap_or_default();
+            Some(format!(
+                "  tool {tool}: {status} in {elapsed}ms{artifacts}{preview}"
+            ))
+        }
+        "react.circuit_breaker" | "react.max_steps" | "transcript.written" => {
+            Some(format!("  {}", event.summary))
+        }
+        _ => None,
+    }
+}
+
+fn one_line(text: &str, max_chars: usize) -> String {
+    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    truncate(&compact, max_chars)
 }
 
 // ── HIRO benchmark mode ───────────────────────────────────────────────────────
