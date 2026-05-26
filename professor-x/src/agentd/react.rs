@@ -103,6 +103,17 @@ impl ReactLoop {
     pub async fn run(&self, task: &mut TaskNode) -> Result<TaskOutcome> {
         let task_runs = TaskRunStore::new(Arc::clone(&self.memory.db));
         let _ = task_runs.queued(task);
+        self.emit_event(
+            None,
+            Some(task.id),
+            "task.queued",
+            format!("queued task: {}", truncate(&task.description, 120)),
+            json!({
+                "task_type": format!("{:?}", task.task_type),
+                "priority": task.priority,
+                "max_attempts": task.max_attempts,
+            }),
+        );
         task.status = TaskStatus::Running;
         task.started_at = Some(Utc::now());
         let _ = task_runs.started(task);

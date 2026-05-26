@@ -744,6 +744,39 @@ async fn run_coding_smoke(
     task_runs.queued(&task)?;
     task_runs.started(&task)?;
     task_runs.attempt_started(&task)?;
+    let session_id = uuid::Uuid::new_v4();
+
+    events.append(
+        None,
+        Some(task.id),
+        "task.queued",
+        format!("queued task: {}", truncate(&task.description, 120)),
+        serde_json::json!({
+            "task_type": format!("{:?}", task.task_type),
+            "priority": task.priority,
+            "max_attempts": task.max_attempts,
+            "workspace": workspace,
+        }),
+    )?;
+    events.append(
+        None,
+        Some(task.id),
+        "task.started",
+        format!("started task: {}", truncate(&task.description, 120)),
+        serde_json::json!({
+            "task_type": format!("{:?}", task.task_type),
+            "priority": task.priority,
+            "max_attempts": task.max_attempts,
+            "workspace": workspace,
+        }),
+    )?;
+    events.append(
+        Some(session_id),
+        Some(task.id),
+        "task.attempt.started",
+        "attempt 1/1 started",
+        serde_json::json!({"attempt": 1}),
+    )?;
 
     events.append(
         None,
@@ -756,7 +789,6 @@ async fn run_coding_smoke(
     let mut scope = PermissionScope::default_autonomous().with_workspace_root(workspace.clone());
     scope.approval_threshold = 100;
     let executor = ToolExecutor::new(registry).with_workspace_root(workspace.clone());
-    let session_id = uuid::Uuid::new_v4();
     let mut artifacts = Vec::new();
 
     let initial_action = Action {
@@ -865,6 +897,25 @@ async fn run_coding_smoke(
             Some("coding smoke failed")
         },
         transcript_path.as_deref(),
+    )?;
+    events.append(
+        None,
+        Some(task.id),
+        if passed {
+            "task.succeeded"
+        } else {
+            "task.failed"
+        },
+        if passed {
+            format!("completed task in {} step(s)", task.steps.len())
+        } else {
+            format!("task failed after {} step(s)", task.steps.len())
+        },
+        serde_json::json!({
+            "attempts": task.attempt_count,
+            "steps": task.steps.len(),
+            "score": task.outcome_score,
+        }),
     )?;
     let report = CodingSmokeReport {
         generated_at: chrono::Utc::now().to_rfc3339(),
