@@ -295,7 +295,7 @@ fn parse_args() -> CliArgs {
                     .get(i + 1)
                     .filter(|next| !next.starts_with("--"))
                     .and_then(|next| next.parse::<u32>().ok());
-                cli.operator_run_cycles = Some(cycles.unwrap_or(3));
+                cli.operator_run_cycles = Some(cycles.unwrap_or(4));
                 i += if cycles.is_some() { 2 } else { 1 };
             }
             "--evolution-cycle" => {
@@ -643,6 +643,21 @@ struct EvolutionSmokeReport {
     cases: Vec<EvolutionSmokeCaseReport>,
 }
 
+#[derive(Debug, serde::Serialize)]
+struct EvolutionProposalDryRunReport {
+    generated_at: String,
+    workspace: String,
+    harness_commit: String,
+    target_component: String,
+    motivation: String,
+    accepted: bool,
+    applied: bool,
+    reason: String,
+    checks: Vec<String>,
+    diff_hash: Option<String>,
+    diff_bytes: usize,
+}
+
 #[derive(serde::Serialize)]
 struct HiroInventorySmokeReport {
     generated_at: String,
@@ -786,6 +801,74 @@ async fn execute_evolution_smoke(
     Ok((report, path))
 }
 
+async fn execute_evolution_proposal_dry_run(
+    events: Arc<EventStore>,
+) -> Result<(EvolutionProposalDryRunReport, PathBuf)> {
+    let repo_root = default_repo_root();
+    let node = smoke_node(
+        "operator_proposal_dry_run",
+        HarnessComponent::SkillDefinition("px-operator-proposal-dry-run".to_string()),
+        "# px-operator-proposal-dry-run\n\nPurpose: preserve the operator proposal dry-run workflow as a reusable skill.\n\nWorkflow:\n- State the proposed harness change and target component.\n- Verify it in an isolated sandbox before touching the main worktree.\n- Record the checks, diff hash, decision, and rollback path.\n\nOutput Contract:\n- A proposal record with motivation, target component, verification checks, decision, and artifact path.\n",
+    );
+    events.append(
+        None,
+        None,
+        "evolution.proposal_dry_run.started",
+        "starting non-committing evolution proposal dry-run",
+        serde_json::json!({
+            "workspace": "repo-root",
+            "harness_commit": git_head(&repo_root).unwrap_or_else(|_| "unknown".to_string()),
+            "target_component": format!("{:?}", node.target_component),
+            "motivation": node.motivation,
+        }),
+    )?;
+
+    let verification = verify_node_in_sandbox(&repo_root, &node).await?;
+    let diff_hash = if verification.diff.is_empty() {
+        None
+    } else {
+        Some(sha256_hex(verification.diff.as_bytes()))
+    };
+    let report = EvolutionProposalDryRunReport {
+        generated_at: chrono::Utc::now().to_rfc3339(),
+        workspace: "repo-root".to_string(),
+        harness_commit: git_head(&repo_root).unwrap_or_else(|_| "unknown".to_string()),
+        target_component: format!("{:?}", node.target_component),
+        motivation: node.motivation,
+        accepted: verification.outcome.accepted,
+        applied: false,
+        reason: verification.outcome.reason,
+        checks: verification.outcome.checks,
+        diff_hash,
+        diff_bytes: verification.diff.len(),
+    };
+    let path = write_evolution_proposal_dry_run_report(&report)?;
+    events.append(
+        None,
+        None,
+        if report.accepted {
+            "evolution.proposal_dry_run.accepted"
+        } else {
+            "evolution.proposal_dry_run.rejected"
+        },
+        format!(
+            "proposal dry-run {} without applying changes; report {}",
+            if report.accepted { "accepted" } else { "rejected" },
+            path.display()
+        ),
+        serde_json::json!({
+            "accepted": report.accepted,
+            "applied": report.applied,
+            "reason": report.reason,
+            "checks": report.checks,
+            "diff_hash": report.diff_hash,
+            "diff_bytes": report.diff_bytes,
+            "report_path": path,
+        }),
+    )?;
+    Ok((report, path))
+}
+
 fn execute_hiro_inventory_smoke(
     events: Arc<EventStore>,
 ) -> Result<(HiroInventorySmokeReport, PathBuf)> {
@@ -892,6 +975,23 @@ fn write_evolution_smoke_report(report: &EvolutionSmokeReport) -> Result<PathBuf
     Ok(path)
 }
 
+fn write_evolution_proposal_dry_run_report(
+    report: &EvolutionProposalDryRunReport,
+) -> Result<PathBuf> {
+    let dir = PathBuf::from("artifacts")
+        .join("evolution")
+        .join("proposals")
+        .join("dry-runs")
+        .join(chrono::Utc::now().format("%Y-%m-%d").to_string());
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!(
+        "proposal-{}.json",
+        chrono::Utc::now().format("%H%M%S")
+    ));
+    std::fs::write(&path, serde_json::to_string_pretty(report)?)?;
+    Ok(path)
+}
+
 fn write_hiro_inventory_smoke_report(report: &HiroInventorySmokeReport) -> Result<PathBuf> {
     let dir = PathBuf::from("artifacts")
         .join("hiro")
@@ -970,6 +1070,7 @@ enum WorkLoopJob {
     CodingSmoke,
     EvolutionSmoke,
     HiroSmoke,
+    ProposalDryRun,
 }
 
 impl WorkLoopJob {
@@ -978,6 +1079,7 @@ impl WorkLoopJob {
             Self::CodingSmoke => "coding_smoke",
             Self::EvolutionSmoke => "evolution_smoke",
             Self::HiroSmoke => "hiro_smoke",
+            Self::ProposalDryRun => "proposal_dry_run",
         }
     }
 
@@ -986,6 +1088,7 @@ impl WorkLoopJob {
             Self::CodingSmoke => "coding-agent smoke",
             Self::EvolutionSmoke => "evolution sandbox smoke",
             Self::HiroSmoke => "HIRO inventory smoke",
+            Self::ProposalDryRun => "evolution proposal dry-run",
         }
     }
 }
@@ -995,6 +1098,7 @@ fn parse_work_loop_job(kind: &str) -> Option<WorkLoopJob> {
         "coding_smoke" => Some(WorkLoopJob::CodingSmoke),
         "evolution_smoke" => Some(WorkLoopJob::EvolutionSmoke),
         "hiro_smoke" => Some(WorkLoopJob::HiroSmoke),
+        "proposal_dry_run" => Some(WorkLoopJob::ProposalDryRun),
         _ => None,
     }
 }
@@ -1003,12 +1107,11 @@ fn work_loop_job_for_cycle(profile: WorkLoopProfile, cycle: u32) -> WorkLoopJob 
     match profile {
         WorkLoopProfile::Basic => WorkLoopJob::CodingSmoke,
         WorkLoopProfile::Core => {
-            if cycle % 3 == 0 {
-                WorkLoopJob::HiroSmoke
-            } else if cycle % 2 == 0 {
-                WorkLoopJob::EvolutionSmoke
-            } else {
-                WorkLoopJob::CodingSmoke
+            match cycle % 4 {
+                1 => WorkLoopJob::CodingSmoke,
+                2 => WorkLoopJob::EvolutionSmoke,
+                3 => WorkLoopJob::HiroSmoke,
+                _ => WorkLoopJob::ProposalDryRun,
             }
         }
     }
@@ -1028,6 +1131,9 @@ impl WorkLoopProfile {
             }
             (Self::Core, WorkLoopJob::HiroSmoke) => {
                 "core profile verifies HIRO task inventory before benchmark-dependent evolution"
+            }
+            (Self::Core, WorkLoopJob::ProposalDryRun) => {
+                "core profile verifies a concrete proposal record without applying or committing it"
             }
             _ => "profile selected this job as the next safety gate",
         }
@@ -1357,6 +1463,24 @@ async fn run_work_loop_job(
                 detail: format!(
                     "{} task(s): tool={} planning={} correction={}",
                     report.task_count, report.tool_use, report.planning, report.self_correction
+                ),
+            })
+        }
+        WorkLoopJob::ProposalDryRun => {
+            let (report, path) = execute_evolution_proposal_dry_run(Arc::clone(&events)).await?;
+            Ok(WorkLoopSmokeRecord {
+                cycle: 0,
+                kind: job.kind().to_string(),
+                smoke_id: None,
+                passed: report.accepted && !report.applied,
+                report_path: path.display().to_string(),
+                transcript_path: None,
+                workspace: report.workspace,
+                detail: format!(
+                    "{} check(s), diff_bytes={}, applied={}",
+                    report.checks.len(),
+                    report.diff_bytes,
+                    report.applied
                 ),
             })
         }
@@ -3021,10 +3145,11 @@ mod tests {
         )];
 
         let plan =
-            plan_work_loop_jobs(WorkLoopRunKind::Supervised, WorkLoopProfile::Core, 3, &recent);
+            plan_work_loop_jobs(WorkLoopRunKind::Supervised, WorkLoopProfile::Core, 4, &recent);
 
         assert_eq!(plan[0].kind, "coding_smoke");
         assert_eq!(plan[1].kind, "evolution_smoke");
         assert_eq!(plan[2].kind, "hiro_smoke");
+        assert_eq!(plan[3].kind, "proposal_dry_run");
     }
 }
