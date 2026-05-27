@@ -1,0 +1,20 @@
+{
+  "generated_at": "2026-05-27T03:47:00.354121366+00:00",
+  "mode": "operator_commit_smoke",
+  "workspace": "repo-root",
+  "harness_commit": "04a5163",
+  "target_component": "SkillDefinition(\"px-operator-autocommit-20260527-034639\")",
+  "motivation": "smoke verify operator_proposal proposal",
+  "accepted": true,
+  "applied": false,
+  "commit": null,
+  "reason": "sandbox verification passed",
+  "checks": [
+    "reward_hacking_scan",
+    "sandbox_worktree",
+    "material_diff",
+    "cargo_check"
+  ],
+  "diff_hash": "c1b35673cc5c9c3925d4fa172e60a0fd9654701093940edfdb306cd64590d9b6",
+  "diff_bytes": 770
+}
