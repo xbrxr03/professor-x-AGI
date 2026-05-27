@@ -82,6 +82,23 @@ pub fn print_snapshot(memory: Arc<MemoryManager>, events: Arc<EventStore>) -> Re
             run.failed_cycles,
             run.report_path,
         );
+        for planned in run.planned_jobs.iter().take(5) {
+            println!(
+                "      plan {}: {} / {}",
+                planned.cycle,
+                planned.kind,
+                truncate(&planned.reason, 96),
+            );
+        }
+        for smoke in run.smoke_records.iter().take(5) {
+            println!(
+                "      cycle {}: {} / {} / {}",
+                smoke.cycle,
+                smoke.kind,
+                if smoke.passed { "passed" } else { "failed" },
+                truncate(&smoke.report_path, 96),
+            );
+        }
     }
     println!(
         "  coding smoke: {} runs, {} passed",
@@ -322,6 +339,7 @@ struct ObserverSnapshot {
     latest_transcript_summary: Option<TranscriptSummary>,
     latest_coding_smoke: Option<CodingSmokeRecord>,
     latest_work_loop: Option<WorkLoopRunRecord>,
+    recent_work_loops: Vec<WorkLoopRunRecord>,
 }
 
 impl ObserverSnapshot {
@@ -400,7 +418,8 @@ impl ObserverSnapshot {
         snapshot.latest_coding_smoke = smoke_store.latest()?;
         let work_loop_store = WorkLoopRunStore::new(Arc::clone(&memory.db));
         snapshot.work_loop_count = work_loop_store.count()?;
-        snapshot.latest_work_loop = work_loop_store.latest()?;
+        snapshot.recent_work_loops = work_loop_store.recent(5)?;
+        snapshot.latest_work_loop = snapshot.recent_work_loops.first().cloned();
 
         let repo = repo_root();
         snapshot.git_branch = git_output(&repo, &["branch", "--show-current"])
@@ -547,6 +566,7 @@ impl Default for ObserverSnapshot {
             latest_transcript_summary: None,
             latest_coding_smoke: None,
             latest_work_loop: None,
+            recent_work_loops: Vec::new(),
         }
     }
 }
@@ -642,7 +662,7 @@ fn draw_body(frame: &mut Frame, area: Rect, app: &ObserverApp) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(9),
-            Constraint::Length(10),
+            Constraint::Length(11),
             Constraint::Min(8),
         ])
         .split(columns[0]);
@@ -729,6 +749,7 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &ObserverApp) {
 
 fn draw_activity(frame: &mut Frame, area: Rect, app: &ObserverApp) {
     let lines = vec![
+        latest_work_loop_line(&app.snapshot.latest_work_loop),
         latest_run_line(&app.snapshot.latest_run),
         latest_line("task", &app.snapshot.latest_task),
         latest_line("tool", &app.snapshot.latest_tool),
@@ -809,6 +830,7 @@ fn draw_science(frame: &mut Frame, area: Rect, app: &ObserverApp) {
         ),
     ];
     note_lines.extend(latest_run_detail(&app.snapshot.latest_run));
+    note_lines.extend(latest_work_loop_detail(&app.snapshot.latest_work_loop));
     let note = Paragraph::new(note_lines)
         .style(Style::default().fg(Color::Gray))
         .block(
@@ -982,6 +1004,40 @@ fn latest_run_line(run: &Option<TaskRun>) -> Line<'static> {
     }
 }
 
+fn latest_work_loop_line(run: &Option<WorkLoopRunRecord>) -> Line<'static> {
+    match run {
+        Some(run) => Line::from(vec![
+            Span::styled("operator", label()),
+            Span::raw(" "),
+            Span::styled(
+                if run.failed_cycles == 0 {
+                    "passed  "
+                } else {
+                    "failed  "
+                },
+                status_style(if run.failed_cycles == 0 {
+                    "Complete"
+                } else {
+                    "Failed"
+                }),
+            ),
+            Span::raw(format!(
+                "{}:{} {}/{} gates  {}",
+                run.run_kind,
+                run.profile,
+                run.passed_cycles,
+                run.completed_cycles,
+                truncate(&run.report_path, 52),
+            )),
+        ]),
+        None => Line::from(vec![
+            Span::styled("operator", label()),
+            Span::raw(" "),
+            Span::styled("waiting", Style::default().fg(Color::DarkGray)),
+        ]),
+    }
+}
+
 fn latest_coding_smoke_line(smoke: &Option<CodingSmokeRecord>) -> Line<'static> {
     match smoke {
         Some(smoke) => Line::from(vec![
@@ -1137,6 +1193,51 @@ fn latest_run_detail(run: &Option<TaskRun>) -> Vec<Line<'static>> {
         }
         None => vec![Line::from("No task runs recorded yet.")],
     }
+}
+
+fn latest_work_loop_detail(run: &Option<WorkLoopRunRecord>) -> Vec<Line<'static>> {
+    let Some(run) = run else {
+        return vec![Line::from(
+            "Operator loop: waiting for --operator-run or --supervised-loop.",
+        )];
+    };
+    let mut lines = vec![
+        Line::from(format!(
+            "Operator loop: {}:{} {} / {}/{} passed / {} failed",
+            run.run_kind,
+            run.profile,
+            short_id(&run.run_id),
+            run.passed_cycles,
+            run.completed_cycles,
+            run.failed_cycles,
+        )),
+        Line::from(format!("Operator report: {}", truncate(&run.report_path, 90))),
+    ];
+    for planned in run.planned_jobs.iter().take(3) {
+        lines.push(Line::from(vec![
+            Span::styled(format!("plan {:<2} ", planned.cycle), label()),
+            Span::raw(format!(
+                "{} / {}",
+                planned.kind,
+                truncate(&planned.reason, 80)
+            )),
+        ]));
+    }
+    for smoke in run.smoke_records.iter().take(3) {
+        lines.push(Line::from(vec![
+            Span::styled(format!("gate {:<2} ", smoke.cycle), label()),
+            Span::styled(
+                if smoke.passed { "passed " } else { "failed " },
+                status_style(if smoke.passed { "Complete" } else { "Failed" }),
+            ),
+            Span::raw(format!(
+                "{} / {}",
+                smoke.kind,
+                truncate(&smoke.report_path, 80)
+            )),
+        ]));
+    }
+    lines
 }
 
 fn panel(title: &'static str) -> Block<'static> {
