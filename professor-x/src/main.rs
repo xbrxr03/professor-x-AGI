@@ -91,6 +91,8 @@ struct CliArgs {
     supervised_loop_profile: WorkLoopProfile,
     /// Run N bounded Prof X operator cycles using the core safety profile and exit.
     operator_run_cycles: Option<u32>,
+    /// Run N bounded Prof X operator cycles including one commit-capable gate and exit.
+    operator_run_commit_cycles: Option<u32>,
     /// Run one sandbox-verified autonomous commit smoke and exit.
     operator_commit_smoke: bool,
     /// Run one seeded autonomous evolution cycle and exit.
@@ -101,6 +103,7 @@ struct CliArgs {
 enum WorkLoopProfile {
     Basic,
     Core,
+    Commit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,6 +133,7 @@ impl WorkLoopProfile {
         match raw {
             "basic" => Some(Self::Basic),
             "core" => Some(Self::Core),
+            "commit" => Some(Self::Commit),
             _ => None,
         }
     }
@@ -138,6 +142,7 @@ impl WorkLoopProfile {
         match self {
             Self::Basic => "basic",
             Self::Core => "core",
+            Self::Commit => "commit",
         }
     }
 }
@@ -169,6 +174,7 @@ fn parse_args() -> CliArgs {
         supervised_loop_cycles: None,
         supervised_loop_profile: WorkLoopProfile::Basic,
         operator_run_cycles: None,
+        operator_run_commit_cycles: None,
         operator_commit_smoke: false,
         evolution_cycle: false,
     };
@@ -299,6 +305,14 @@ fn parse_args() -> CliArgs {
                     .filter(|next| !next.starts_with("--"))
                     .and_then(|next| next.parse::<u32>().ok());
                 cli.operator_run_cycles = Some(cycles.unwrap_or(4));
+                i += if cycles.is_some() { 2 } else { 1 };
+            }
+            "--operator-run-commit" => {
+                let cycles = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .and_then(|next| next.parse::<u32>().ok());
+                cli.operator_run_commit_cycles = Some(cycles.unwrap_or(5));
                 i += if cycles.is_some() { 2 } else { 1 };
             }
             "--operator-commit-smoke" => {
@@ -516,6 +530,20 @@ async fn main() -> Result<()> {
             Arc::clone(&transcripts),
             cycles,
             WorkLoopProfile::Core,
+        )
+        .await;
+    }
+
+    if let Some(cycles) = cli.operator_run_commit_cycles {
+        return run_supervised_loop(
+            WorkLoopRunKind::Operator,
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            Arc::clone(&transcripts),
+            cycles,
+            WorkLoopProfile::Commit,
         )
         .await;
     }
@@ -1450,6 +1478,7 @@ enum WorkLoopJob {
     EvolutionSmoke,
     HiroSmoke,
     ProposalDryRun,
+    OperatorCommit,
 }
 
 impl WorkLoopJob {
@@ -1459,6 +1488,7 @@ impl WorkLoopJob {
             Self::EvolutionSmoke => "evolution_smoke",
             Self::HiroSmoke => "hiro_smoke",
             Self::ProposalDryRun => "proposal_dry_run",
+            Self::OperatorCommit => "operator_commit",
         }
     }
 
@@ -1468,6 +1498,7 @@ impl WorkLoopJob {
             Self::EvolutionSmoke => "evolution sandbox smoke",
             Self::HiroSmoke => "HIRO inventory smoke",
             Self::ProposalDryRun => "evolution proposal dry-run",
+            Self::OperatorCommit => "sandbox-verified operator commit",
         }
     }
 }
@@ -1478,6 +1509,7 @@ fn parse_work_loop_job(kind: &str) -> Option<WorkLoopJob> {
         "evolution_smoke" => Some(WorkLoopJob::EvolutionSmoke),
         "hiro_smoke" => Some(WorkLoopJob::HiroSmoke),
         "proposal_dry_run" => Some(WorkLoopJob::ProposalDryRun),
+        "operator_commit" => Some(WorkLoopJob::OperatorCommit),
         _ => None,
     }
 }
@@ -1491,6 +1523,15 @@ fn work_loop_job_for_cycle(profile: WorkLoopProfile, cycle: u32) -> WorkLoopJob 
                 2 => WorkLoopJob::EvolutionSmoke,
                 3 => WorkLoopJob::HiroSmoke,
                 _ => WorkLoopJob::ProposalDryRun,
+            }
+        }
+        WorkLoopProfile::Commit => {
+            match cycle % 5 {
+                1 => WorkLoopJob::CodingSmoke,
+                2 => WorkLoopJob::EvolutionSmoke,
+                3 => WorkLoopJob::HiroSmoke,
+                4 => WorkLoopJob::ProposalDryRun,
+                _ => WorkLoopJob::OperatorCommit,
             }
         }
     }
@@ -1513,6 +1554,21 @@ impl WorkLoopProfile {
             }
             (Self::Core, WorkLoopJob::ProposalDryRun) => {
                 "core profile verifies a concrete proposal record without applying or committing it"
+            }
+            (Self::Commit, WorkLoopJob::CodingSmoke) => {
+                "commit profile starts by proving the local coding-agent edit/test gate still works"
+            }
+            (Self::Commit, WorkLoopJob::EvolutionSmoke) => {
+                "commit profile proves sandbox accept/reject defenses before any commit-capable gate"
+            }
+            (Self::Commit, WorkLoopJob::HiroSmoke) => {
+                "commit profile verifies HIRO inventory before evolution evidence is trusted"
+            }
+            (Self::Commit, WorkLoopJob::ProposalDryRun) => {
+                "commit profile records a proposal dry-run before applying an accepted proposal"
+            }
+            (Self::Commit, WorkLoopJob::OperatorCommit) => {
+                "commit profile applies one sandbox-verified proposal and records the resulting git commit"
             }
             _ => "profile selected this job as the next safety gate",
         }
@@ -1860,6 +1916,24 @@ async fn run_work_loop_job(
                     report.checks.len(),
                     report.diff_bytes,
                     report.applied
+                ),
+            })
+        }
+        WorkLoopJob::OperatorCommit => {
+            let (report, path) = execute_operator_commit_smoke(Arc::clone(&events)).await?;
+            Ok(WorkLoopSmokeRecord {
+                cycle: 0,
+                kind: job.kind().to_string(),
+                smoke_id: None,
+                passed: report.accepted && report.applied && report.commit.is_some(),
+                report_path: path.display().to_string(),
+                transcript_path: None,
+                workspace: report.workspace,
+                detail: format!(
+                    "{} check(s), commit={}, diff_bytes={}",
+                    report.checks.len(),
+                    report.commit.as_deref().unwrap_or("none"),
+                    report.diff_bytes
                 ),
             })
         }
@@ -3530,5 +3604,17 @@ mod tests {
         assert_eq!(plan[1].kind, "evolution_smoke");
         assert_eq!(plan[2].kind, "hiro_smoke");
         assert_eq!(plan[3].kind, "proposal_dry_run");
+    }
+
+    #[test]
+    fn commit_profile_includes_commit_gate_after_safety_gates() {
+        let plan = plan_work_loop_jobs(WorkLoopRunKind::Operator, WorkLoopProfile::Commit, 5, &[]);
+
+        assert_eq!(plan[0].kind, "coding_smoke");
+        assert_eq!(plan[1].kind, "evolution_smoke");
+        assert_eq!(plan[2].kind, "hiro_smoke");
+        assert_eq!(plan[3].kind, "proposal_dry_run");
+        assert_eq!(plan[4].kind, "operator_commit");
+        assert!(plan[4].reason.contains("git commit"));
     }
 }
