@@ -6,9 +6,9 @@
   "target_component": "SkillDefinition(\"px-operator-autocommit-20260527-035402\")",
   "motivation": "smoke verify operator_proposal proposal",
   "accepted": true,
-  "applied": false,
-  "commit": null,
-  "reason": "sandbox verification passed",
+  "applied": true,
+  "commit": "1760023",
+  "reason": "sandbox verification passed and committed 1760023",
   "checks": [
     "reward_hacking_scan",
     "sandbox_worktree",
