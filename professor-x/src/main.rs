@@ -990,6 +990,15 @@ impl WorkLoopJob {
     }
 }
 
+fn parse_work_loop_job(kind: &str) -> Option<WorkLoopJob> {
+    match kind {
+        "coding_smoke" => Some(WorkLoopJob::CodingSmoke),
+        "evolution_smoke" => Some(WorkLoopJob::EvolutionSmoke),
+        "hiro_smoke" => Some(WorkLoopJob::HiroSmoke),
+        _ => None,
+    }
+}
+
 fn work_loop_job_for_cycle(profile: WorkLoopProfile, cycle: u32) -> WorkLoopJob {
     match profile {
         WorkLoopProfile::Basic => WorkLoopJob::CodingSmoke,
@@ -1025,18 +1034,64 @@ impl WorkLoopProfile {
     }
 }
 
-fn plan_work_loop_jobs(profile: WorkLoopProfile, cycles: u32) -> Vec<WorkLoopPlannedJob> {
-    (1..=cycles)
-        .map(|cycle| {
-            let job = work_loop_job_for_cycle(profile, cycle);
-            WorkLoopPlannedJob {
-                cycle,
-                kind: job.kind().to_string(),
-                label: job.label().to_string(),
-                reason: profile.planning_reason(job).to_string(),
-            }
-        })
-        .collect()
+fn planned_job(cycle: u32, job: WorkLoopJob, reason: impl Into<String>) -> WorkLoopPlannedJob {
+    WorkLoopPlannedJob {
+        cycle,
+        kind: job.kind().to_string(),
+        label: job.label().to_string(),
+        reason: reason.into(),
+    }
+}
+
+fn latest_failed_operator_job(recent_runs: &[WorkLoopRunRecord]) -> Option<WorkLoopJob> {
+    let latest = recent_runs
+        .iter()
+        .find(|run| run.run_kind == WorkLoopRunKind::Operator.as_str())?;
+    if latest.failed_cycles == 0 {
+        return None;
+    }
+    latest
+        .smoke_records
+        .iter()
+        .find(|record| !record.passed)
+        .and_then(|record| parse_work_loop_job(&record.kind))
+}
+
+fn plan_work_loop_jobs(
+    run_kind: WorkLoopRunKind,
+    profile: WorkLoopProfile,
+    cycles: u32,
+    recent_runs: &[WorkLoopRunRecord],
+) -> Vec<WorkLoopPlannedJob> {
+    let mut jobs = Vec::new();
+    if run_kind == WorkLoopRunKind::Operator {
+        if let Some(job) = latest_failed_operator_job(recent_runs) {
+            jobs.push(planned_job(
+                1,
+                job,
+                format!(
+                    "retrying {} first because the latest operator run failed that gate",
+                    job.label()
+                ),
+            ));
+        }
+    }
+
+    let mut rotation_cycle = 1;
+    while jobs.len() < cycles as usize {
+        let job = work_loop_job_for_cycle(profile, rotation_cycle);
+        rotation_cycle += 1;
+        if jobs
+            .last()
+            .map(|planned| planned.kind == job.kind())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let cycle = jobs.len() as u32 + 1;
+        jobs.push(planned_job(cycle, job, profile.planning_reason(job)));
+    }
+    jobs
 }
 
 async fn run_supervised_loop(
@@ -1052,7 +1107,8 @@ async fn run_supervised_loop(
     let run_id = uuid::Uuid::new_v4().to_string();
     let started_at = chrono::Utc::now();
     let cycles = cycles.clamp(1, 50);
-    let planned_jobs = plan_work_loop_jobs(profile, cycles);
+    let recent_runs = WorkLoopRunStore::new(Arc::clone(&memory.db)).recent(5)?;
+    let planned_jobs = plan_work_loop_jobs(run_kind, profile, cycles, &recent_runs);
     events.append(
         None,
         None,
@@ -1097,8 +1153,10 @@ async fn run_supervised_loop(
     let mut records = Vec::new();
     let mut failed_cycles = 0u32;
 
-    for cycle in 1..=cycles {
-        let job = work_loop_job_for_cycle(profile, cycle);
+    for planned in &planned_jobs {
+        let cycle = planned.cycle;
+        let job = parse_work_loop_job(&planned.kind)
+            .unwrap_or_else(|| work_loop_job_for_cycle(profile, cycle));
         let before_smoke_id = smoke_store.latest()?.and_then(|record| record.id);
         events.append(
             None,
@@ -1116,6 +1174,7 @@ async fn run_supervised_loop(
                 "cycles": cycles,
                 "job": job.kind(),
                 "profile": profile.as_str(),
+                "reason": planned.reason,
             }),
         )?;
 
@@ -2894,4 +2953,78 @@ fn seed_cognition_base() -> Vec<CognitionItem> {
         .iter()
         .map(|(content, source)| CognitionItem::new(content.to_string(), source.to_string()))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn work_loop_run(
+        run_kind: &str,
+        failed_cycles: u32,
+        smoke_records: Vec<WorkLoopSmokeRecord>,
+    ) -> WorkLoopRunRecord {
+        let now = chrono::Utc::now();
+        WorkLoopRunRecord {
+            id: None,
+            run_id: uuid::Uuid::new_v4().to_string(),
+            run_kind: run_kind.to_string(),
+            profile: "core".to_string(),
+            started_at: now,
+            completed_at: now,
+            requested_cycles: smoke_records.len() as u32,
+            completed_cycles: smoke_records.len() as u32,
+            passed_cycles: smoke_records.iter().filter(|record| record.passed).count() as u32,
+            failed_cycles,
+            report_path: "artifacts/work-loop/test.json".to_string(),
+            planned_jobs: Vec::new(),
+            smoke_records,
+            recorded_at: now,
+        }
+    }
+
+    fn smoke(kind: &str, passed: bool) -> WorkLoopSmokeRecord {
+        WorkLoopSmokeRecord {
+            cycle: 1,
+            kind: kind.to_string(),
+            smoke_id: None,
+            passed,
+            report_path: "artifacts/test.json".to_string(),
+            transcript_path: None,
+            workspace: "/tmp/px".to_string(),
+            detail: "test".to_string(),
+        }
+    }
+
+    #[test]
+    fn operator_plan_retries_latest_failed_gate_first() {
+        let recent = vec![work_loop_run(
+            "operator",
+            1,
+            vec![smoke("coding_smoke", true), smoke("evolution_smoke", false)],
+        )];
+
+        let plan = plan_work_loop_jobs(WorkLoopRunKind::Operator, WorkLoopProfile::Core, 3, &recent);
+
+        assert_eq!(plan[0].kind, "evolution_smoke");
+        assert!(plan[0].reason.contains("latest operator run failed"));
+        assert_eq!(plan[1].kind, "coding_smoke");
+        assert_eq!(plan.len(), 3);
+    }
+
+    #[test]
+    fn supervised_plan_keeps_profile_rotation() {
+        let recent = vec![work_loop_run(
+            "operator",
+            1,
+            vec![smoke("evolution_smoke", false)],
+        )];
+
+        let plan =
+            plan_work_loop_jobs(WorkLoopRunKind::Supervised, WorkLoopProfile::Core, 3, &recent);
+
+        assert_eq!(plan[0].kind, "coding_smoke");
+        assert_eq!(plan[1].kind, "evolution_smoke");
+        assert_eq!(plan[2].kind, "hiro_smoke");
+    }
 }
