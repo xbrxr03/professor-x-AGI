@@ -211,6 +211,7 @@ CREATE TABLE IF NOT EXISTS work_loop_runs (
     passed_cycles INTEGER NOT NULL DEFAULT 0,
     failed_cycles INTEGER NOT NULL DEFAULT 0,
     report_path TEXT NOT NULL,
+    planned_jobs TEXT NOT NULL DEFAULT '[]',
     smoke_records TEXT NOT NULL DEFAULT '[]',
     recorded_at TEXT NOT NULL
 );
@@ -343,6 +344,7 @@ impl MemoryManager {
             &[
                 ("run_kind", "TEXT NOT NULL DEFAULT 'supervised'"),
                 ("profile", "TEXT NOT NULL DEFAULT 'basic'"),
+                ("planned_jobs", "TEXT NOT NULL DEFAULT '[]'"),
             ],
         )?;
         info!("memd: database opened at {}", db_path.display());

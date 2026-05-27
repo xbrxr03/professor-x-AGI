@@ -32,7 +32,9 @@ use memd::coding_smoke::{CodingSmokeRecord, CodingSmokeStore};
 use memd::events::EventStore;
 use memd::task_runs::{TaskRun, TaskRunStore};
 use memd::transcripts::{TranscriptStore, TranscriptSummary};
-use memd::work_loops::{WorkLoopRunRecord, WorkLoopRunStore, WorkLoopSmokeRecord};
+use memd::work_loops::{
+    WorkLoopPlannedJob, WorkLoopRunRecord, WorkLoopRunStore, WorkLoopSmokeRecord,
+};
 use memd::MemoryManager;
 use policyd::{AuditStore, Decision, PermissionScope, PolicyEngine};
 use toolbridge::executor::{Action, Observation};
@@ -959,6 +961,7 @@ struct SupervisedLoopReport {
     passed_cycles: u32,
     failed_cycles: u32,
     profile: String,
+    planned_jobs: Vec<WorkLoopPlannedJob>,
     smoke_records: Vec<WorkLoopSmokeRecord>,
 }
 
@@ -1002,6 +1005,40 @@ fn work_loop_job_for_cycle(profile: WorkLoopProfile, cycle: u32) -> WorkLoopJob 
     }
 }
 
+impl WorkLoopProfile {
+    fn planning_reason(self, job: WorkLoopJob) -> &'static str {
+        match (self, job) {
+            (Self::Basic, WorkLoopJob::CodingSmoke) => {
+                "basic profile starts with the local coding-agent edit/test gate"
+            }
+            (Self::Core, WorkLoopJob::CodingSmoke) => {
+                "core profile verifies local coding-agent edit/test capability before higher-risk gates"
+            }
+            (Self::Core, WorkLoopJob::EvolutionSmoke) => {
+                "core profile verifies sandbox accept/reject and reward-hacking defenses"
+            }
+            (Self::Core, WorkLoopJob::HiroSmoke) => {
+                "core profile verifies HIRO task inventory before benchmark-dependent evolution"
+            }
+            _ => "profile selected this job as the next safety gate",
+        }
+    }
+}
+
+fn plan_work_loop_jobs(profile: WorkLoopProfile, cycles: u32) -> Vec<WorkLoopPlannedJob> {
+    (1..=cycles)
+        .map(|cycle| {
+            let job = work_loop_job_for_cycle(profile, cycle);
+            WorkLoopPlannedJob {
+                cycle,
+                kind: job.kind().to_string(),
+                label: job.label().to_string(),
+                reason: profile.planning_reason(job).to_string(),
+            }
+        })
+        .collect()
+}
+
 async fn run_supervised_loop(
     run_kind: WorkLoopRunKind,
     registry: Arc<std::sync::RwLock<ToolRegistry>>,
@@ -1015,6 +1052,7 @@ async fn run_supervised_loop(
     let run_id = uuid::Uuid::new_v4().to_string();
     let started_at = chrono::Utc::now();
     let cycles = cycles.clamp(1, 50);
+    let planned_jobs = plan_work_loop_jobs(profile, cycles);
     events.append(
         None,
         None,
@@ -1029,8 +1067,31 @@ async fn run_supervised_loop(
             "run_kind": run_kind.as_str(),
             "cycles": cycles,
             "profile": profile.as_str(),
+            "planned_jobs": &planned_jobs,
         }),
     )?;
+    for planned in &planned_jobs {
+        events.append(
+            None,
+            None,
+            "work_loop.job.planned",
+            format!(
+                "{} cycle {}/{} planned: {}",
+                run_kind.label(),
+                planned.cycle,
+                cycles,
+                planned.label
+            ),
+            serde_json::json!({
+                "run_id": run_id,
+                "run_kind": run_kind.as_str(),
+                "profile": profile.as_str(),
+                "cycle": planned.cycle,
+                "job": planned.kind,
+                "reason": planned.reason,
+            }),
+        )?;
+    }
 
     let smoke_store = CodingSmokeStore::new(Arc::clone(&memory.db));
     let mut records = Vec::new();
@@ -1116,6 +1177,7 @@ async fn run_supervised_loop(
         passed_cycles: records.iter().filter(|record| record.passed).count() as u32,
         failed_cycles,
         profile: profile.as_str().to_string(),
+        planned_jobs,
         smoke_records: records,
     };
     let report_path = write_supervised_loop_report(&report)?;
@@ -1133,6 +1195,7 @@ async fn run_supervised_loop(
         passed_cycles: report.passed_cycles,
         failed_cycles: report.failed_cycles,
         report_path: report_path.display().to_string(),
+        planned_jobs: report.planned_jobs.clone(),
         smoke_records: report.smoke_records.clone(),
         recorded_at: chrono::Utc::now(),
     })?;
@@ -1155,6 +1218,7 @@ async fn run_supervised_loop(
             "report_path": report_path,
             "passed_cycles": report.passed_cycles,
             "failed_cycles": report.failed_cycles,
+            "planned_jobs": &report.planned_jobs,
         }),
     )?;
 
@@ -2464,6 +2528,14 @@ fn print_work_loops(memory: Arc<MemoryManager>, limit: usize) -> Result<()> {
             run.failed_cycles,
             run.report_path,
         );
+        for planned in run.planned_jobs.iter().take(8) {
+            println!(
+                "  plan {}: {} reason={}",
+                planned.cycle,
+                planned.kind,
+                truncate(&planned.reason, 100),
+            );
+        }
         for smoke in run.smoke_records.iter().take(8) {
             println!(
                 "  cycle {}: {} smoke={} {} transcript={} detail={}",
