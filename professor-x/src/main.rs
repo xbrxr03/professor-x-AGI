@@ -91,6 +91,8 @@ struct CliArgs {
     supervised_loop_profile: WorkLoopProfile,
     /// Run N bounded Prof X operator cycles using the core safety profile and exit.
     operator_run_cycles: Option<u32>,
+    /// Run one sandbox-verified autonomous commit smoke and exit.
+    operator_commit_smoke: bool,
     /// Run one seeded autonomous evolution cycle and exit.
     evolution_cycle: bool,
 }
@@ -167,6 +169,7 @@ fn parse_args() -> CliArgs {
         supervised_loop_cycles: None,
         supervised_loop_profile: WorkLoopProfile::Basic,
         operator_run_cycles: None,
+        operator_commit_smoke: false,
         evolution_cycle: false,
     };
     let mut i = 1;
@@ -297,6 +300,10 @@ fn parse_args() -> CliArgs {
                     .and_then(|next| next.parse::<u32>().ok());
                 cli.operator_run_cycles = Some(cycles.unwrap_or(4));
                 i += if cycles.is_some() { 2 } else { 1 };
+            }
+            "--operator-commit-smoke" => {
+                cli.operator_commit_smoke = true;
+                i += 1;
             }
             "--evolution-cycle" => {
                 cli.evolution_cycle = true;
@@ -513,6 +520,10 @@ async fn main() -> Result<()> {
         .await;
     }
 
+    if cli.operator_commit_smoke {
+        return run_operator_commit_smoke(Arc::clone(&events)).await;
+    }
+
     // ── evolved: seed cognition base ──────────────────────────────────────
     {
         let cognition = CognitionStore::new(Arc::clone(&memory.db));
@@ -646,12 +657,14 @@ struct EvolutionSmokeReport {
 #[derive(Debug, serde::Serialize)]
 struct EvolutionProposalDryRunReport {
     generated_at: String,
+    mode: String,
     workspace: String,
     harness_commit: String,
     target_component: String,
     motivation: String,
     accepted: bool,
     applied: bool,
+    commit: Option<String>,
     reason: String,
     checks: Vec<String>,
     diff_hash: Option<String>,
@@ -805,11 +818,7 @@ async fn execute_evolution_proposal_dry_run(
     events: Arc<EventStore>,
 ) -> Result<(EvolutionProposalDryRunReport, PathBuf)> {
     let repo_root = default_repo_root();
-    let node = smoke_node(
-        "operator_proposal_dry_run",
-        HarnessComponent::SkillDefinition("px-operator-proposal-dry-run".to_string()),
-        "# px-operator-proposal-dry-run\n\nPurpose: preserve the operator proposal dry-run workflow as a reusable skill.\n\nWorkflow:\n- State the proposed harness change and target component.\n- Verify it in an isolated sandbox before touching the main worktree.\n- Record the checks, diff hash, decision, and rollback path.\n\nOutput Contract:\n- A proposal record with motivation, target component, verification checks, decision, and artifact path.\n",
-    );
+    let node = operator_proposal_node("px-operator-proposal-dry-run");
     events.append(
         None,
         None,
@@ -831,12 +840,14 @@ async fn execute_evolution_proposal_dry_run(
     };
     let report = EvolutionProposalDryRunReport {
         generated_at: chrono::Utc::now().to_rfc3339(),
+        mode: "dry_run".to_string(),
         workspace: "repo-root".to_string(),
         harness_commit: git_head(&repo_root).unwrap_or_else(|_| "unknown".to_string()),
         target_component: format!("{:?}", node.target_component),
         motivation: node.motivation,
         accepted: verification.outcome.accepted,
         applied: false,
+        commit: None,
         reason: verification.outcome.reason,
         checks: verification.outcome.checks,
         diff_hash,
@@ -867,6 +878,161 @@ async fn execute_evolution_proposal_dry_run(
         }),
     )?;
     Ok((report, path))
+}
+
+async fn run_operator_commit_smoke(events: Arc<EventStore>) -> Result<()> {
+    let (report, path) = execute_operator_commit_smoke(events).await?;
+    println!(
+        "Operator commit smoke: {}",
+        if report.accepted && report.applied {
+            "committed"
+        } else {
+            "rejected"
+        }
+    );
+    println!("  report: {}", path.display());
+    println!("  target: {}", report.target_component);
+    println!("  checks: {}", report.checks.join(", "));
+    println!("  reason: {}", report.reason);
+    println!(
+        "  commit: {}",
+        report.commit.as_deref().unwrap_or("none")
+    );
+    if !(report.accepted && report.applied) {
+        anyhow::bail!("operator commit smoke did not commit an accepted proposal");
+    }
+    Ok(())
+}
+
+async fn execute_operator_commit_smoke(
+    events: Arc<EventStore>,
+) -> Result<(EvolutionProposalDryRunReport, PathBuf)> {
+    let repo_root = default_repo_root();
+    if !main_worktree_clean_for_operator_commit(&repo_root)? {
+        anyhow::bail!("main worktree has source/config/skill changes; refusing operator commit");
+    }
+
+    let skill_name = format!(
+        "px-operator-autocommit-{}",
+        chrono::Utc::now().format("%Y%m%d-%H%M%S")
+    );
+    let node = operator_proposal_node(&skill_name);
+    events.append(
+        None,
+        None,
+        "evolution.operator_commit.started",
+        "starting sandbox-verified operator commit smoke",
+        serde_json::json!({
+            "workspace": "repo-root",
+            "harness_commit": git_head(&repo_root).unwrap_or_else(|_| "unknown".to_string()),
+            "target_component": format!("{:?}", node.target_component),
+            "motivation": node.motivation,
+        }),
+    )?;
+
+    let verification = verify_node_in_sandbox(&repo_root, &node).await?;
+    let diff_hash = if verification.diff.is_empty() {
+        None
+    } else {
+        Some(sha256_hex(verification.diff.as_bytes()))
+    };
+    let mut report = EvolutionProposalDryRunReport {
+        generated_at: chrono::Utc::now().to_rfc3339(),
+        mode: "operator_commit_smoke".to_string(),
+        workspace: "repo-root".to_string(),
+        harness_commit: git_head(&repo_root).unwrap_or_else(|_| "unknown".to_string()),
+        target_component: format!("{:?}", node.target_component),
+        motivation: node.motivation.clone(),
+        accepted: verification.outcome.accepted,
+        applied: false,
+        commit: None,
+        reason: verification.outcome.reason.clone(),
+        checks: verification.outcome.checks.clone(),
+        diff_hash,
+        diff_bytes: verification.diff.len(),
+    };
+
+    if !verification.outcome.accepted {
+        let path = write_evolution_proposal_rejection_report(&report)?;
+        events.append(
+            None,
+            None,
+            "evolution.operator_commit.rejected",
+            format!("operator commit proposal rejected; report {}", path.display()),
+            serde_json::json!({
+                "reason": report.reason,
+                "checks": report.checks,
+                "report_path": path,
+            }),
+        )?;
+        return Ok((report, path));
+    }
+
+    let report_path = write_evolution_proposal_acceptance_report(&report)?;
+    let apply_result = apply_verified_diff_to_main(&repo_root, &verification.diff)
+        .and_then(|_| run_main_cargo_check(&repo_root))
+        .and_then(|_| {
+            commit_operator_proposal(
+                &repo_root,
+                &node,
+                &report_path,
+                "evolved: operator accepted verified proposal",
+            )
+        });
+    match apply_result {
+        Ok(commit) => {
+            report.applied = true;
+            report.commit = Some(commit.clone());
+            report.reason = format!("sandbox verification passed and committed {commit}");
+            std::fs::write(&report_path, serde_json::to_string_pretty(&report)?)?;
+            events.append(
+                None,
+                None,
+                "evolution.operator_commit.committed",
+                format!("operator committed verified proposal {commit}"),
+                serde_json::json!({
+                    "commit": commit,
+                    "report_path": report_path,
+                    "target_component": report.target_component,
+                    "checks": report.checks,
+                    "diff_hash": report.diff_hash,
+                    "diff_bytes": report.diff_bytes,
+                }),
+            )?;
+            Ok((report, report_path))
+        }
+        Err(err) => {
+            let rollback = reverse_verified_diff_from_main(&repo_root, &verification.diff);
+            report.reason = format!(
+                "main apply/commit failed: {err}; rollback={}",
+                rollback
+                    .map(|_| "ok".to_string())
+                    .unwrap_or_else(|e| format!("failed: {e}"))
+            );
+            std::fs::write(&report_path, serde_json::to_string_pretty(&report)?)?;
+            events.append(
+                None,
+                None,
+                "evolution.operator_commit.failed",
+                format!("operator commit failed after sandbox verification: {err}"),
+                serde_json::json!({
+                    "error": err.to_string(),
+                    "report_path": report_path,
+                }),
+            )?;
+            Ok((report, report_path))
+        }
+    }
+}
+
+fn operator_proposal_node(skill_name: &str) -> EvolutionNode {
+    smoke_node(
+        "operator_proposal",
+        HarnessComponent::SkillDefinition(skill_name.to_string()),
+        &format!(
+            "# {skill_name}\n\nPurpose: preserve the operator verify-then-commit workflow as a reusable skill.\n\nWorkflow:\n- State the proposed harness change and target component.\n- Verify it in an isolated sandbox before touching the main worktree.\n- Record the checks, diff hash, decision, commit id, and rollback path.\n\nOutput Contract:\n- A proposal record with motivation, target component, verification checks, decision, artifact path, and commit id when applied.\n"
+        ),
+    )
 }
 
 fn execute_hiro_inventory_smoke(
@@ -992,6 +1158,38 @@ fn write_evolution_proposal_dry_run_report(
     Ok(path)
 }
 
+fn write_evolution_proposal_acceptance_report(
+    report: &EvolutionProposalDryRunReport,
+) -> Result<PathBuf> {
+    write_evolution_proposal_report(report, &["evolution", "accepted"], "operator-commit")
+}
+
+fn write_evolution_proposal_rejection_report(
+    report: &EvolutionProposalDryRunReport,
+) -> Result<PathBuf> {
+    write_evolution_proposal_report(report, &["evolution", "rejections"], "operator-reject")
+}
+
+fn write_evolution_proposal_report(
+    report: &EvolutionProposalDryRunReport,
+    subdirs: &[&str],
+    prefix: &str,
+) -> Result<PathBuf> {
+    let mut dir = PathBuf::from("artifacts");
+    for subdir in subdirs {
+        dir = dir.join(subdir);
+    }
+    dir = dir.join(chrono::Utc::now().format("%Y-%m-%d").to_string());
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!(
+        "{}-{}.json",
+        prefix,
+        chrono::Utc::now().format("%H%M%S")
+    ));
+    std::fs::write(&path, serde_json::to_string_pretty(report)?)?;
+    Ok(path)
+}
+
 fn write_hiro_inventory_smoke_report(report: &HiroInventorySmokeReport) -> Result<PathBuf> {
     let dir = PathBuf::from("artifacts")
         .join("hiro")
@@ -1036,6 +1234,147 @@ fn git_head(repo_root: &std::path::Path) -> Result<String> {
         );
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn main_worktree_clean_for_operator_commit(repo_root: &std::path::Path) -> Result<bool> {
+    let output = std::process::Command::new("git")
+        .args([
+            "status",
+            "--porcelain",
+            "--",
+            "professor-x/src",
+            "professor-x/skills",
+            "professor-x/config",
+            "professor-x/personas",
+            "professor-x/Cargo.toml",
+            "professor-x/Cargo.lock",
+        ])
+        .current_dir(repo_root)
+        .output()?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git status failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().is_empty())
+}
+
+fn apply_verified_diff_to_main(repo_root: &std::path::Path, diff: &str) -> Result<()> {
+    if diff.trim().is_empty() {
+        anyhow::bail!("verified diff is empty");
+    }
+    let patch_path =
+        std::env::temp_dir().join(format!("px-operator-apply-{}.diff", uuid::Uuid::new_v4()));
+    std::fs::write(&patch_path, diff)?;
+    let check = std::process::Command::new("git")
+        .args(["apply", "--check"])
+        .arg(&patch_path)
+        .current_dir(repo_root)
+        .output()?;
+    if !check.status.success() {
+        let _ = std::fs::remove_file(&patch_path);
+        anyhow::bail!(
+            "verified diff failed main apply check: {}",
+            String::from_utf8_lossy(&check.stderr)
+        );
+    }
+    let apply = std::process::Command::new("git")
+        .arg("apply")
+        .arg(&patch_path)
+        .current_dir(repo_root)
+        .output()?;
+    let _ = std::fs::remove_file(&patch_path);
+    if !apply.status.success() {
+        anyhow::bail!(
+            "verified diff failed main apply: {}",
+            String::from_utf8_lossy(&apply.stderr)
+        );
+    }
+    Ok(())
+}
+
+fn reverse_verified_diff_from_main(repo_root: &std::path::Path, diff: &str) -> Result<()> {
+    if diff.trim().is_empty() {
+        return Ok(());
+    }
+    let patch_path =
+        std::env::temp_dir().join(format!("px-operator-reverse-{}.diff", uuid::Uuid::new_v4()));
+    std::fs::write(&patch_path, diff)?;
+    let reverse = std::process::Command::new("git")
+        .args(["apply", "-R"])
+        .arg(&patch_path)
+        .current_dir(repo_root)
+        .output()?;
+    let _ = std::fs::remove_file(&patch_path);
+    if !reverse.status.success() {
+        anyhow::bail!(
+            "verified diff rollback failed: {}",
+            String::from_utf8_lossy(&reverse.stderr)
+        );
+    }
+    Ok(())
+}
+
+fn run_main_cargo_check(repo_root: &std::path::Path) -> Result<()> {
+    let output = std::process::Command::new("cargo")
+        .arg("check")
+        .arg("--quiet")
+        .current_dir(repo_root.join("professor-x"))
+        .output()?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "main cargo check failed after applying verified diff: {}",
+            String::from_utf8_lossy(&output.stderr)
+                .lines()
+                .take(8)
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+    }
+    Ok(())
+}
+
+fn commit_operator_proposal(
+    repo_root: &std::path::Path,
+    node: &EvolutionNode,
+    report_path: &std::path::Path,
+    message: &str,
+) -> Result<String> {
+    let skill_path = match &node.target_component {
+        HarnessComponent::SkillDefinition(name) => {
+            PathBuf::from("professor-x").join("skills").join(format!("{name}.md"))
+        }
+        _ => anyhow::bail!("operator commit smoke only supports skill proposals"),
+    };
+    let report_git_path = if report_path.is_absolute() {
+        report_path.strip_prefix(repo_root).unwrap_or(report_path).to_path_buf()
+    } else if report_path.starts_with("artifacts") {
+        PathBuf::from("professor-x").join(report_path)
+    } else {
+        report_path.to_path_buf()
+    };
+    let add = std::process::Command::new("git")
+        .arg("add")
+        .arg("--")
+        .arg(skill_path)
+        .arg(report_git_path)
+        .current_dir(repo_root)
+        .output()?;
+    if !add.status.success() {
+        anyhow::bail!("git add failed: {}", String::from_utf8_lossy(&add.stderr));
+    }
+    let commit = std::process::Command::new("git")
+        .args(["commit", "-m", message])
+        .current_dir(repo_root)
+        .output()?;
+    if !commit.status.success() {
+        anyhow::bail!(
+            "git commit failed: {}",
+            String::from_utf8_lossy(&commit.stderr)
+        );
+    }
+    git_head(repo_root)
 }
 
 #[derive(serde::Serialize)]
