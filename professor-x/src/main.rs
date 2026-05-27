@@ -985,6 +985,11 @@ async fn execute_operator_commit_smoke(
             report.commit = Some(commit.clone());
             report.reason = format!("sandbox verification passed and committed {commit}");
             std::fs::write(&report_path, serde_json::to_string_pretty(&report)?)?;
+            let report_commit = commit_operator_report_update(
+                &repo_root,
+                &report_path,
+                "evolved: record operator commit result",
+            )?;
             events.append(
                 None,
                 None,
@@ -997,6 +1002,7 @@ async fn execute_operator_commit_smoke(
                     "checks": report.checks,
                     "diff_hash": report.diff_hash,
                     "diff_bytes": report.diff_bytes,
+                    "report_commit": report_commit,
                 }),
             )?;
             Ok((report, report_path))
@@ -1371,6 +1377,40 @@ fn commit_operator_proposal(
     if !commit.status.success() {
         anyhow::bail!(
             "git commit failed: {}",
+            String::from_utf8_lossy(&commit.stderr)
+        );
+    }
+    git_head(repo_root)
+}
+
+fn commit_operator_report_update(
+    repo_root: &std::path::Path,
+    report_path: &std::path::Path,
+    message: &str,
+) -> Result<String> {
+    let report_git_path = if report_path.is_absolute() {
+        report_path.strip_prefix(repo_root).unwrap_or(report_path).to_path_buf()
+    } else if report_path.starts_with("artifacts") {
+        PathBuf::from("professor-x").join(report_path)
+    } else {
+        report_path.to_path_buf()
+    };
+    let add = std::process::Command::new("git")
+        .arg("add")
+        .arg("--")
+        .arg(report_git_path)
+        .current_dir(repo_root)
+        .output()?;
+    if !add.status.success() {
+        anyhow::bail!("git add report failed: {}", String::from_utf8_lossy(&add.stderr));
+    }
+    let commit = std::process::Command::new("git")
+        .args(["commit", "-m", message])
+        .current_dir(repo_root)
+        .output()?;
+    if !commit.status.success() {
+        anyhow::bail!(
+            "git report commit failed: {}",
             String::from_utf8_lossy(&commit.stderr)
         );
     }
