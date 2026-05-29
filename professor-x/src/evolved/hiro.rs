@@ -98,6 +98,8 @@ pub struct HiroRunner {
     cancel: CancellationToken,
     /// Shared LCAP policy across all tasks in a round — UCB1 state accumulates per round.
     lcap: Arc<std::sync::Mutex<LcapPolicy>>,
+    /// H1 sweep override. Propagated to each per-task ReactLoop.
+    memory_budget_override: Option<u32>,
 }
 
 impl HiroRunner {
@@ -116,7 +118,16 @@ impl HiroRunner {
             memory,
             cancel,
             lcap: Arc::new(std::sync::Mutex::new(lcap)),
+            memory_budget_override: None,
         }
+    }
+
+    /// H1 sweep: cap every task's context budget at `budget` tokens. Lower
+    /// values force aggressive retrieval pruning. See `brain/hypotheses.md`
+    /// H1 §"Proposed test" for the recommended budget points.
+    pub fn with_memory_budget_override(mut self, budget: u32) -> Self {
+        self.memory_budget_override = Some(budget);
+        self
     }
 
     /// Run the full 60-task benchmark for a given round.
@@ -276,7 +287,7 @@ impl HiroRunner {
         hiro_task: &HiroTask,
         round: u32,
     ) -> Result<(bool, Vec<HiroAttemptResult>)> {
-        let react = ReactLoop::new(
+        let mut react = ReactLoop::new(
             Arc::clone(&self.ollama),
             Arc::clone(&self.registry),
             Arc::clone(&self.policy),
@@ -284,6 +295,9 @@ impl HiroRunner {
             self.cancel.clone(),
         )
         .with_lcap(Arc::clone(&self.lcap), round);
+        if let Some(budget) = self.memory_budget_override {
+            react = react.with_memory_budget_override(budget);
+        }
 
         let mut task = TaskNode::new(hiro_task.description.clone(), TaskType::Research, 50);
         task.max_attempts = 3; // pass@3
