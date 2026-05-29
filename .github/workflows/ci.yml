@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            professor-x/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('professor-x/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+      - name: Check
+        run: cd professor-x && cargo check
+      - name: Test
+        run: cd professor-x && cargo test
