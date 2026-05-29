@@ -97,6 +97,10 @@ struct CliArgs {
     operator_run_cycles: Option<u32>,
     /// Run N bounded Prof X operator cycles including one commit-capable gate and exit.
     operator_run_commit_cycles: Option<u32>,
+    /// Run N bounded autonomous Prof X cycles using the core safety profile and exit.
+    autonomous_run_cycles: Option<u32>,
+    /// Run N bounded autonomous Prof X cycles including one commit-capable gate and exit.
+    autonomous_run_commit_cycles: Option<u32>,
     /// Run one sandbox-verified autonomous commit smoke and exit.
     operator_commit_smoke: bool,
     /// Run one seeded autonomous evolution cycle and exit.
@@ -183,6 +187,8 @@ fn parse_args() -> CliArgs {
         supervised_loop_profile: WorkLoopProfile::Basic,
         operator_run_cycles: None,
         operator_run_commit_cycles: None,
+        autonomous_run_cycles: None,
+        autonomous_run_commit_cycles: None,
         operator_commit_smoke: false,
         evolution_cycle: false,
         validate_artifacts: false,
@@ -326,6 +332,22 @@ fn parse_args() -> CliArgs {
                     .filter(|next| !next.starts_with("--"))
                     .and_then(|next| next.parse::<u32>().ok());
                 cli.operator_run_commit_cycles = Some(cycles.unwrap_or(5));
+                i += if cycles.is_some() { 2 } else { 1 };
+            }
+            "--autonomous-run" | "--prof-x-run" => {
+                let cycles = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .and_then(|next| next.parse::<u32>().ok());
+                cli.autonomous_run_cycles = Some(cycles.unwrap_or(4));
+                i += if cycles.is_some() { 2 } else { 1 };
+            }
+            "--autonomous-run-commit" | "--prof-x-run-commit" => {
+                let cycles = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .and_then(|next| next.parse::<u32>().ok());
+                cli.autonomous_run_commit_cycles = Some(cycles.unwrap_or(5));
                 i += if cycles.is_some() { 2 } else { 1 };
             }
             "--operator-commit-smoke" => {
@@ -564,6 +586,32 @@ async fn main() -> Result<()> {
     if let Some(cycles) = cli.operator_run_commit_cycles {
         return run_supervised_loop(
             WorkLoopRunKind::Operator,
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            Arc::clone(&transcripts),
+            cycles,
+            WorkLoopProfile::Commit,
+        )
+        .await;
+    }
+
+    if let Some(cycles) = cli.autonomous_run_cycles {
+        return run_autonomous_operator_run(
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            Arc::clone(&transcripts),
+            cycles,
+            WorkLoopProfile::Core,
+        )
+        .await;
+    }
+
+    if let Some(cycles) = cli.autonomous_run_commit_cycles {
+        return run_autonomous_operator_run(
             Arc::clone(&registry),
             Arc::clone(&policy),
             Arc::clone(&memory),
@@ -1664,6 +1712,54 @@ fn plan_work_loop_jobs(
         jobs.push(planned_job(cycle, job, profile.planning_reason(job)));
     }
     jobs
+}
+
+async fn run_autonomous_operator_run(
+    registry: Arc<std::sync::RwLock<ToolRegistry>>,
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    transcripts: Arc<TranscriptStore>,
+    cycles: u32,
+    profile: WorkLoopProfile,
+) -> Result<()> {
+    let cycles = cycles.clamp(1, 50);
+    let commit_capable = profile == WorkLoopProfile::Commit;
+    events.append(
+        None,
+        None,
+        "autonomous_run.requested",
+        format!(
+            "autonomous Prof X run requested with {} profile and {cycles} cycle(s)",
+            profile.as_str()
+        ),
+        serde_json::json!({
+            "cycles": cycles,
+            "profile": profile.as_str(),
+            "commit_capable": commit_capable,
+            "observer_command": "cargo run -- --observe",
+            "work_feed_command": "cargo run -- --watch-work",
+        }),
+    )?;
+
+    println!("Professor X autonomous run");
+    println!("  profile: {}", profile.as_str());
+    println!("  cycles: {cycles}");
+    println!("  commit-capable: {commit_capable}");
+    println!("  observer: cargo run -- --observe");
+    println!("  work feed: cargo run -- --watch-work");
+
+    run_supervised_loop(
+        WorkLoopRunKind::Operator,
+        registry,
+        policy,
+        memory,
+        events,
+        transcripts,
+        cycles,
+        profile,
+    )
+    .await
 }
 
 async fn run_supervised_loop(
