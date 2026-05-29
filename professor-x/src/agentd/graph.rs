@@ -61,6 +61,12 @@ pub struct TaskNode {
     pub completed_at: Option<DateTime<Utc>>,
     /// 0.0–1.0, set by evolved on completion.
     pub outcome_score: Option<f32>,
+    /// Phase B truth gate: if Some, the artifact validator must find an
+    /// artifact of this kind for the task. Stored as a string to avoid a
+    /// module cycle with `artifacts::ArtifactKind`; parsed lazily by the
+    /// validator. Unrecognized values fail the task with a clear error.
+    #[serde(default)]
+    pub expected_artifact_kind: Option<String>,
 }
 
 impl TaskNode {
@@ -81,7 +87,15 @@ impl TaskNode {
             started_at: None,
             completed_at: None,
             outcome_score: None,
+            expected_artifact_kind: None,
         }
+    }
+
+    /// Declare what artifact kind this task should produce. Validated by
+    /// `ArtifactValidator::validate_task` after the React loop returns.
+    pub fn with_expected_artifact_kind(mut self, kind: impl Into<String>) -> Self {
+        self.expected_artifact_kind = Some(kind.into());
+        self
     }
 
     pub fn push_reflection(&mut self, reflection: String) {

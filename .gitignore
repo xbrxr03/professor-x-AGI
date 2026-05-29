@@ -13,3 +13,9 @@ _refs/
 
 # OS noise
 .DS_Store
+
+# Nested professor-x/brain/ is reserved as runtime scratch only.
+# Canonical research docs live at repo-root brain/.
+# See professor-x/brain/STUB.md.
+professor-x/brain/*
+!professor-x/brain/STUB.md

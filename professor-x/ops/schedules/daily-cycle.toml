@@ -1,17 +1,26 @@
 # Ordered local-first daily cycle. Times are relative offsets used by dry-run
 # and future scheduler expansion; network-dependent jobs must degrade cleanly.
+#
+# `expected_artifact_kind` is the Phase B truth gate. If set, the artifact
+# validator must find a matching file in the kind's `allowed_root()` after the
+# task runs. Recognized values: daily_update, literature_note,
+# experiment_result, hiro_run, hiro_null_baseline, evolution_proposal,
+# evolution_rejection. Leave unset for jobs that produce intermediate state
+# rather than a standalone artifact.
 
 [[jobs]]
 id = "daily-update-morning"
 skill = "px-daily-update"
 offset_minutes = 0
 network_required = false
+expected_artifact_kind = "daily_update"
 
 [[jobs]]
 id = "literature-search"
 skill = "px-literature-search"
 offset_minutes = 15
 network_required = false
+expected_artifact_kind = "literature_note"
 
 [[jobs]]
 id = "synthesis"
@@ -30,6 +39,7 @@ id = "experiment-runner"
 skill = "px-experiment-runner"
 offset_minutes = 240
 network_required = false
+expected_artifact_kind = "experiment_result"
 
 [[jobs]]
 id = "self-review"
@@ -42,3 +52,4 @@ id = "daily-update-evening"
 skill = "px-daily-update"
 offset_minutes = 405
 network_required = false
+expected_artifact_kind = "daily_update"

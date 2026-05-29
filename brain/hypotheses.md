@@ -9,15 +9,17 @@ Format: Statement → Evidence → Test → Success Criteria → Status
 
 ## H1 — Memory Injection Threshold
 
-**Statement:** For qwen2.5:14b-q4 on RTX 3060 12GB, there exists a context token threshold T* in [6,000 – 10,000] tokens above which injecting additional retrieved memory *hurts* task performance relative to injecting nothing.
+**Statement:** For qwen3:8b-q4_k_m on RTX 3060 12GB, there exists a context token threshold T* in [8,000 – 14,000] tokens above which injecting additional retrieved memory *hurts* task performance relative to injecting nothing.
 
 **Why this matters:** If confirmed, every agent memory architecture paper that recommends "retrieve more to improve performance" is wrong for quantized consumer hardware. The implication is that memory compression and selectivity are not nice-to-haves — they are required.
 
 **Evidence (prior to testing):**
 - [Lost in the Middle (arXiv:2307.03172)](https://arxiv.org/abs/2307.03172): U-shaped performance curve in 13B models. Middle-injected content can drop accuracy *below* the zero-retrieval baseline (56.1%).
 - [Context Window Utilization (arXiv:2407.19794)](https://arxiv.org/abs/2407.19794): Optimal RAG utilization is 40–70% of context window. No improvement beyond 10 chunks.
-- [Quantization × Context (arXiv:2505.20276)](https://arxiv.org/abs/2505.20276): Q4 quantization compounds context degradation faster than FP16. Professor X's specific model class (14B Q4) degrades at lower context lengths than the base papers tested.
-- VRAM analysis: At Q4_K_M on 12GB, 14B model weights consume ~8.5–9GB, leaving ~3GB for KV cache. At 16K context, throughput drops 5–15×. Conservative practical limit: 8K–16K tokens before throughput collapse.
+- [Quantization × Context (arXiv:2505.20276)](https://arxiv.org/abs/2505.20276): Q4 quantization compounds context degradation faster than FP16. Professor X's specific model class (8B Q4_K_M) degrades at lower context lengths than the base papers tested.
+- VRAM analysis: At Q4_K_M on 12GB, qwen3:8b weights consume ~5.2GB, leaving ~6.8GB for KV cache. Throughput holds 42 tok/s up to ~16K ctx; degrades sharply past 24K. Conservative practical limit: 12K–24K tokens before throughput collapse. The wider headroom vs. the originally-planned 14B class pushes the predicted T* window up from [6K, 10K] to [8K, 14K].
+
+**Note on model migration:** Original H1 priors were calculated for qwen2.5:14b-q4. The project switched to qwen3:8b-q4_k_m (see README, persona). Priors recomputed 2026-05-28; predicted T* window widened to account for KV-cache headroom.
 
 **Proposed test:**
 Run 30 fixed tasks (from the HIRO task suite) across 8 context injection levels: 0, 500, 1000, 2000, 4000, 6000, 10000, 16000 tokens of retrieved memory. Measure pass@3 at each level. Plot curve. Identify inflection point T*.
@@ -143,12 +145,12 @@ Run Professor X for 14 days with full logging. After day 7, apply nightly compre
 
 ## H7 — Self-Distilled Principles Outperform Manual Prompting
 
-**Statement:** For recurring task types, strategic principles distilled by qwen2.5:14b-q4 from its own failure trajectories will outperform hand-written system prompt guidance on the same tasks by at least 5 percentage points in pass@3.
+**Statement:** For recurring task types, strategic principles distilled by qwen3:8b-q4_k_m from its own failure trajectories will outperform hand-written system prompt guidance on the same tasks by at least 5 percentage points in pass@3.
 
 **Why this matters:** If true, it means the agent should *write its own instructions* rather than have a human write them. This has direct implications for how people should operate agents: stop hand-crafting system prompts; let the agent distill its own experience.
 
 **Evidence (prior to testing):**
-- [EvolveR (arXiv:2510.16079)](https://arxiv.org/abs/2510.16079): "cognitive alignment" — at 3B+ parameter scale, self-distilled principles outperform teacher-distilled ones. qwen2.5:14b-q4 is well above this threshold.
+- [EvolveR (arXiv:2510.16079)](https://arxiv.org/abs/2510.16079): "cognitive alignment" — at 3B+ parameter scale, self-distilled principles outperform teacher-distilled ones. qwen3:8b-q4_k_m is well above this threshold.
 - [GEPA (arXiv:2507.19457)](https://arxiv.org/abs/2507.19457): reflective prompt evolution outperforms RL for agent improvement.
 - Reflexion (arXiv:2303.11366): verbal self-reflection improves next-attempt performance in bounded trials.
 
@@ -190,7 +192,7 @@ This is measured automatically during HIRO. After 10+ rounds, compute the mean n
 
 ## H9 — Consumer Hardware HIRO Parity with Frontier APIs
 
-**Statement:** Professor X running qwen2.5:14b-q4 on RTX 3060 12GB will achieve a HIRO(20) score within 0.03 of the same harness running against a frontier API (GPT-4o or Claude Sonnet), demonstrating that the harness, not the model, dominates HIRO.
+**Statement:** Professor X running qwen3:8b-q4_k_m on RTX 3060 12GB will achieve a HIRO(20) score within 0.03 of the same harness running against a frontier API (GPT-4o or Claude Sonnet), demonstrating that the harness, not the model, dominates HIRO.
 
 **Why this matters:** This is the consumer hardware claim. If confirmed, it means the hardware gap between a $400 GPU and a frontier API subscription is closeable through harness engineering. That is a direct challenge to the assumption that better AI requires more compute.
 
@@ -200,7 +202,7 @@ This is measured automatically during HIRO. After 10+ rounds, compute the mean n
 - [Agent Psychometrics (arXiv:2604.00594)](https://arxiv.org/abs/2604.00594): IRT decomposition suggests scaffold "ability" is a real, separable quantity from model ability.
 
 **Proposed test:**
-Run HIRO(20) twice: (a) Professor X on RTX 3060 with qwen2.5:14b-q4, (b) same Professor X harness with model endpoint swapped to Claude Sonnet or GPT-4o API. Same task set, same evolution budget, same starting harness. Compare HIRO(20) scores.
+Run HIRO(20) twice: (a) Professor X on RTX 3060 with qwen3:8b-q4_k_m, (b) same Professor X harness with model endpoint swapped to Claude Sonnet or GPT-4o API. Same task set, same evolution budget, same starting harness. Compare HIRO(20) scores.
 
 **Success criteria:** |HIRO_local - HIRO_frontier| < 0.03. If the harness dominates, the scores should be close.
 

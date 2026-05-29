@@ -12,19 +12,23 @@
 /// Tasks are loaded from hiro/tasks.json relative to the binary's working directory,
 /// or from HIRO_TASKS_PATH env var.
 use anyhow::{bail, Result};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use rusqlite::params;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
+use std::io::Write;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{info, warn};
+use uuid::Uuid;
 
 use crate::agentd::graph::{TaskNode, TaskType};
 use crate::agentd::react::ReactLoop;
 use crate::evolved::bf::BfTracker;
 use crate::evolved::lcap::LcapPolicy;
+use crate::memd::events::EventStore;
 use crate::memd::MemoryManager;
 use crate::ollama::OllamaClient;
 use crate::policyd::PolicyEngine;
@@ -88,6 +92,63 @@ pub struct HiroTaskInventory {
     pub duplicate_ids: Vec<String>,
 }
 
+/// JSON shape written under `artifacts/hiro/attempts/<run_id>/r<round>/<task_id>.json`.
+/// Mirrors the `hiro_attempts` SQLite row plus run_id / harness_commit for
+/// auditability.
+#[derive(Debug, Serialize)]
+struct HiroAttemptArtifact {
+    run_id: String,
+    round: u32,
+    task_id: String,
+    category: String,
+    attempt: u8,
+    passed: bool,
+    failure_reason: Option<String>,
+    output_hash: String,
+    duration_ms: u64,
+    harness_commit: String,
+    recorded_at: DateTime<Utc>,
+}
+
+/// JSON shape written under `artifacts/hiro/rounds/<run_id>-r<round>.json`.
+/// Required fields match `ArtifactKind::HiroRun`.
+#[derive(Debug, Serialize)]
+struct HiroRoundArtifact {
+    run_id: String,
+    round: u32,
+    harness_commit: String,
+    p_tool: f32,
+    p_plan: f32,
+    p_correct: f32,
+    pass_at_3: f32,
+    task_count: usize,
+    successes: usize,
+    frozen_harness: bool,
+    component_modified: Option<String>,
+    recorded_at: DateTime<Utc>,
+}
+
+/// JSON shape written under `artifacts/hiro/null-baselines/<run_id>.json`.
+/// Required fields match `ArtifactKind::HiroNullBaseline`.
+#[derive(Debug, Serialize, Deserialize)]
+struct NullBaselineArtifact {
+    run_id: String,
+    harness_commit: String,
+    frozen_harness: bool,
+    rounds: Vec<NullBaselineRound>,
+    recorded_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct NullBaselineRound {
+    round: u32,
+    p_tool: f32,
+    p_plan: f32,
+    p_correct: f32,
+    pass_at_3: f32,
+    recorded_at: DateTime<Utc>,
+}
+
 // ── Runner ────────────────────────────────────────────────────────────────────
 
 pub struct HiroRunner {
@@ -98,6 +159,20 @@ pub struct HiroRunner {
     cancel: CancellationToken,
     /// Shared LCAP policy across all tasks in a round — UCB1 state accumulates per round.
     lcap: Arc<std::sync::Mutex<LcapPolicy>>,
+    /// Stable identifier for this benchmark session. All rounds run by this
+    /// runner share the same run_id. Generated at construction; published in
+    /// every artifact and event so downstream tools can correlate.
+    run_id: String,
+    /// Optional event sink; when set, the runner publishes `hiro.*` events.
+    events: Option<Arc<EventStore>>,
+    /// Root directory for JSON artifact mirroring. Defaults to
+    /// `artifacts/hiro`. Per-attempt JSONs land in `<root>/attempts/<run_id>/r<round>/`,
+    /// per-round summaries in `<root>/rounds/`, null-baseline summaries in
+    /// `<root>/null-baselines/`.
+    artifact_root: PathBuf,
+    /// When true, round summaries also write to `null-baselines/`. Set this
+    /// for `--hiro-null` invocations so the operator audit can find them.
+    frozen_harness: bool,
 }
 
 impl HiroRunner {
@@ -116,7 +191,30 @@ impl HiroRunner {
             memory,
             cancel,
             lcap: Arc::new(std::sync::Mutex::new(lcap)),
+            run_id: Uuid::new_v4().to_string(),
+            events: None,
+            artifact_root: PathBuf::from("artifacts/hiro"),
+            frozen_harness: false,
         }
+    }
+
+    pub fn with_events(mut self, events: Arc<EventStore>) -> Self {
+        self.events = Some(events);
+        self
+    }
+
+    pub fn with_artifact_root(mut self, root: PathBuf) -> Self {
+        self.artifact_root = root;
+        self
+    }
+
+    pub fn as_null_baseline(mut self) -> Self {
+        self.frozen_harness = true;
+        self
+    }
+
+    pub fn run_id(&self) -> &str {
+        &self.run_id
     }
 
     /// Run the full 60-task benchmark for a given round.
@@ -149,6 +247,25 @@ impl HiroRunner {
             "unknown".to_string()
         });
         info!("hiro: starting round {} with {} tasks", round, tasks.len());
+        if let Some(events) = &self.events {
+            let _ = events.append(
+                None,
+                None,
+                "hiro.round.started",
+                format!(
+                    "starting HIRO round {} (run_id={}, harness_commit={})",
+                    round, self.run_id, harness_commit
+                ),
+                serde_json::json!({
+                    "run_id": self.run_id,
+                    "round": round,
+                    "task_count": tasks.len(),
+                    "harness_commit": harness_commit,
+                    "frozen_harness": self.frozen_harness,
+                    "component_modified": component_modified,
+                }),
+            );
+        }
 
         let mut tool_pass = 0u32;
         let mut tool_total = 0u32;
@@ -260,7 +377,7 @@ impl HiroRunner {
             }
         }
 
-        Ok(HiroRoundResult {
+        let result = HiroRoundResult {
             round,
             p_tool,
             p_plan,
@@ -268,7 +385,120 @@ impl HiroRunner {
             pass_at_3,
             task_count: total_tasks as usize,
             successes: total_pass as usize,
-        })
+        };
+
+        // Phase B: mirror round summary to disk so the artifact validator
+        // and operator audits can find it without querying SQLite.
+        match self.write_round_artifact(&result, &harness_commit, component_modified) {
+            Ok(path) => {
+                if let Some(events) = &self.events {
+                    let _ = events.append(
+                        None,
+                        None,
+                        "hiro.round.completed",
+                        format!(
+                            "HIRO round {} complete — pass@3={:.3} (run_id={})",
+                            round, pass_at_3, self.run_id
+                        ),
+                        serde_json::json!({
+                            "run_id": self.run_id,
+                            "round": round,
+                            "p_tool": p_tool,
+                            "p_plan": p_plan,
+                            "p_correct": p_correct,
+                            "pass_at_3": pass_at_3,
+                            "harness_commit": harness_commit,
+                            "frozen_harness": self.frozen_harness,
+                            "artifact_path": path.to_string_lossy(),
+                        }),
+                    );
+                }
+            }
+            Err(e) => warn!("hiro: failed to write round artifact: {e}"),
+        }
+
+        if self.frozen_harness {
+            if let Err(e) = self.append_null_baseline_summary(&result, &harness_commit) {
+                warn!("hiro: failed to write null-baseline summary: {e}");
+            }
+        }
+
+        Ok(result)
+    }
+
+    fn write_round_artifact(
+        &self,
+        result: &HiroRoundResult,
+        harness_commit: &str,
+        component_modified: Option<&str>,
+    ) -> Result<PathBuf> {
+        let dir = self.artifact_root.join("rounds");
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join(format!("{}-r{}.json", self.run_id, result.round));
+        let record = HiroRoundArtifact {
+            run_id: self.run_id.clone(),
+            round: result.round,
+            harness_commit: harness_commit.to_string(),
+            p_tool: result.p_tool,
+            p_plan: result.p_plan,
+            p_correct: result.p_correct,
+            pass_at_3: result.pass_at_3,
+            task_count: result.task_count,
+            successes: result.successes,
+            frozen_harness: self.frozen_harness,
+            component_modified: component_modified.map(|s| s.to_string()),
+            recorded_at: Utc::now(),
+        };
+        let json = serde_json::to_string_pretty(&record)?;
+        let mut file = std::fs::File::create(&path)?;
+        writeln!(file, "{json}")?;
+        Ok(path)
+    }
+
+    /// Append-write a null-baseline summary that the operator runbook
+    /// inspects before crediting any autonomous change. The summary file is
+    /// per-run (one file covering all rounds of this runner) so multiple
+    /// rounds of a single `--hiro-null` invocation accumulate into one
+    /// artifact. Required-fields schema mirrors `ArtifactKind::HiroNullBaseline`.
+    fn append_null_baseline_summary(
+        &self,
+        latest: &HiroRoundResult,
+        harness_commit: &str,
+    ) -> Result<()> {
+        let dir = self.artifact_root.join("null-baselines");
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join(format!("{}.json", self.run_id));
+        let mut existing: NullBaselineArtifact = if path.exists() {
+            let raw = std::fs::read_to_string(&path)?;
+            serde_json::from_str(&raw).unwrap_or_else(|_| NullBaselineArtifact {
+                run_id: self.run_id.clone(),
+                harness_commit: harness_commit.to_string(),
+                frozen_harness: true,
+                rounds: Vec::new(),
+                recorded_at: Utc::now(),
+            })
+        } else {
+            NullBaselineArtifact {
+                run_id: self.run_id.clone(),
+                harness_commit: harness_commit.to_string(),
+                frozen_harness: true,
+                rounds: Vec::new(),
+                recorded_at: Utc::now(),
+            }
+        };
+        existing.rounds.push(NullBaselineRound {
+            round: latest.round,
+            p_tool: latest.p_tool,
+            p_plan: latest.p_plan,
+            p_correct: latest.p_correct,
+            pass_at_3: latest.pass_at_3,
+            recorded_at: Utc::now(),
+        });
+        existing.recorded_at = Utc::now();
+        let json = serde_json::to_string_pretty(&existing)?;
+        let mut file = std::fs::File::create(&path)?;
+        writeln!(file, "{json}")?;
+        Ok(())
     }
 
     async fn run_task(
@@ -307,26 +537,95 @@ impl HiroRunner {
         harness_commit: &str,
         attempts: &[HiroAttemptResult],
     ) -> Result<()> {
-        let db = self.memory.db.lock().unwrap();
+        {
+            let db = self.memory.db.lock().unwrap();
+            for attempt in attempts {
+                db.execute(
+                    "INSERT OR REPLACE INTO hiro_attempts
+                     (round, harness_commit, task_id, category, attempt, passed,
+                      failure_reason, output_hash, duration_ms, recorded_at)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                    params![
+                        round,
+                        harness_commit,
+                        attempt.task_id.as_str(),
+                        hiro_category_name(&attempt.category),
+                        attempt.attempt as i64,
+                        attempt.passed as i64,
+                        attempt.failure_reason.as_deref(),
+                        attempt.output_hash.as_str(),
+                        attempt.duration_ms as i64,
+                        Utc::now().to_rfc3339(),
+                    ],
+                )?;
+            }
+        } // drop the lock before any FS work
+
+        // Phase B: mirror per-attempt JSON next to the SQLite row. Failures
+        // here only warn — they must not abort the benchmark.
         for attempt in attempts {
-            db.execute(
-                "INSERT OR REPLACE INTO hiro_attempts
-                 (round, harness_commit, task_id, category, attempt, passed,
-                  failure_reason, output_hash, duration_ms, recorded_at)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
-                params![
+            if let Err(e) = self.write_attempt_artifact(round, harness_commit, attempt) {
+                warn!(
+                    "hiro: failed to write attempt artifact for {} (round {}, attempt {}): {e}",
+                    attempt.task_id, round, attempt.attempt
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn write_attempt_artifact(
+        &self,
+        round: u32,
+        harness_commit: &str,
+        attempt: &HiroAttemptResult,
+    ) -> Result<()> {
+        let dir = self
+            .artifact_root
+            .join("attempts")
+            .join(&self.run_id)
+            .join(format!("r{round}"));
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join(format!("{}-a{}.json", attempt.task_id, attempt.attempt));
+        let record = HiroAttemptArtifact {
+            run_id: self.run_id.clone(),
+            round,
+            task_id: attempt.task_id.clone(),
+            category: hiro_category_name(&attempt.category).to_string(),
+            attempt: attempt.attempt,
+            passed: attempt.passed,
+            failure_reason: attempt.failure_reason.clone(),
+            output_hash: attempt.output_hash.clone(),
+            duration_ms: attempt.duration_ms,
+            harness_commit: harness_commit.to_string(),
+            recorded_at: Utc::now(),
+        };
+        let json = serde_json::to_string_pretty(&record)?;
+        let mut file = std::fs::File::create(&path)?;
+        writeln!(file, "{json}")?;
+        if let Some(events) = &self.events {
+            let _ = events.append(
+                None,
+                None,
+                "hiro.attempt.completed",
+                format!(
+                    "HIRO attempt {} for task {} (round {}): {}",
+                    attempt.attempt,
+                    attempt.task_id,
                     round,
-                    harness_commit,
-                    attempt.task_id.as_str(),
-                    hiro_category_name(&attempt.category),
-                    attempt.attempt as i64,
-                    attempt.passed as i64,
-                    attempt.failure_reason.as_deref(),
-                    attempt.output_hash.as_str(),
-                    attempt.duration_ms as i64,
-                    Utc::now().to_rfc3339(),
-                ],
-            )?;
+                    if attempt.passed { "PASS" } else { "FAIL" }
+                ),
+                serde_json::json!({
+                    "run_id": self.run_id,
+                    "round": round,
+                    "task_id": attempt.task_id,
+                    "category": hiro_category_name(&attempt.category),
+                    "attempt": attempt.attempt,
+                    "passed": attempt.passed,
+                    "duration_ms": attempt.duration_ms,
+                    "artifact_path": path.to_string_lossy(),
+                }),
+            );
         }
         Ok(())
     }
@@ -712,5 +1011,108 @@ mod tests {
         let evaluation = evaluate_task(&task, &node, true);
 
         assert!(evaluation.passed);
+    }
+
+    // ── Phase B persistence shape ─────────────────────────────────────────
+
+    /// Guard: the JSON shape `write_round_artifact` writes must satisfy the
+    /// `ArtifactKind::HiroRun` schema in artifacts.rs. If a future refactor
+    /// renames a field on `HiroRoundArtifact`, this test breaks before the
+    /// `--validate-artifacts` scanner does.
+    #[test]
+    fn round_artifact_carries_all_hiro_run_required_fields() {
+        let art = HiroRoundArtifact {
+            run_id: "test-run".to_string(),
+            round: 0,
+            harness_commit: "abcdef0".to_string(),
+            p_tool: 0.50,
+            p_plan: 0.40,
+            p_correct: 0.30,
+            pass_at_3: 0.40,
+            task_count: 60,
+            successes: 24,
+            frozen_harness: true,
+            component_modified: None,
+            recorded_at: Utc::now(),
+        };
+        let json = serde_json::to_value(&art).unwrap();
+        for required in [
+            "run_id",
+            "round",
+            "harness_commit",
+            "p_tool",
+            "p_plan",
+            "p_correct",
+            "pass_at_3",
+            "recorded_at",
+        ] {
+            assert!(
+                json.get(required).is_some(),
+                "round artifact JSON missing required field '{}': {:?}",
+                required,
+                json
+            );
+        }
+    }
+
+    /// Guard: `NullBaselineArtifact` JSON shape must satisfy
+    /// `ArtifactKind::HiroNullBaseline` required fields.
+    #[test]
+    fn null_baseline_artifact_carries_all_required_fields() {
+        let art = NullBaselineArtifact {
+            run_id: "nb-run".to_string(),
+            harness_commit: "abcdef0".to_string(),
+            frozen_harness: true,
+            rounds: vec![NullBaselineRound {
+                round: 0,
+                p_tool: 0.5,
+                p_plan: 0.4,
+                p_correct: 0.3,
+                pass_at_3: 0.4,
+                recorded_at: Utc::now(),
+            }],
+            recorded_at: Utc::now(),
+        };
+        let json = serde_json::to_value(&art).unwrap();
+        for required in [
+            "run_id",
+            "harness_commit",
+            "rounds",
+            "frozen_harness",
+            "recorded_at",
+        ] {
+            assert!(
+                json.get(required).is_some(),
+                "null-baseline JSON missing required field '{}': {:?}",
+                required,
+                json
+            );
+        }
+        let rounds = json.get("rounds").and_then(|v| v.as_array()).unwrap();
+        assert!(!rounds.is_empty(), "rounds field must be non-empty array");
+    }
+
+    /// Guard: round and null-baseline run_ids are namespaced UUIDs (not
+    /// colliding with paths that contain `/`). Catches a future refactor
+    /// that swaps to a derived id.
+    #[test]
+    fn run_id_is_uuid_shape() {
+        let art = HiroRoundArtifact {
+            run_id: Uuid::new_v4().to_string(),
+            round: 0,
+            harness_commit: "x".to_string(),
+            p_tool: 0.0,
+            p_plan: 0.0,
+            p_correct: 0.0,
+            pass_at_3: 0.0,
+            task_count: 0,
+            successes: 0,
+            frozen_harness: false,
+            component_modified: None,
+            recorded_at: Utc::now(),
+        };
+        assert!(!art.run_id.contains('/'));
+        assert!(!art.run_id.contains('\\'));
+        assert!(art.run_id.len() >= 32);
     }
 }

@@ -42,6 +42,10 @@ pub struct CronJob {
     pub last_run_at: Option<DateTime<Utc>>,
     pub last_status: Option<String>,
     pub created_at: DateTime<Utc>,
+    /// Phase B truth gate — string form of `artifacts::ArtifactKind`. None
+    /// for jobs that do not produce a validated artifact.
+    #[serde(default)]
+    pub expected_artifact_kind: Option<String>,
 }
 
 pub struct CronScheduler {
@@ -58,8 +62,9 @@ impl CronScheduler {
         db.execute(
             "INSERT OR REPLACE INTO cron_jobs
              (id, name, prompt, schedule_type, schedule_value, next_run_at, enabled,
-              state, repeat_limit, repeat_completed, last_run_at, last_status, created_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+              state, repeat_limit, repeat_completed, last_run_at, last_status, created_at,
+              expected_artifact_kind)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
             params![
                 job.id,
                 job.name,
@@ -74,6 +79,7 @@ impl CronScheduler {
                 job.last_run_at.map(|t| t.to_rfc3339()),
                 job.last_status.clone(),
                 job.created_at.to_rfc3339(),
+                job.expected_artifact_kind.clone(),
             ],
         )?;
         Ok(())
@@ -120,7 +126,8 @@ impl CronScheduler {
         let now_str = now.to_rfc3339();
         let mut stmt = db.prepare(
             "SELECT id, name, prompt, schedule_type, schedule_value, next_run_at, enabled,
-                    state, repeat_limit, repeat_completed, last_run_at, last_status, created_at
+                    state, repeat_limit, repeat_completed, last_run_at, last_status, created_at,
+                    expected_artifact_kind
              FROM cron_jobs
              WHERE enabled = 1 AND state = 'Scheduled' AND next_run_at <= ?1",
         )?;
@@ -211,5 +218,6 @@ fn parse_job(row: &rusqlite::Row) -> rusqlite::Result<CronJob> {
         created_at: DateTime::parse_from_rfc3339(&created_at)
             .map(|d| d.with_timezone(&Utc))
             .unwrap_or_else(|_| Utc::now()),
+        expected_artifact_kind: row.get::<_, Option<String>>(13).unwrap_or(None),
     })
 }
