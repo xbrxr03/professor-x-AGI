@@ -18,6 +18,7 @@ use tracing::{info, warn};
 
 use crate::evolved::analyzer::Analyzer;
 use crate::evolved::cognition_base::CognitionStore;
+use crate::memd::metacognitive::{MetacognitiveEntry, MetacognitiveStore};
 use crate::evolved::proposer::{
     ChangeManifest, EvolutionNode, HarnessComponent, NodeDatabase, VerificationStatus,
 };
@@ -805,28 +806,34 @@ impl EvolvedLoop {
             info!("evolved: Analyzer wrote new cognition item");
         }
 
-        // Write DHE attribution accuracy to metacognitive table (H10 tracking)
+        // Record DHE attribution into the metacognitive store. The entry is
+        // left UNVERIFIED (attribution_correct=false, actual_improvement=0.0)
+        // — the next HIRO round flips those fields via
+        // `MetacognitiveStore::verify_round` once a real pass@3 delta exists.
+        //
+        // The bare INSERT this replaces hardcoded round=0 and
+        // attribution_correct=1 regardless of outcome, which made MCA
+        // computation meaningless. The round used here is the HIRO round at
+        // attribution time when the runner supplies it; otherwise the
+        // tracker-derived count is the best proxy available.
         let failure_patterns = tracker.failure_patterns(20);
         let (pred_layer, pred_lever) = parse_dhe_from_patterns(&failure_patterns);
         let component_name = format!("{:?}", node.target_component);
-        {
-            let db = self.memory.db.lock().unwrap();
-            let _ = db.execute(
-                "INSERT INTO metacognitive \
-                 (round, task_type, predicted_layer, predicted_lever, \
-                  actual_improvement, attribution_correct, confidence, recorded_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                rusqlite::params![
-                    0i64,
-                    component_name,
-                    pred_layer as i64,
-                    pred_lever as i64,
-                    recent_success as f64,
-                    1i64,
-                    node.score as f64,
-                    Utc::now().to_rfc3339(),
-                ],
-            );
+        let metacog_store = MetacognitiveStore::new(Arc::clone(&self.memory.db));
+        // The loop runner doesn't carry an explicit HIRO-round counter at
+        // this site; the outcome tracker's length is a stable monotonic
+        // proxy that orders attributions correctly for verify_round even
+        // when it doesn't match the actual HIRO round number 1-for-1.
+        let current_round = tracker.len() as u32;
+        let entry = MetacognitiveEntry::new(
+            current_round,
+            component_name,
+            pred_layer,
+            pred_lever,
+            node.score,
+        );
+        if let Err(e) = metacog_store.append(&entry) {
+            warn!("evolved: failed to append metacognitive entry: {e}");
         }
 
         Ok(())

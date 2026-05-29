@@ -25,6 +25,7 @@ use crate::agentd::graph::{TaskNode, TaskType};
 use crate::agentd::react::ReactLoop;
 use crate::evolved::bf::BfTracker;
 use crate::evolved::lcap::LcapPolicy;
+use crate::memd::metacognitive::MetacognitiveStore;
 use crate::memd::MemoryManager;
 use crate::ollama::OllamaClient;
 use crate::policyd::PolicyEngine;
@@ -98,6 +99,14 @@ pub struct HiroRunner {
     cancel: CancellationToken,
     /// Shared LCAP policy across all tasks in a round — UCB1 state accumulates per round.
     lcap: Arc<std::sync::Mutex<LcapPolicy>>,
+    /// Optional metacognitive verification hook. When set, after each round
+    /// the runner flips pending attributions from the prior round based on
+    /// pass@3 delta. H13 (MCA-IR correlation) depends on this loop closing.
+    metacog: Option<MetacognitiveStore>,
+    /// Delta threshold above which an attribution is credited. Default 0.02
+    /// (2pp) — small enough to register a real fix, large enough to reject
+    /// per-task noise on a 60-task suite.
+    metacog_credit_threshold: f32,
 }
 
 impl HiroRunner {
@@ -116,7 +125,24 @@ impl HiroRunner {
             memory,
             cancel,
             lcap: Arc::new(std::sync::Mutex::new(lcap)),
+            metacog: None,
+            metacog_credit_threshold: 0.02,
         }
+    }
+
+    /// Attach a `MetacognitiveStore`. The runner will verify pending
+    /// attributions after each round using pass@3 delta against the prior
+    /// round (read from `hiro_rounds`). H13's MCA accessor draws from the
+    /// resulting verified entries.
+    pub fn with_metacog_store(mut self, store: MetacognitiveStore) -> Self {
+        self.metacog = Some(store);
+        self
+    }
+
+    /// Override the credit threshold for `verify_round` (default 0.02).
+    pub fn with_metacog_credit_threshold(mut self, threshold: f32) -> Self {
+        self.metacog_credit_threshold = threshold;
+        self
     }
 
     /// Run the full 60-task benchmark for a given round.
@@ -257,6 +283,35 @@ impl HiroRunner {
             let lc = self.lcap.lock().unwrap();
             if let Err(e) = lc.save_to_db(&self.memory.db) {
                 warn!("hiro: failed to persist LCAP state: {e}");
+            }
+        }
+
+        // H13 verification hook: any metacognitive entries logged at
+        // (round - 1) become eligible for credit now that we know
+        // pass@3 at `round`. Threshold is `metacog_credit_threshold`.
+        if let Some(metacog) = &self.metacog {
+            if round > 0 {
+                let prior_pass = bf
+                    .get_round(round - 1)
+                    .ok()
+                    .flatten()
+                    .map(|fp| (fp.p_tool + fp.p_plan + fp.p_correct) / 3.0)
+                    .unwrap_or(0.0);
+                match metacog.verify_round(
+                    round - 1,
+                    prior_pass,
+                    pass_at_3,
+                    self.metacog_credit_threshold,
+                ) {
+                    Ok(n) if n > 0 => info!(
+                        "hiro: verified {n} metacognitive attribution(s) for round {} (delta={:.3}, threshold={:.3})",
+                        round - 1,
+                        pass_at_3 - prior_pass,
+                        self.metacog_credit_threshold,
+                    ),
+                    Ok(_) => {}
+                    Err(e) => warn!("hiro: failed to verify metacognitive attributions: {e}"),
+                }
             }
         }
 

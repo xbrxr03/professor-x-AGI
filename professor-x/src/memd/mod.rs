@@ -1,6 +1,7 @@
 pub mod coding_smoke;
 pub mod events;
 pub mod episodic;
+pub mod metacognitive;
 pub mod pinned;
 pub mod procedural;
 pub mod semantic;

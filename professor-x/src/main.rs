@@ -2999,7 +2999,9 @@ async fn run_hiro_benchmark(
     hiro_limit: Option<usize>,
 ) -> Result<()> {
     info!("HIRO benchmark — round {round}");
-    let runner = HiroRunner::new(ollama, registry, policy, memory, cancel);
+    let metacog = memd::metacognitive::MetacognitiveStore::new(Arc::clone(&memory.db));
+    let runner = HiroRunner::new(ollama, registry, policy, memory, cancel)
+        .with_metacog_store(metacog);
     let result = if let Some(limit) = hiro_limit {
         info!("HIRO benchmark task limit: {limit}");
         runner
@@ -3031,7 +3033,9 @@ async fn run_hiro_null_baseline(
     hiro_limit: Option<usize>,
 ) -> Result<()> {
     info!("HIRO null-condition baseline — {rounds} static round(s)");
-    let runner = HiroRunner::new(ollama, registry, policy, memory, cancel);
+    let metacog = memd::metacognitive::MetacognitiveStore::new(Arc::clone(&memory.db));
+    let runner = HiroRunner::new(ollama, registry, policy, memory, cancel)
+        .with_metacog_store(metacog);
 
     for round in 0..rounds {
         let result = runner
