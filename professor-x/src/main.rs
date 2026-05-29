@@ -3554,6 +3554,8 @@ fn work_event_label(event_type: &str) -> &'static str {
         "SMOKE"
     } else if event_type.starts_with("evolution.") {
         "EVOLVE"
+    } else if event_type.starts_with("autonomous_run.") {
+        "AUTON"
     } else if event_type.starts_with("work_loop.") {
         "LOOP"
     } else if event_type == "transcript.written" {

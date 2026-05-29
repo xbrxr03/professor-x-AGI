@@ -116,6 +116,14 @@ pub fn print_snapshot(memory: Arc<MemoryManager>, events: Arc<EventStore>) -> Re
             preview,
         );
     }
+    println!(
+        "  autonomous: {}",
+        snapshot
+            .latest_autonomous_run
+            .as_ref()
+            .map(autonomous_run_summary)
+            .unwrap_or_else(|| "waiting; launch with cargo run -- --autonomous-run 4".to_string())
+    );
     println!("  work loops: {} runs", snapshot.work_loop_count);
     if let Some(run) = &snapshot.latest_work_loop {
         println!(
@@ -365,6 +373,7 @@ struct ObserverSnapshot {
     tool_events: usize,
     policy_events: usize,
     evolution_events: usize,
+    autonomous_events: usize,
     evolution_nodes: i64,
     accepted_nodes: i64,
     rejected_nodes: i64,
@@ -396,6 +405,7 @@ struct ObserverSnapshot {
     latest_tool: Option<AgentEvent>,
     latest_policy: Option<AgentEvent>,
     latest_evolution: Option<AgentEvent>,
+    latest_autonomous_run: Option<AgentEvent>,
     latest_transcript: Option<AgentEvent>,
     latest_run: Option<TaskRun>,
     latest_transcript_summary: Option<TranscriptSummary>,
@@ -530,6 +540,7 @@ impl ObserverSnapshot {
         snapshot.work_loop_count = work_loop_store.count()?;
         snapshot.recent_work_loops = work_loop_store.recent(5)?;
         snapshot.latest_work_loop = snapshot.recent_work_loops.first().cloned();
+        snapshot.latest_autonomous_run = events.latest_of_type("autonomous_run.requested")?;
 
         let repo = repo_root();
         snapshot.git_branch = git_output(&repo, &["branch", "--show-current"])
@@ -576,6 +587,8 @@ impl ObserverSnapshot {
             } else if event.event_type.starts_with("evolution.") {
                 snapshot.evolution_events += 1;
                 snapshot.latest_evolution = Some(event.clone());
+            } else if event.event_type.starts_with("autonomous_run.") {
+                snapshot.autonomous_events += 1;
             } else if event.event_type.starts_with("transcript.") {
                 snapshot.latest_transcript = Some(event.clone());
             }
@@ -691,6 +704,7 @@ impl Default for ObserverSnapshot {
             tool_events: 0,
             policy_events: 0,
             evolution_events: 0,
+            autonomous_events: 0,
             evolution_nodes: 0,
             accepted_nodes: 0,
             rejected_nodes: 0,
@@ -722,6 +736,7 @@ impl Default for ObserverSnapshot {
             latest_tool: None,
             latest_policy: None,
             latest_evolution: None,
+            latest_autonomous_run: None,
             latest_transcript: None,
             latest_run: None,
             latest_transcript_summary: None,
@@ -919,6 +934,7 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &ObserverApp) {
 
 fn draw_activity(frame: &mut Frame, area: Rect, app: &ObserverApp) {
     let lines = vec![
+        latest_autonomous_run_line(&app.snapshot.latest_autonomous_run),
         latest_work_loop_line(&app.snapshot.latest_work_loop),
         latest_run_line(&app.snapshot.latest_run),
         latest_line("task", &app.snapshot.latest_task),
@@ -961,11 +977,12 @@ fn draw_science(frame: &mut Frame, area: Rect, app: &ObserverApp) {
             .block(panel("recent signal"))
             .gauge_style(Style::default().fg(Color::Cyan))
             .label(format!(
-                "task {}  tool {}  policy {}  evolution {}",
+                "task {}  tool {}  policy {}  evolution {}  autonomous {}",
                 app.snapshot.task_events,
                 app.snapshot.tool_events,
                 app.snapshot.policy_events,
                 app.snapshot.evolution_events,
+                app.snapshot.autonomous_events,
             ))
             .ratio(task_ratio.clamp(0.0, 1.0)),
         chunks[0],
@@ -997,6 +1014,7 @@ fn draw_science(frame: &mut Frame, area: Rect, app: &ObserverApp) {
         latest_transcript_detail(&app.snapshot.latest_transcript_summary),
         metacognition_detail(app),
         ipe_detail(app),
+        latest_autonomous_run_detail(&app.snapshot.latest_autonomous_run),
         Line::from("Run --lab --run-now for daemon plus observer; --observe follows an existing run."),
     ];
     note_lines.extend(recent_metacog_detail(&app.snapshot.recent_metacog));
@@ -1209,6 +1227,21 @@ fn latest_work_loop_line(run: &Option<WorkLoopRunRecord>) -> Line<'static> {
     }
 }
 
+fn latest_autonomous_run_line(event: &Option<AgentEvent>) -> Line<'static> {
+    match event {
+        Some(event) => Line::from(vec![
+            Span::styled("auton   ", label()),
+            Span::styled("armed   ", status_style("Running")),
+            Span::raw(autonomous_run_summary(event)),
+        ]),
+        None => Line::from(vec![
+            Span::styled("auton   ", label()),
+            Span::styled("waiting", Style::default().fg(Color::DarkGray)),
+            Span::raw("  launch with --autonomous-run"),
+        ]),
+    }
+}
+
 fn latest_coding_smoke_line(smoke: &Option<CodingSmokeRecord>) -> Line<'static> {
     match smoke {
         Some(smoke) => Line::from(vec![
@@ -1257,6 +1290,32 @@ fn status_style(status: &str) -> Style {
         _ => Color::Yellow,
     };
     Style::default().fg(color)
+}
+
+fn autonomous_run_summary(event: &AgentEvent) -> String {
+    let profile = event.payload["profile"].as_str().unwrap_or("unknown");
+    let cycles = event.payload["cycles"].as_u64().unwrap_or_default();
+    let commit_capable = event.payload["commit_capable"].as_bool().unwrap_or(false);
+    format!(
+        "{} profile / {} cycle(s) / commit-capable {} / event #{} at {}",
+        profile,
+        cycles,
+        commit_capable,
+        event.id,
+        event.timestamp.format("%H:%M:%S"),
+    )
+}
+
+fn latest_autonomous_run_detail(event: &Option<AgentEvent>) -> Line<'static> {
+    match event {
+        Some(event) => Line::from(format!(
+            "Autonomous run: {} / observe cargo run -- --observe / feed cargo run -- --watch-work",
+            autonomous_run_summary(event),
+        )),
+        None => Line::from(
+            "Autonomous run: waiting. Start bounded core profile with cargo run -- --autonomous-run 4.",
+        ),
+    }
 }
 
 fn latest_coding_smoke_detail(smoke: &Option<CodingSmokeRecord>) -> Line<'static> {
@@ -1528,6 +1587,8 @@ fn event_style(event_type: &str) -> Style {
         Color::Yellow
     } else if event_type.starts_with("evolution.") {
         Color::Magenta
+    } else if event_type.starts_with("autonomous_run.") {
+        Color::LightCyan
     } else if event_type.starts_with("hiro.") {
         Color::Blue
     } else {

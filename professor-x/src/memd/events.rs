@@ -131,6 +131,22 @@ impl EventStore {
         rows.map(|r| r.map_err(Into::into)).collect()
     }
 
+    pub fn latest_of_type(&self, event_type: &str) -> Result<Option<AgentEvent>> {
+        let db = self.db.lock().unwrap();
+        let mut stmt = db.prepare(
+            "SELECT id, timestamp, session_id, task_id, event_type, summary, payload
+             FROM agent_events
+             WHERE event_type = ?1
+             ORDER BY id DESC
+             LIMIT 1",
+        )?;
+        let mut rows = stmt.query_map(params![event_type], parse_event)?;
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
     pub fn for_task(&self, task_id: Uuid, limit: usize) -> Result<Vec<AgentEvent>> {
         let limit = limit.clamp(1, 2000) as i64;
         let db = self.db.lock().unwrap();
@@ -185,6 +201,7 @@ fn work_event_where_clause() -> &'static str {
       OR event_type LIKE 'react.%'
       OR event_type LIKE 'coding.smoke.%'
       OR event_type LIKE 'evolution.%'
+      OR event_type LIKE 'autonomous_run.%'
       OR event_type LIKE 'work_loop.%'
       OR event_type = 'transcript.written'"
 }
@@ -237,13 +254,31 @@ mod tests {
         store
             .append(None, None, "task.queued", "queued", serde_json::json!({"priority": 100}))
             .unwrap();
+        store
+            .append(
+                None,
+                None,
+                "autonomous_run.requested",
+                "autonomous run requested",
+                serde_json::json!({"profile": "core", "cycles": 4}),
+            )
+            .unwrap();
 
         let events = store.tail(10).unwrap();
-        assert_eq!(events.len(), 2);
+        assert_eq!(events.len(), 3);
         assert_eq!(events[0].event_type, "daemon.started");
         assert_eq!(events[1].payload["priority"], 100);
-        assert_eq!(store.after_id(events[0].id, 10).unwrap().len(), 1);
-        assert_eq!(store.work_tail(10).unwrap().len(), 1);
-        assert_eq!(store.work_after_id(0, 10).unwrap().len(), 1);
+        assert_eq!(events[2].event_type, "autonomous_run.requested");
+        assert_eq!(store.after_id(events[0].id, 10).unwrap().len(), 2);
+        assert_eq!(store.work_tail(10).unwrap().len(), 2);
+        assert_eq!(store.work_after_id(0, 10).unwrap().len(), 2);
+        assert_eq!(
+            store
+                .latest_of_type("autonomous_run.requested")
+                .unwrap()
+                .unwrap()
+                .payload["profile"],
+            "core"
+        );
     }
 }
