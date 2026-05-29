@@ -1,8 +1,12 @@
+pub mod affect;
 pub mod coding_smoke;
 pub mod events;
 pub mod episodic;
+pub mod free_energy;
+pub mod ics;
 pub mod pinned;
 pub mod procedural;
+pub mod self_model;
 pub mod semantic;
 pub mod task_runs;
 pub mod transcripts;
@@ -15,9 +19,13 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tracing::info;
 
+use crate::memd::affect::AffectStore;
 use crate::memd::episodic::EpisodicStore;
+use crate::memd::free_energy::FreeEnergyStore;
+use crate::memd::ics::IcsStore;
 use crate::memd::pinned::PinnedStore;
 use crate::memd::procedural::ProceduralStore;
+use crate::memd::self_model::SelfModelStore;
 use crate::memd::semantic::SemanticStore;
 use crate::memd::working::WorkingMemory;
 
@@ -298,6 +306,49 @@ CREATE TABLE IF NOT EXISTS lcap_arms (
     updated_at TEXT NOT NULL,
     UNIQUE(category, arm)
 );
+
+-- IPE (Identity-Preserving Evolution) — H14 to H16.
+-- self_model: Strange Loop snapshot per round.
+CREATE TABLE IF NOT EXISTS self_model (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    round INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    embedding_id INTEGER,
+    recorded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_self_model_round ON self_model(round);
+
+-- ics_scores: pairwise cosine similarity between self-model snapshots.
+CREATE TABLE IF NOT EXISTS ics_scores (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    round_a INTEGER NOT NULL,
+    round_b INTEGER NOT NULL,
+    score REAL NOT NULL,
+    recorded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ics_round_pair ON ics_scores(round_a, round_b);
+
+-- affect_states: per-task (valence, arousal). Mean-valence binning drives H16.
+CREATE TABLE IF NOT EXISTS affect_states (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    round INTEGER NOT NULL,
+    valence REAL NOT NULL,
+    arousal REAL NOT NULL,
+    recorded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_affect_session ON affect_states(session_id);
+
+-- fed_records: Free Energy Delta per session. H15 trajectory plot input.
+CREATE TABLE IF NOT EXISTS fed_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    round INTEGER NOT NULL,
+    n_predictions INTEGER NOT NULL,
+    mean_abs_error REAL NOT NULL,
+    recorded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_fed_round ON fed_records(round);
 "#;
 
 pub struct MemoryManager {
@@ -307,6 +358,13 @@ pub struct MemoryManager {
     pub episodic: EpisodicStore,
     pub semantic: SemanticStore,
     pub procedural: ProceduralStore,
+    /// IPE — Identity-Preserving Evolution. Stubs landed in the IPE
+    /// module stubs PR; the LLM update + prompt-injection wiring is
+    /// follow-up work.
+    pub self_model: SelfModelStore,
+    pub ics: IcsStore,
+    pub affect: AffectStore,
+    pub free_energy: FreeEnergyStore,
 }
 
 impl MemoryManager {
@@ -365,6 +423,10 @@ impl MemoryManager {
             episodic: EpisodicStore::new(Arc::clone(&db)),
             semantic: SemanticStore::new(Arc::clone(&db)),
             procedural: ProceduralStore::new(Arc::clone(&db)),
+            self_model: SelfModelStore::new(Arc::clone(&db)),
+            ics: IcsStore::new(Arc::clone(&db)),
+            affect: AffectStore::new(Arc::clone(&db)),
+            free_energy: FreeEnergyStore::new(Arc::clone(&db)),
             db,
         })
     }
