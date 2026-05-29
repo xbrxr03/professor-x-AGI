@@ -18,6 +18,8 @@ use std::time::{Duration, Instant};
 
 use crate::memd::coding_smoke::{CodingSmokeRecord, CodingSmokeStore};
 use crate::memd::events::{AgentEvent, EventStore};
+use crate::memd::free_energy::FreeEnergyStore;
+use crate::memd::metacognitive::{MetacognitiveEntry, MetacognitiveStore};
 use crate::memd::task_runs::{TaskRun, TaskRunStore};
 use crate::memd::transcripts::{TranscriptStore, TranscriptSummary};
 use crate::memd::work_loops::{WorkLoopRunRecord, WorkLoopRunStore};
@@ -69,7 +71,51 @@ pub fn print_snapshot(memory: Arc<MemoryManager>, events: Arc<EventStore>) -> Re
         .latest_pass_at_3
         .map(|v| format!("{v:.3}"))
         .unwrap_or_else(|| "not run".to_string());
-    println!("  HIRO: {} rounds, pass@3 {pass}", snapshot.hiro_rounds);
+    println!(
+        "  HIRO: {} rounds, {} attempts, pass@3 {pass}",
+        snapshot.hiro_rounds, snapshot.hiro_attempts
+    );
+    println!(
+        "    artifacts: {} attempts, {} rounds, {} null-baselines",
+        snapshot.hiro_attempt_artifacts, snapshot.hiro_round_artifacts, snapshot.hiro_null_artifacts
+    );
+    println!(
+        "  metacognition: {} entries, {} verified, MCA {} over {} sample(s)",
+        snapshot.metacog_total,
+        snapshot.metacog_verified,
+        snapshot
+            .mca_rolling
+            .map(|mca| format!("{mca:.3}"))
+            .unwrap_or_else(|| "waiting".to_string()),
+        snapshot.mca_samples,
+    );
+    println!(
+        "  IPE: {} self-model snapshots, ICS {}, affect {}, FED {}{}",
+        snapshot.self_model_snapshots,
+        snapshot
+            .latest_ics_score
+            .map(|score| format!("{score:.3}"))
+            .unwrap_or_else(|| "waiting".to_string()),
+        snapshot
+            .mean_affect_valence
+            .map(|valence| format!("{valence:.3}"))
+            .unwrap_or_else(|| "waiting".to_string()),
+        snapshot
+            .latest_fed
+            .map(|fed| format!("{fed:.3}"))
+            .unwrap_or_else(|| "waiting".to_string()),
+        snapshot
+            .fed_slope
+            .map(|slope| format!(" / slope {slope:.3}"))
+            .unwrap_or_default(),
+    );
+    if let Some(preview) = &snapshot.latest_self_model_preview {
+        println!(
+            "    self-model r{}: {}",
+            snapshot.latest_self_model_round.unwrap_or_default(),
+            preview,
+        );
+    }
     println!("  work loops: {} runs", snapshot.work_loop_count);
     if let Some(run) = &snapshot.latest_work_loop {
         println!(
@@ -310,6 +356,7 @@ struct ObserverSnapshot {
     transcript_count: i64,
     task_run_count: i64,
     hiro_rounds: i64,
+    hiro_attempts: i64,
     latest_pass_at_3: Option<f64>,
     work_loop_count: i64,
     coding_smoke_count: i64,
@@ -325,7 +372,22 @@ struct ObserverSnapshot {
     verification_artifacts: usize,
     accepted_artifacts: usize,
     rejected_artifacts: usize,
+    hiro_attempt_artifacts: usize,
+    hiro_round_artifacts: usize,
+    hiro_null_artifacts: usize,
     command_artifacts: usize,
+    metacog_total: i64,
+    metacog_verified: i64,
+    mca_rolling: Option<f32>,
+    mca_samples: usize,
+    recent_metacog: Vec<MetacognitiveEntry>,
+    self_model_snapshots: i64,
+    latest_self_model_round: Option<u32>,
+    latest_self_model_preview: Option<String>,
+    latest_ics_score: Option<f32>,
+    mean_affect_valence: Option<f32>,
+    latest_fed: Option<f32>,
+    fed_slope: Option<f32>,
     git_branch: String,
     git_commit: String,
     git_dirty: bool,
@@ -366,6 +428,8 @@ impl ObserverSnapshot {
             db.query_row("SELECT COUNT(*) FROM task_runs", [], |row| row.get(0))?;
         let hiro_rounds: i64 =
             db.query_row("SELECT COUNT(*) FROM hiro_rounds", [], |row| row.get(0))?;
+        let hiro_attempts: i64 =
+            db.query_row("SELECT COUNT(*) FROM hiro_attempts", [], |row| row.get(0))?;
         let evolution_nodes: i64 =
             db.query_row("SELECT COUNT(*) FROM evolution_nodes", [], |row| row.get(0))?;
         let accepted_nodes: i64 = db.query_row(
@@ -387,6 +451,43 @@ impl ObserverSnapshot {
                 |row| row.get::<_, f64>(0),
             )
             .ok();
+        let metacog_total: i64 =
+            db.query_row("SELECT COUNT(*) FROM metacognitive", [], |row| row.get(0))?;
+        let metacog_verified: i64 = db.query_row(
+            "SELECT COUNT(*) FROM metacognitive WHERE actual_improvement != 0.0 OR attribution_correct != 0",
+            [],
+            |row| row.get(0),
+        )?;
+        let self_model_snapshots: i64 =
+            db.query_row("SELECT COUNT(*) FROM self_model", [], |row| row.get(0))?;
+        let latest_self_model = db
+            .query_row(
+                "SELECT round, text FROM self_model ORDER BY id DESC LIMIT 1",
+                [],
+                |row| Ok((row.get::<_, i64>(0)? as u32, row.get::<_, String>(1)?)),
+            )
+            .ok();
+        let latest_ics_score = db
+            .query_row(
+                "SELECT score FROM ics_scores ORDER BY id DESC LIMIT 1",
+                [],
+                |row| row.get::<_, f64>(0),
+            )
+            .ok()
+            .map(|v| v as f32);
+        let mean_affect_valence = db
+            .query_row("SELECT AVG(valence) FROM affect_states", [], |row| {
+                row.get::<_, Option<f64>>(0)
+            })?
+            .map(|v| v as f32);
+        let latest_fed = db
+            .query_row(
+                "SELECT mean_abs_error FROM fed_records ORDER BY id DESC LIMIT 1",
+                [],
+                |row| row.get::<_, f64>(0),
+            )
+            .ok()
+            .map(|v| v as f32);
         drop(db);
 
         let mut snapshot = Self {
@@ -398,10 +499,19 @@ impl ObserverSnapshot {
             transcript_count,
             task_run_count,
             hiro_rounds,
+            hiro_attempts,
             evolution_nodes,
             accepted_nodes,
             rejected_nodes,
             latest_pass_at_3,
+            metacog_total,
+            metacog_verified,
+            self_model_snapshots,
+            latest_self_model_round: latest_self_model.as_ref().map(|(round, _)| *round),
+            latest_self_model_preview: latest_self_model.map(|(_, text)| truncate(&text, 72)),
+            latest_ics_score,
+            mean_affect_valence,
+            latest_fed,
             ..Self::default()
         };
         snapshot.latest_run = TaskRunStore::new(Arc::clone(&memory.db)).latest()?;
@@ -440,8 +550,18 @@ impl ObserverSnapshot {
         snapshot.verification_artifacts = count_json_files(&artifact_root.join("verifications"));
         snapshot.accepted_artifacts = count_json_files(&artifact_root.join("accepted"));
         snapshot.rejected_artifacts = count_json_files(&artifact_root.join("rejections"));
+        let hiro_artifact_root = hiro_artifact_root(&repo);
+        snapshot.hiro_attempt_artifacts = count_json_files(&hiro_artifact_root.join("attempts"));
+        snapshot.hiro_round_artifacts = count_json_files(&hiro_artifact_root.join("rounds"));
+        snapshot.hiro_null_artifacts = count_json_files(&hiro_artifact_root.join("null-baselines"));
         snapshot.command_artifacts =
             count_json_files(&generic_artifact_root(&repo).join("commands"));
+        let metacog_store = MetacognitiveStore::new(Arc::clone(&memory.db));
+        let (mca, samples) = latest_mca(&metacog_store, snapshot.hiro_rounds as u32)?;
+        snapshot.mca_rolling = mca;
+        snapshot.mca_samples = samples;
+        snapshot.recent_metacog = metacog_store.recent(3)?;
+        snapshot.fed_slope = FreeEnergyStore::new(Arc::clone(&memory.db)).slope_per_round()?;
 
         for event in &snapshot.events {
             if event.event_type.starts_with("task.") {
@@ -495,6 +615,31 @@ fn generic_artifact_root(repo: &Path) -> PathBuf {
     }
 }
 
+fn hiro_artifact_root(repo: &Path) -> PathBuf {
+    let nested = repo.join("professor-x/artifacts/hiro");
+    if nested.exists() {
+        nested
+    } else {
+        repo.join("artifacts/hiro")
+    }
+}
+
+fn latest_mca(
+    metacog: &MetacognitiveStore,
+    hiro_round_count: u32,
+) -> Result<(Option<f32>, usize)> {
+    if hiro_round_count == 0 {
+        return Ok((None, 0));
+    }
+    let current_round = hiro_round_count.saturating_sub(1);
+    let (mca, samples) = metacog.mca_rolling(current_round, 10)?;
+    if samples == 0 {
+        Ok((None, 0))
+    } else {
+        Ok((Some(mca), samples))
+    }
+}
+
 fn git_output(repo: &Path, args: &[&str]) -> Option<String> {
     let output = Command::new("git")
         .args(args)
@@ -537,6 +682,7 @@ impl Default for ObserverSnapshot {
             transcript_count: 0,
             task_run_count: 0,
             hiro_rounds: 0,
+            hiro_attempts: 0,
             latest_pass_at_3: None,
             work_loop_count: 0,
             coding_smoke_count: 0,
@@ -552,7 +698,22 @@ impl Default for ObserverSnapshot {
             verification_artifacts: 0,
             accepted_artifacts: 0,
             rejected_artifacts: 0,
+            hiro_attempt_artifacts: 0,
+            hiro_round_artifacts: 0,
+            hiro_null_artifacts: 0,
             command_artifacts: 0,
+            metacog_total: 0,
+            metacog_verified: 0,
+            mca_rolling: None,
+            mca_samples: 0,
+            recent_metacog: Vec::new(),
+            self_model_snapshots: 0,
+            latest_self_model_round: None,
+            latest_self_model_preview: None,
+            latest_ics_score: None,
+            mean_affect_valence: None,
+            latest_fed: None,
+            fed_slope: None,
             git_branch: "unknown".to_string(),
             git_commit: "unknown".to_string(),
             git_dirty: false,
@@ -694,8 +855,17 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &ObserverApp) {
         Line::from(vec![
             Span::styled("HIRO        ", label()),
             Span::raw(format!(
-                "{} rounds / pass@3 {pass}",
+            "{} rounds / pass@3 {pass}",
                 app.snapshot.hiro_rounds
+            )),
+        ]),
+        Line::from(vec![
+            Span::styled("HIRO data   ", label()),
+            Span::raw(format!(
+                "{} attempts / {} round artifacts / {} null baselines",
+                app.snapshot.hiro_attempts,
+                app.snapshot.hiro_round_artifacts,
+                app.snapshot.hiro_null_artifacts
             )),
         ]),
         Line::from(vec![
@@ -825,10 +995,11 @@ fn draw_science(frame: &mut Frame, area: Rect, app: &ObserverApp) {
         )),
         latest_coding_smoke_detail(&app.snapshot.latest_coding_smoke),
         latest_transcript_detail(&app.snapshot.latest_transcript_summary),
-        Line::from(
-            "Run --lab --run-now for daemon plus observer; --observe follows an existing run.",
-        ),
+        metacognition_detail(app),
+        ipe_detail(app),
+        Line::from("Run --lab --run-now for daemon plus observer; --observe follows an existing run."),
     ];
+    note_lines.extend(recent_metacog_detail(&app.snapshot.recent_metacog));
     note_lines.extend(latest_run_detail(&app.snapshot.latest_run));
     note_lines.extend(latest_work_loop_detail(&app.snapshot.latest_work_loop));
     let note = Paragraph::new(note_lines)
@@ -1119,6 +1290,93 @@ fn latest_transcript_detail(transcript: &Option<TranscriptSummary>) -> Line<'sta
         )),
         None => Line::from("Latest transcript: waiting for first completed task."),
     }
+}
+
+fn metacognition_detail(app: &ObserverApp) -> Line<'static> {
+    let mca = app
+        .snapshot
+        .mca_rolling
+        .map(|value| format!("{value:.3}"))
+        .unwrap_or_else(|| "waiting".to_string());
+    Line::from(format!(
+        "Metacognition: {} entries / {} verified / MCA {} over {} sample(s)",
+        app.snapshot.metacog_total,
+        app.snapshot.metacog_verified,
+        mca,
+        app.snapshot.mca_samples,
+    ))
+}
+
+fn ipe_detail(app: &ObserverApp) -> Line<'static> {
+    let self_model = match (
+        app.snapshot.latest_self_model_round,
+        app.snapshot.latest_self_model_preview.as_ref(),
+    ) {
+        (Some(round), Some(preview)) => format!("r{round} {}", truncate(preview, 40)),
+        _ => "waiting".to_string(),
+    };
+    let ics = app
+        .snapshot
+        .latest_ics_score
+        .map(|score| format!("{score:.3}"))
+        .unwrap_or_else(|| "waiting".to_string());
+    let affect = app
+        .snapshot
+        .mean_affect_valence
+        .map(|valence| format!("{valence:.3}"))
+        .unwrap_or_else(|| "waiting".to_string());
+    let fed = app
+        .snapshot
+        .latest_fed
+        .map(|value| format!("{value:.3}"))
+        .unwrap_or_else(|| "waiting".to_string());
+    let slope = app
+        .snapshot
+        .fed_slope
+        .map(|value| format!(" slope {value:.3}"))
+        .unwrap_or_default();
+    Line::from(format!(
+        "IPE: {} self-model snapshot(s) / self {} / ICS {} / affect {} / FED {}{}",
+        app.snapshot.self_model_snapshots, self_model, ics, affect, fed, slope,
+    ))
+}
+
+fn recent_metacog_detail(entries: &[MetacognitiveEntry]) -> Vec<Line<'static>> {
+    if entries.is_empty() {
+        return vec![Line::from(
+            "MCA trace: waiting for DHE attributions and follow-up HIRO rounds.",
+        )];
+    }
+    entries
+        .iter()
+        .map(|entry| {
+            let status = if entry.attribution_correct {
+                "credited"
+            } else if entry.actual_improvement != 0.0 {
+                "rejected"
+            } else {
+                "pending"
+            };
+            Line::from(vec![
+                Span::styled(format!("mca r{:<3} ", entry.round), label()),
+                Span::styled(status, status_style(if entry.attribution_correct {
+                    "Complete"
+                } else if entry.actual_improvement != 0.0 {
+                    "Failed"
+                } else {
+                    "Running"
+                })),
+                Span::raw(format!(
+                    " L{} lever{} conf {:.2} delta {:.3} {}",
+                    entry.predicted_layer,
+                    entry.predicted_lever,
+                    entry.confidence,
+                    entry.actual_improvement,
+                    truncate(&entry.task_type, 44),
+                )),
+            ])
+        })
+        .collect()
 }
 
 fn latest_run_detail(run: &Option<TaskRun>) -> Vec<Line<'static>> {
