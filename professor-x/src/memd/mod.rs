@@ -347,6 +347,14 @@ impl MemoryManager {
                 ("planned_jobs", "TEXT NOT NULL DEFAULT '[]'"),
             ],
         )?;
+        // Phase B truth gate — declared on a per-cron-job basis. Old rows get
+        // NULL via the ALTER TABLE default; the validator treats that as
+        // "no expected artifact" (back-compat).
+        ensure_columns(
+            &conn,
+            "cron_jobs",
+            &[("expected_artifact_kind", "TEXT")],
+        )?;
         info!("memd: database opened at {}", db_path.display());
 
         let db = Arc::new(Mutex::new(conn));

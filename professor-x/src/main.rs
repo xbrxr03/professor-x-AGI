@@ -97,6 +97,9 @@ struct CliArgs {
     operator_commit_smoke: bool,
     /// Run one seeded autonomous evolution cycle and exit.
     evolution_cycle: bool,
+    /// Phase B truth gate one-shot: scan brain/, artifacts/, ops/daily/ against
+    /// the artifact schemas and report. Exit 1 on any failure.
+    validate_artifacts: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,6 +180,7 @@ fn parse_args() -> CliArgs {
         operator_run_commit_cycles: None,
         operator_commit_smoke: false,
         evolution_cycle: false,
+        validate_artifacts: false,
     };
     let mut i = 1;
     while i < args.len() {
@@ -323,6 +327,10 @@ fn parse_args() -> CliArgs {
                 cli.evolution_cycle = true;
                 i += 1;
             }
+            "--validate-artifacts" => {
+                cli.validate_artifacts = true;
+                i += 1;
+            }
             _ => {
                 i += 1;
             }
@@ -380,6 +388,16 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| PathBuf::from("artifacts/validation"));
     let artifact_validator = Arc::new(ArtifactValidator::new(artifact_report_dir));
     info!("memd: initialized at {}", data_dir.display());
+
+    if cli.validate_artifacts {
+        let repo_root = repo_root_from_cwd();
+        let report = artifact_validator.scan_repo(&repo_root);
+        report.print_human();
+        if report.failed > 0 {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
 
     if cli.status {
         return observer::print_snapshot(Arc::clone(&memory), Arc::clone(&events));
@@ -612,6 +630,7 @@ async fn main() -> Result<()> {
             Arc::clone(&registry),
             Arc::clone(&policy),
             Arc::clone(&memory),
+            Arc::clone(&events),
             cancel,
             cli.hiro_limit,
         )
@@ -625,6 +644,7 @@ async fn main() -> Result<()> {
             Arc::clone(&registry),
             Arc::clone(&policy),
             Arc::clone(&memory),
+            Arc::clone(&events),
             cancel,
             cli.hiro_limit,
         )
@@ -2528,7 +2548,10 @@ async fn run_daemon(
                 match scheduler.tick() {
                     Ok(due_jobs) => {
                         for job in due_jobs {
-                            let task = TaskNode::new(job.prompt.clone(), TaskType::Scheduled, 100);
+                            let mut task = TaskNode::new(job.prompt.clone(), TaskType::Scheduled, 100);
+                            if let Some(kind) = job.expected_artifact_kind.clone() {
+                                task = task.with_expected_artifact_kind(kind);
+                            }
                             let _ = events.append(
                                 None,
                                 Some(task.id),
@@ -2538,6 +2561,7 @@ async fn run_daemon(
                                     "job_id": job.id,
                                     "job_name": job.name,
                                     "task_type": "Scheduled",
+                                    "expected_artifact_kind": task.expected_artifact_kind,
                                 }),
                             );
                             if task_tx.try_send(task).is_err() {
@@ -2582,21 +2606,22 @@ async fn run_daemon(
                             match artifact_validator_ref.validate_task(&task) {
                                 Ok(Some(mut report)) => {
                                     let report_path = artifact_validator_ref.write_report(&mut report).ok();
-                                    let event_type = if report.passed {
-                                        "artifact.valid"
-                                    } else {
-                                        "artifact.invalid"
+                                    let verdict = if report.passed { "valid" } else { "invalid" };
+                                    let event_type = match report.kind.as_deref() {
+                                        Some(kind) => format!("artifact.{kind}.{verdict}"),
+                                        None => format!("artifact.{verdict}"),
                                     };
                                     let _ = events_ref.append(
                                         None,
                                         Some(task.id),
-                                        event_type,
+                                        event_type.as_str(),
                                         if report.passed {
                                             "artifact validation passed".to_string()
                                         } else {
                                             report.failure_reason().unwrap_or_else(|| "artifact validation failed".to_string())
                                         },
                                         serde_json::json!({
+                                            "kind": report.kind,
                                             "passed": report.passed,
                                             "checks": report.checks,
                                             "artifacts": report.artifacts,
@@ -2995,11 +3020,13 @@ async fn run_hiro_benchmark(
     registry: Arc<std::sync::RwLock<ToolRegistry>>,
     policy: Arc<PolicyEngine>,
     memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
     cancel: CancellationToken,
     hiro_limit: Option<usize>,
 ) -> Result<()> {
     info!("HIRO benchmark — round {round}");
-    let runner = HiroRunner::new(ollama, registry, policy, memory, cancel);
+    let runner = HiroRunner::new(ollama, registry, policy, memory, cancel).with_events(events);
+    info!("HIRO run_id={}", runner.run_id());
     let result = if let Some(limit) = hiro_limit {
         info!("HIRO benchmark task limit: {limit}");
         runner
@@ -3027,11 +3054,15 @@ async fn run_hiro_null_baseline(
     registry: Arc<std::sync::RwLock<ToolRegistry>>,
     policy: Arc<PolicyEngine>,
     memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
     cancel: CancellationToken,
     hiro_limit: Option<usize>,
 ) -> Result<()> {
     info!("HIRO null-condition baseline — {rounds} static round(s)");
-    let runner = HiroRunner::new(ollama, registry, policy, memory, cancel);
+    let runner = HiroRunner::new(ollama, registry, policy, memory, cancel)
+        .with_events(events)
+        .as_null_baseline();
+    info!("HIRO null run_id={}", runner.run_id());
 
     for round in 0..rounds {
         let result = runner
@@ -3057,6 +3088,10 @@ struct DailyScheduleJob {
     skill: String,
     offset_minutes: u32,
     network_required: bool,
+    /// Phase B truth gate. If set, the artifact validator must find a matching
+    /// artifact after the task runs. See `artifacts::ArtifactKind`.
+    #[serde(default)]
+    expected_artifact_kind: Option<String>,
 }
 
 fn dry_run_daily_cycle() -> Result<()> {
@@ -3435,6 +3470,22 @@ fn setup_signal_handlers(cancel: CancellationToken) {
     }
 }
 
+// ── Filesystem helpers ───────────────────────────────────────────────────────
+
+/// Walk up from cwd looking for `.git` to find the repo root. Used by the
+/// `--validate-artifacts` scan so it can be invoked from any subdirectory.
+fn repo_root_from_cwd() -> PathBuf {
+    let mut dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    loop {
+        if dir.join(".git").exists() {
+            return dir;
+        }
+        if !dir.pop() {
+            return std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        }
+    }
+}
+
 // ── Scheduler ────────────────────────────────────────────────────────────────
 
 fn seed_daily_schedule(scheduler: &agentd::CronScheduler, fire_now: bool) -> Result<()> {
@@ -3465,6 +3516,17 @@ fn seed_daily_schedule(scheduler: &agentd::CronScheduler, fire_now: bool) -> Res
 
     let job_count = schedule.jobs.len();
     for job in schedule.jobs {
+        // Fallback artifact-kind defaults for jobs whose TOML entry does not
+        // declare one. Keeps the Phase B gate active on the historically-
+        // configured jobs without forcing a config rewrite on landing.
+        let inferred_kind = job.expected_artifact_kind.clone().or_else(|| {
+            match job.id.as_str() {
+                id if id.contains("daily-update") => Some("daily_update".to_string()),
+                "literature-search" => Some("literature_note".to_string()),
+                "experiment-runner" => Some("experiment_result".to_string()),
+                _ => None,
+            }
+        });
         let cron_job = CronJob {
             id: format!("daily-{}", job.id),
             name: format!("Daily {}", job.id),
@@ -3482,6 +3544,7 @@ fn seed_daily_schedule(scheduler: &agentd::CronScheduler, fire_now: bool) -> Res
             last_run_at: None,
             last_status: None,
             created_at: now,
+            expected_artifact_kind: inferred_kind,
         };
         scheduler.register(&cron_job)?;
     }
