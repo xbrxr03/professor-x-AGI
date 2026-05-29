@@ -4,6 +4,7 @@ pub mod events;
 pub mod episodic;
 pub mod free_energy;
 pub mod ics;
+pub mod metacognitive;
 pub mod pinned;
 pub mod procedural;
 pub mod self_model;

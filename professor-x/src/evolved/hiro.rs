@@ -29,6 +29,7 @@ use crate::agentd::react::ReactLoop;
 use crate::evolved::bf::BfTracker;
 use crate::evolved::lcap::LcapPolicy;
 use crate::memd::events::EventStore;
+use crate::memd::metacognitive::MetacognitiveStore;
 use crate::memd::MemoryManager;
 use crate::ollama::OllamaClient;
 use crate::policyd::PolicyEngine;
@@ -175,6 +176,14 @@ pub struct HiroRunner {
     frozen_harness: bool,
     /// H1 sweep override. Propagated to each per-task ReactLoop.
     memory_budget_override: Option<u32>,
+    /// Optional metacognitive verification hook. When set, after each round
+    /// the runner flips pending attributions from the prior round based on
+    /// pass@3 delta. H13 (MCA-IR correlation) depends on this loop closing.
+    metacog: Option<MetacognitiveStore>,
+    /// Delta threshold above which an attribution is credited. Default 0.02
+    /// (2pp) — small enough to register a real fix, large enough to reject
+    /// per-task noise on a 60-task suite.
+    metacog_credit_threshold: f32,
 }
 
 impl HiroRunner {
@@ -198,6 +207,8 @@ impl HiroRunner {
             artifact_root: PathBuf::from("artifacts/hiro"),
             frozen_harness: false,
             memory_budget_override: None,
+            metacog: None,
+            metacog_credit_threshold: 0.02,
         }
     }
 
@@ -225,6 +236,20 @@ impl HiroRunner {
     /// H1 §"Proposed test" for the recommended budget points.
     pub fn with_memory_budget_override(mut self, budget: u32) -> Self {
         self.memory_budget_override = Some(budget);
+        self
+    }
+
+    /// Attach a `MetacognitiveStore`. The runner will verify pending
+    /// attributions after each round using per-category fingerprint deltas.
+    /// H13's MCA accessor draws from the resulting verified entries.
+    pub fn with_metacog_store(mut self, store: MetacognitiveStore) -> Self {
+        self.metacog = Some(store);
+        self
+    }
+
+    /// Override the credit threshold for metacognitive verification (default 0.02).
+    pub fn with_metacog_credit_threshold(mut self, threshold: f32) -> Self {
+        self.metacog_credit_threshold = threshold;
         self
     }
 
@@ -385,6 +410,40 @@ impl HiroRunner {
             let lc = self.lcap.lock().unwrap();
             if let Err(e) = lc.save_to_db(&self.memory.db) {
                 warn!("hiro: failed to persist LCAP state: {e}");
+            }
+        }
+
+        // H13 verification hook: any metacognitive entries logged at
+        // (round - 1) become eligible for credit now that we know the
+        // per-category fingerprint at `round`. The lever-specific verifier
+        // credits each entry only when the DHE layer its prediction targets
+        // actually moved — a tool-only improvement doesn't credit a
+        // reasoning attribution, etc.
+        if let Some(metacog) = &self.metacog {
+            if round > 0 {
+                let prior_fp = bf
+                    .get_round(round - 1)
+                    .ok()
+                    .flatten()
+                    .map(|fp| [fp.p_tool, fp.p_plan, fp.p_correct])
+                    .unwrap_or([0.0, 0.0, 0.0]);
+                let curr_fp = [p_tool, p_plan, p_correct];
+                match metacog.verify_round_lever_specific(
+                    round - 1,
+                    prior_fp,
+                    curr_fp,
+                    self.metacog_credit_threshold,
+                ) {
+                    Ok(n) if n > 0 => info!(
+                        "hiro: lever-specific verified {n} attribution(s) for round {} (prior_fp={:?}, curr_fp={:?}, threshold={:.3})",
+                        round - 1,
+                        prior_fp,
+                        curr_fp,
+                        self.metacog_credit_threshold,
+                    ),
+                    Ok(_) => {}
+                    Err(e) => warn!("hiro: failed to verify metacognitive attributions: {e}"),
+                }
             }
         }
 

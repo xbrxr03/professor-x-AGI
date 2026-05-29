@@ -3040,7 +3040,10 @@ async fn run_hiro_benchmark(
     if let Some(b) = memory_budget {
         info!("HIRO memory-budget override: {b} tokens");
     }
-    let mut runner = HiroRunner::new(ollama, registry, policy, memory, cancel).with_events(events);
+    let metacog = memd::metacognitive::MetacognitiveStore::new(Arc::clone(&memory.db));
+    let mut runner = HiroRunner::new(ollama, registry, policy, memory, cancel)
+        .with_events(events)
+        .with_metacog_store(metacog);
     if let Some(b) = memory_budget {
         runner = runner.with_memory_budget_override(b);
     }
@@ -3081,9 +3084,11 @@ async fn run_hiro_null_baseline(
     if let Some(b) = memory_budget {
         info!("HIRO null memory-budget override: {b} tokens");
     }
+    let metacog = memd::metacognitive::MetacognitiveStore::new(Arc::clone(&memory.db));
     let mut runner = HiroRunner::new(ollama, registry, policy, memory, cancel)
         .with_events(events)
-        .as_null_baseline();
+        .as_null_baseline()
+        .with_metacog_store(metacog);
     if let Some(b) = memory_budget {
         runner = runner.with_memory_budget_override(b);
     }
