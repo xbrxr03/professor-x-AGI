@@ -147,9 +147,10 @@ impl MetacognitiveStore {
     /// pending entry from `prior_round`. If `current_pass_at_3 -
     /// prior_pass_at_3 >= delta_threshold`, the attribution is credited.
     ///
-    /// This is intentionally cheap and lever-agnostic. A lever-specific
-    /// follow-up (per-category fingerprint deltas mapped to the predicted
-    /// lever) is the next step toward the H13 MCA-IR claim.
+    /// Kept for callers that don't have a fingerprint handy. Prefer
+    /// `verify_round_lever_specific` when the per-category fingerprint is
+    /// available — it credits attributions only when the predicted layer's
+    /// targeted category actually improves, which is what H13 needs.
     pub fn verify_round(
         &self,
         prior_round: u32,
@@ -162,6 +163,38 @@ impl MetacognitiveStore {
         let credit = delta >= delta_threshold;
         let n = pending.len();
         for entry in &pending {
+            if let Some(id) = entry.id {
+                self.verify_attribution(id, delta, credit)?;
+            }
+        }
+        Ok(n)
+    }
+
+    /// Lever-specific verification driver. Each pending entry's
+    /// `predicted_layer` selects which of the per-category deltas the
+    /// verifier inspects — a Layer-3 (tool dispatch) attribution only earns
+    /// credit when `p_tool` improves; a Layer-5 (reasoning) attribution
+    /// needs `p_plan` + `p_correct` to move; etc. Cross-cutting layers
+    /// (1 retrieval, 2 context) fall back to the overall pass@3 delta.
+    /// Unknown layers (e.g. `predicted_layer = 0` from the parser default)
+    /// also use overall.
+    ///
+    /// This refines the coarse `verify_round` so a tool-only improvement
+    /// doesn't accidentally credit a reasoning attribution and vice versa.
+    /// MCA computed from these credits is what `H13 Pearson r(MCA, IR)`
+    /// expects.
+    pub fn verify_round_lever_specific(
+        &self,
+        prior_round: u32,
+        prior_fp: [f32; 3],
+        curr_fp: [f32; 3],
+        delta_threshold: f32,
+    ) -> Result<usize> {
+        let pending = self.pending_for_round(prior_round)?;
+        let n = pending.len();
+        for entry in &pending {
+            let delta = relevant_delta_for_layer(entry.predicted_layer, prior_fp, curr_fp);
+            let credit = delta >= delta_threshold;
             if let Some(id) = entry.id {
                 self.verify_attribution(id, delta, credit)?;
             }
@@ -215,6 +248,35 @@ impl MetacognitiveStore {
     pub fn mca_rolling(&self, current_round: u32, window_rounds: u32) -> Result<(f32, usize)> {
         let start = current_round.saturating_sub(window_rounds.saturating_sub(1));
         self.mca_for_window(start, current_round)
+    }
+}
+
+/// Index into `[p_tool, p_plan, p_correct]` fingerprints.
+const P_TOOL: usize = 0;
+const P_PLAN: usize = 1;
+const P_CORRECT: usize = 2;
+
+/// Pick the relevant per-category delta for a DHE layer.
+///
+/// Mapping (from ARCHITECTURE.md §14 + paper outline §6.1):
+/// - Layer 1 retrieval, Layer 2 context: cross-cutting — overall mean delta.
+/// - Layer 3 tool dispatch: `p_tool` only.
+/// - Layer 4 tool execution: `p_tool` only (tool category dominates).
+/// - Layer 5 reasoning: average of `p_plan` and `p_correct`.
+/// - Layer 0 (unknown / parser default): overall mean delta.
+pub(crate) fn relevant_delta_for_layer(
+    layer: u8,
+    prior_fp: [f32; 3],
+    curr_fp: [f32; 3],
+) -> f32 {
+    let d_tool = curr_fp[P_TOOL] - prior_fp[P_TOOL];
+    let d_plan = curr_fp[P_PLAN] - prior_fp[P_PLAN];
+    let d_correct = curr_fp[P_CORRECT] - prior_fp[P_CORRECT];
+    match layer {
+        3 | 4 => d_tool,
+        5 => (d_plan + d_correct) / 2.0,
+        // Layers 1, 2, and 0 (unknown) — cross-cutting overall.
+        _ => (d_tool + d_plan + d_correct) / 3.0,
     }
 }
 
@@ -351,5 +413,96 @@ mod tests {
         let (mca, n) = store.mca_rolling(9, 5).unwrap();
         assert_eq!(n, 5);
         assert!(mca < 0.01);
+    }
+
+    // ── Lever-specific verification ───────────────────────────────────────
+
+    #[test]
+    fn layer3_attribution_credited_only_on_tool_delta() {
+        // Layer 3 = tool dispatch — should care only about p_tool.
+        let prior = [0.30, 0.40, 0.50];
+        let curr_tool_only = [0.50, 0.40, 0.50];
+        let d = relevant_delta_for_layer(3, prior, curr_tool_only);
+        assert!((d - 0.20).abs() < 1e-5);
+
+        // Same overall pass@3 (mean), but the improvement is on planning,
+        // not tool. Layer-3 verdict should see ~zero delta.
+        let curr_plan_only = [0.30, 0.60, 0.50];
+        let d_plan = relevant_delta_for_layer(3, prior, curr_plan_only);
+        assert!(d_plan.abs() < 1e-5);
+    }
+
+    #[test]
+    fn layer5_attribution_uses_plan_and_correct_average() {
+        let prior = [0.30, 0.40, 0.50];
+        let curr = [0.30, 0.50, 0.60];
+        // Layer 5 — reasoning. p_plan +0.10, p_correct +0.10 → avg 0.10.
+        let d = relevant_delta_for_layer(5, prior, curr);
+        assert!((d - 0.10).abs() < 1e-5);
+        // p_tool moving alone shouldn't change Layer-5's verdict.
+        let curr_tool = [0.99, 0.40, 0.50];
+        let d_tool = relevant_delta_for_layer(5, prior, curr_tool);
+        assert!(d_tool.abs() < 1e-5);
+    }
+
+    #[test]
+    fn cross_cutting_layers_use_overall_mean() {
+        let prior = [0.30, 0.40, 0.50];
+        let curr = [0.40, 0.50, 0.60];
+        // Mean delta = (0.10 + 0.10 + 0.10)/3 = 0.10.
+        for layer in [0u8, 1, 2] {
+            let d = relevant_delta_for_layer(layer, prior, curr);
+            assert!(
+                (d - 0.10).abs() < 1e-5,
+                "layer {layer} expected 0.10 mean delta, got {d}"
+            );
+        }
+    }
+
+    #[test]
+    fn verify_round_lever_specific_credits_per_layer() {
+        let store = fresh_store();
+        // Two attributions on the same round: Layer 3 (tool-only) and
+        // Layer 5 (reasoning).
+        let _ = store
+            .append(&MetacognitiveEntry::new(1, "ToolDescription(\"x\")", 3, 3, 0.7))
+            .unwrap();
+        let _ = store
+            .append(&MetacognitiveEntry::new(1, "SystemPrompt", 5, 3, 0.7))
+            .unwrap();
+        // Only p_tool improved. Layer-3 should be credited; Layer-5 not.
+        let prior = [0.30, 0.40, 0.50];
+        let curr = [0.50, 0.40, 0.50];
+        let n = store
+            .verify_round_lever_specific(1, prior, curr, 0.05)
+            .unwrap();
+        assert_eq!(n, 2);
+        let entries = store.recent(10).unwrap();
+        let layer3 = entries.iter().find(|e| e.predicted_layer == 3).unwrap();
+        let layer5 = entries.iter().find(|e| e.predicted_layer == 5).unwrap();
+        assert!(layer3.attribution_correct);
+        assert!(!layer5.attribution_correct);
+    }
+
+    #[test]
+    fn verify_round_lever_specific_records_per_entry_delta() {
+        let store = fresh_store();
+        store
+            .append(&MetacognitiveEntry::new(2, "ToolDescription(\"x\")", 3, 3, 0.7))
+            .unwrap();
+        store
+            .append(&MetacognitiveEntry::new(2, "SystemPrompt", 5, 3, 0.7))
+            .unwrap();
+        let prior = [0.30, 0.40, 0.50];
+        let curr = [0.50, 0.50, 0.60]; // tool +0.20, plan +0.10, correct +0.10
+        store
+            .verify_round_lever_specific(2, prior, curr, 0.05)
+            .unwrap();
+        let entries = store.recent(10).unwrap();
+        let layer3 = entries.iter().find(|e| e.predicted_layer == 3).unwrap();
+        let layer5 = entries.iter().find(|e| e.predicted_layer == 5).unwrap();
+        assert!((layer3.actual_improvement - 0.20).abs() < 1e-5);
+        // Layer 5: avg(0.10, 0.10) = 0.10
+        assert!((layer5.actual_improvement - 0.10).abs() < 1e-5);
     }
 }

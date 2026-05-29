@@ -287,26 +287,31 @@ impl HiroRunner {
         }
 
         // H13 verification hook: any metacognitive entries logged at
-        // (round - 1) become eligible for credit now that we know
-        // pass@3 at `round`. Threshold is `metacog_credit_threshold`.
+        // (round - 1) become eligible for credit now that we know the
+        // per-category fingerprint at `round`. The lever-specific verifier
+        // credits each entry only when the DHE layer its prediction targets
+        // actually moved — a tool-only improvement doesn't credit a
+        // reasoning attribution, etc.
         if let Some(metacog) = &self.metacog {
             if round > 0 {
-                let prior_pass = bf
+                let prior_fp = bf
                     .get_round(round - 1)
                     .ok()
                     .flatten()
-                    .map(|fp| (fp.p_tool + fp.p_plan + fp.p_correct) / 3.0)
-                    .unwrap_or(0.0);
-                match metacog.verify_round(
+                    .map(|fp| [fp.p_tool, fp.p_plan, fp.p_correct])
+                    .unwrap_or([0.0, 0.0, 0.0]);
+                let curr_fp = [p_tool, p_plan, p_correct];
+                match metacog.verify_round_lever_specific(
                     round - 1,
-                    prior_pass,
-                    pass_at_3,
+                    prior_fp,
+                    curr_fp,
                     self.metacog_credit_threshold,
                 ) {
                     Ok(n) if n > 0 => info!(
-                        "hiro: verified {n} metacognitive attribution(s) for round {} (delta={:.3}, threshold={:.3})",
+                        "hiro: lever-specific verified {n} attribution(s) for round {} (prior_fp={:?}, curr_fp={:?}, threshold={:.3})",
                         round - 1,
-                        pass_at_3 - prior_pass,
+                        prior_fp,
+                        curr_fp,
                         self.metacog_credit_threshold,
                     ),
                     Ok(_) => {}
