@@ -67,7 +67,7 @@ pub fn valence_from_outcome(actual_score: f32, predicted_score: f32) -> f32 {
 /// `[0, 1]` by `1 - exp(-x)` so the metric saturates rather than blowing up.
 pub fn arousal_from_load(tool_density: f32, retry_pressure: f32) -> f32 {
     let raw = (tool_density + retry_pressure).max(0.0);
-    1.0 - (-raw).exp()
+    (1.0 - (-raw).exp()).min(1.0 - f32::EPSILON)
 }
 
 /// Human-readable label for `<affect state="...">` prompt injection.

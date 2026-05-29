@@ -114,13 +114,13 @@ impl ArtifactKind {
     /// Used by `validate_path_root`.
     pub fn allowed_root(self) -> &'static str {
         match self {
-            Self::DailyUpdate => "ops/daily",
+            Self::DailyUpdate => "professor-x/ops/daily",
             Self::LiteratureNote => "brain/literature",
-            Self::ExperimentResult => "brain",
-            Self::HiroRun => "artifacts/hiro/rounds",
-            Self::HiroNullBaseline => "artifacts/hiro/null-baselines",
-            Self::EvolutionProposal => "artifacts/evolution/proposals",
-            Self::EvolutionRejection => "artifacts/evolution/rejections",
+            Self::ExperimentResult => "brain/experiments",
+            Self::HiroRun => "professor-x/artifacts/hiro/rounds",
+            Self::HiroNullBaseline => "professor-x/artifacts/hiro/null-baselines",
+            Self::EvolutionProposal => "professor-x/artifacts/evolution/proposals",
+            Self::EvolutionRejection => "professor-x/artifacts/evolution/rejections",
         }
     }
 }
@@ -316,20 +316,17 @@ impl ArtifactValidator {
             ArtifactKind::EvolutionProposal,
             ArtifactKind::EvolutionRejection,
         ] {
-            let root = repo_root.join(kind.allowed_root());
-            if !root.exists() {
-                continue;
-            }
-            for path in walk_dir(&root) {
-                let mut checks = vec![check_path_root(kind, &path)];
-                checks.extend(validate_required_fields(kind, &path));
-                checks.push(check_no_nested_pxpx_for_path(&path));
-                let passed = checks.iter().all(|c| c.passed);
-                entries.push((
-                    kind,
-                    path,
-                    ArtifactCheckBundle { passed, checks },
-                ));
+            for root in repo_scan_roots(repo_root, kind) {
+                if !root.exists() {
+                    continue;
+                }
+                for path in walk_dir(&root).into_iter().filter(|path| is_artifact_file(path)) {
+                    let mut checks = vec![check_path_root(kind, &path)];
+                    checks.extend(validate_required_fields(kind, &path));
+                    checks.push(check_no_nested_pxpx_for_path(&path));
+                    let passed = checks.iter().all(|c| c.passed);
+                    entries.push((kind, path, ArtifactCheckBundle { passed, checks }));
+                }
             }
         }
 
@@ -471,7 +468,8 @@ fn check_no_nested_brain_writes() -> ArtifactCheck {
 fn check_path_root(kind: ArtifactKind, path: &Path) -> ArtifactCheck {
     let s = path.to_string_lossy().replace('\\', "/");
     let allowed = kind.allowed_root();
-    if s.contains(allowed) {
+    let crate_relative = allowed.strip_prefix("professor-x/").unwrap_or(allowed);
+    if s.contains(allowed) || s.contains(crate_relative) {
         ArtifactCheck::pass("path_root", format!("{} under {}", kind.as_str(), allowed))
     } else {
         ArtifactCheck::fail(
@@ -613,7 +611,7 @@ fn parse_frontmatter_fields(raw: &str) -> Result<BTreeMap<String, String>> {
         if trimmed_end.is_empty() {
             continue;
         }
-        if let Some(stripped) = trimmed_end.strip_prefix("- ") {
+        if let Some(stripped) = trimmed_end.trim_start().strip_prefix("- ") {
             // List item under the most recent key.
             if current_key.is_some() {
                 current_list.push(stripped.trim().to_string());
@@ -650,33 +648,66 @@ fn parse_frontmatter_fields(raw: &str) -> Result<BTreeMap<String, String>> {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn locate_artifact(kind: ArtifactKind) -> Option<PathBuf> {
-    let root = PathBuf::from(kind.allowed_root());
-    if !root.exists() {
-        return None;
-    }
-    match kind {
-        ArtifactKind::DailyUpdate => {
-            let today = Local::now().format("%Y-%m-%d").to_string();
-            let candidate = root.join(format!("{today}.md"));
-            candidate.exists().then_some(candidate)
+    for root in cwd_candidate_roots(kind) {
+        if !root.exists() {
+            continue;
         }
-        _ => {
-            // Most-recently-modified file under the allowed root.
-            let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
-            for path in walk_dir(&root) {
-                let Ok(meta) = std::fs::metadata(&path) else {
-                    continue;
-                };
-                let Ok(modified) = meta.modified() else {
-                    continue;
-                };
-                if best.as_ref().map(|(t, _)| modified > *t).unwrap_or(true) {
-                    best = Some((modified, path));
+        match kind {
+            ArtifactKind::DailyUpdate => {
+                let today = Local::now().format("%Y-%m-%d").to_string();
+                let candidate = root.join(format!("{today}.md"));
+                if candidate.exists() {
+                    return Some(candidate);
                 }
             }
-            best.map(|(_, p)| p)
+            _ => {
+                // Most-recently-modified file under the allowed root.
+                let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+                for path in walk_dir(&root).into_iter().filter(|path| is_artifact_file(path)) {
+                    let Ok(meta) = std::fs::metadata(&path) else {
+                        continue;
+                    };
+                    let Ok(modified) = meta.modified() else {
+                        continue;
+                    };
+                    if best.as_ref().map(|(t, _)| modified > *t).unwrap_or(true) {
+                        best = Some((modified, path));
+                    }
+                }
+                if let Some((_, path)) = best {
+                    return Some(path);
+                }
+            }
         }
     }
+    None
+}
+
+fn repo_scan_roots(repo_root: &Path, kind: ArtifactKind) -> Vec<PathBuf> {
+    vec![repo_root.join(kind.allowed_root())]
+}
+
+fn cwd_candidate_roots(kind: ArtifactKind) -> Vec<PathBuf> {
+    let allowed = kind.allowed_root();
+    let mut roots = vec![PathBuf::from(allowed)];
+    if let Some(stripped) = allowed.strip_prefix("professor-x/") {
+        roots.push(PathBuf::from(stripped));
+    }
+    roots
+}
+
+fn is_artifact_file(path: &Path) -> bool {
+    if path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == ".gitkeep")
+    {
+        return false;
+    }
+    matches!(
+        path.extension().and_then(|ext| ext.to_str()),
+        Some("json" | "md")
+    )
 }
 
 fn walk_dir(root: &Path) -> Vec<PathBuf> {
