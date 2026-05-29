@@ -226,6 +226,31 @@ CREATE TABLE IF NOT EXISTS work_loop_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_work_loop_runs_recorded ON work_loop_runs(recorded_at);
 
+CREATE TABLE IF NOT EXISTS work_loop_gates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    run_kind TEXT NOT NULL DEFAULT 'supervised',
+    profile TEXT NOT NULL DEFAULT 'basic',
+    cycle INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    label TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'planned',
+    started_at TEXT,
+    completed_at TEXT,
+    passed INTEGER,
+    report_path TEXT,
+    transcript_path TEXT,
+    workspace TEXT,
+    detail TEXT NOT NULL DEFAULT '',
+    recorded_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(run_id, cycle)
+);
+CREATE INDEX IF NOT EXISTS idx_work_loop_gates_run ON work_loop_gates(run_id, cycle);
+CREATE INDEX IF NOT EXISTS idx_work_loop_gates_updated ON work_loop_gates(updated_at);
+CREATE INDEX IF NOT EXISTS idx_work_loop_gates_status ON work_loop_gates(status);
+
 CREATE TABLE IF NOT EXISTS cron_jobs (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -404,6 +429,16 @@ impl MemoryManager {
                 ("run_kind", "TEXT NOT NULL DEFAULT 'supervised'"),
                 ("profile", "TEXT NOT NULL DEFAULT 'basic'"),
                 ("planned_jobs", "TEXT NOT NULL DEFAULT '[]'"),
+            ],
+        )?;
+        ensure_columns(
+            &conn,
+            "work_loop_gates",
+            &[
+                ("run_kind", "TEXT NOT NULL DEFAULT 'supervised'"),
+                ("profile", "TEXT NOT NULL DEFAULT 'basic'"),
+                ("reason", "TEXT NOT NULL DEFAULT ''"),
+                ("detail", "TEXT NOT NULL DEFAULT ''"),
             ],
         )?;
         // Phase B truth gate — declared on a per-cron-job basis. Old rows get

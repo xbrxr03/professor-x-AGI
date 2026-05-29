@@ -33,7 +33,8 @@ use memd::events::EventStore;
 use memd::task_runs::{TaskRun, TaskRunStore};
 use memd::transcripts::{TranscriptStore, TranscriptSummary};
 use memd::work_loops::{
-    WorkLoopPlannedJob, WorkLoopRunRecord, WorkLoopRunStore, WorkLoopSmokeRecord,
+    WorkLoopGateStore, WorkLoopPlannedJob, WorkLoopRunRecord, WorkLoopRunStore,
+    WorkLoopSmokeRecord,
 };
 use memd::MemoryManager;
 use policyd::{AuditStore, Decision, PermissionScope, PolicyEngine};
@@ -1777,6 +1778,7 @@ async fn run_supervised_loop(
     let cycles = cycles.clamp(1, 50);
     let recent_runs = WorkLoopRunStore::new(Arc::clone(&memory.db)).recent(5)?;
     let planned_jobs = plan_work_loop_jobs(run_kind, profile, cycles, &recent_runs);
+    let gate_store = WorkLoopGateStore::new(Arc::clone(&memory.db));
     events.append(
         None,
         None,
@@ -1795,6 +1797,12 @@ async fn run_supervised_loop(
         }),
     )?;
     for planned in &planned_jobs {
+        gate_store.record_planned(
+            &run_id,
+            run_kind.as_str(),
+            profile.as_str(),
+            planned,
+        )?;
         events.append(
             None,
             None,
@@ -1826,6 +1834,7 @@ async fn run_supervised_loop(
         let job = parse_work_loop_job(&planned.kind)
             .unwrap_or_else(|| work_loop_job_for_cycle(profile, cycle));
         let before_smoke_id = smoke_store.latest()?.and_then(|record| record.id);
+        gate_store.mark_running(&run_id, cycle)?;
         events.append(
             None,
             None,
@@ -1868,6 +1877,13 @@ async fn run_supervised_loop(
             record.cycle = cycle;
             records.push(record);
         }
+        gate_store.finish(
+            &run_id,
+            cycle,
+            passed,
+            records.last().filter(|record| record.cycle == cycle),
+            error.as_deref(),
+        )?;
 
         events.append(
             None,
@@ -3308,6 +3324,7 @@ fn print_work_loops(memory: Arc<MemoryManager>, limit: usize) -> Result<()> {
         println!("No supervised work-loop runs recorded yet.");
         return Ok(());
     }
+    let gate_store = WorkLoopGateStore::new(Arc::clone(&memory.db));
     println!("Recent work/operator loops");
     for run in runs {
         println!(
@@ -3349,6 +3366,16 @@ fn print_work_loops(memory: Arc<MemoryManager>, limit: usize) -> Result<()> {
         }
         if run.smoke_records.len() > 8 {
             println!("  ... {} more cycle(s)", run.smoke_records.len() - 8);
+        }
+        for gate in gate_store.recent_for_run(&run.run_id, 8)? {
+            println!(
+                "  gate {}: {} {} report={} detail={}",
+                gate.cycle,
+                gate.kind,
+                gate.status,
+                gate.report_path.as_deref().unwrap_or("none"),
+                truncate(&gate.detail, 80),
+            );
         }
     }
     Ok(())

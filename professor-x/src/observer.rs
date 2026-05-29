@@ -22,7 +22,9 @@ use crate::memd::free_energy::FreeEnergyStore;
 use crate::memd::metacognitive::{MetacognitiveEntry, MetacognitiveStore};
 use crate::memd::task_runs::{TaskRun, TaskRunStore};
 use crate::memd::transcripts::{TranscriptStore, TranscriptSummary};
-use crate::memd::work_loops::{WorkLoopRunRecord, WorkLoopRunStore};
+use crate::memd::work_loops::{
+    WorkLoopGateRecord, WorkLoopGateStore, WorkLoopRunRecord, WorkLoopRunStore,
+};
 use crate::memd::MemoryManager;
 
 const TICK_RATE: Duration = Duration::from_millis(750);
@@ -125,6 +127,12 @@ pub fn print_snapshot(memory: Arc<MemoryManager>, events: Arc<EventStore>) -> Re
             .unwrap_or_else(|| "waiting; launch with cargo run -- --autonomous-run 4".to_string())
     );
     println!("  work loops: {} runs", snapshot.work_loop_count);
+    if let Some(gate) = &snapshot.latest_work_loop_gate {
+        println!(
+            "    current gate: {}",
+            work_loop_gate_summary(gate, 110)
+        );
+    }
     if let Some(run) = &snapshot.latest_work_loop {
         println!(
             "    latest loop: {}:{} {} / {}/{} passed / {} failed / report {}",
@@ -152,6 +160,9 @@ pub fn print_snapshot(memory: Arc<MemoryManager>, events: Arc<EventStore>) -> Re
                 if smoke.passed { "passed" } else { "failed" },
                 truncate(&smoke.report_path, 96),
             );
+        }
+        for gate in snapshot.recent_work_loop_gates.iter().take(5) {
+            println!("      gate {}: {}", gate.cycle, work_loop_gate_summary(gate, 96));
         }
     }
     println!(
@@ -411,6 +422,8 @@ struct ObserverSnapshot {
     latest_transcript_summary: Option<TranscriptSummary>,
     latest_coding_smoke: Option<CodingSmokeRecord>,
     latest_work_loop: Option<WorkLoopRunRecord>,
+    latest_work_loop_gate: Option<WorkLoopGateRecord>,
+    recent_work_loop_gates: Vec<WorkLoopGateRecord>,
     recent_work_loops: Vec<WorkLoopRunRecord>,
 }
 
@@ -540,6 +553,14 @@ impl ObserverSnapshot {
         snapshot.work_loop_count = work_loop_store.count()?;
         snapshot.recent_work_loops = work_loop_store.recent(5)?;
         snapshot.latest_work_loop = snapshot.recent_work_loops.first().cloned();
+        let gate_store = WorkLoopGateStore::new(Arc::clone(&memory.db));
+        snapshot.recent_work_loop_gates = snapshot
+            .latest_work_loop
+            .as_ref()
+            .map(|run| gate_store.recent_for_run(&run.run_id, 10))
+            .transpose()?
+            .unwrap_or_else(Vec::new);
+        snapshot.latest_work_loop_gate = gate_store.latest()?;
         snapshot.latest_autonomous_run = events.latest_of_type("autonomous_run.requested")?;
 
         let repo = repo_root();
@@ -742,6 +763,8 @@ impl Default for ObserverSnapshot {
             latest_transcript_summary: None,
             latest_coding_smoke: None,
             latest_work_loop: None,
+            latest_work_loop_gate: None,
+            recent_work_loop_gates: Vec::new(),
             recent_work_loops: Vec::new(),
         }
     }
@@ -935,6 +958,7 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &ObserverApp) {
 fn draw_activity(frame: &mut Frame, area: Rect, app: &ObserverApp) {
     let lines = vec![
         latest_autonomous_run_line(&app.snapshot.latest_autonomous_run),
+        latest_work_loop_gate_line(&app.snapshot.latest_work_loop_gate),
         latest_work_loop_line(&app.snapshot.latest_work_loop),
         latest_run_line(&app.snapshot.latest_run),
         latest_line("task", &app.snapshot.latest_task),
@@ -1019,6 +1043,10 @@ fn draw_science(frame: &mut Frame, area: Rect, app: &ObserverApp) {
     ];
     note_lines.extend(recent_metacog_detail(&app.snapshot.recent_metacog));
     note_lines.extend(latest_run_detail(&app.snapshot.latest_run));
+    note_lines.extend(latest_work_loop_gate_detail(
+        &app.snapshot.latest_work_loop_gate,
+        &app.snapshot.recent_work_loop_gates,
+    ));
     note_lines.extend(latest_work_loop_detail(&app.snapshot.latest_work_loop));
     let note = Paragraph::new(note_lines)
         .style(Style::default().fg(Color::Gray))
@@ -1227,6 +1255,21 @@ fn latest_work_loop_line(run: &Option<WorkLoopRunRecord>) -> Line<'static> {
     }
 }
 
+fn latest_work_loop_gate_line(gate: &Option<WorkLoopGateRecord>) -> Line<'static> {
+    match gate {
+        Some(gate) => Line::from(vec![
+            Span::styled("gate    ", label()),
+            Span::styled(format!("{:<8}", gate.status), gate_status_style(&gate.status)),
+            Span::raw(work_loop_gate_summary(gate, 62)),
+        ]),
+        None => Line::from(vec![
+            Span::styled("gate    ", label()),
+            Span::styled("waiting", Style::default().fg(Color::DarkGray)),
+            Span::raw("  no gate records yet"),
+        ]),
+    }
+}
+
 fn latest_autonomous_run_line(event: &Option<AgentEvent>) -> Line<'static> {
     match event {
         Some(event) => Line::from(vec![
@@ -1292,6 +1335,42 @@ fn status_style(status: &str) -> Style {
     Style::default().fg(color)
 }
 
+fn gate_status_style(status: &str) -> Style {
+    let color = match status {
+        "passed" => Color::Green,
+        "running" => Color::Cyan,
+        "failed" => Color::Red,
+        "planned" => Color::Yellow,
+        _ => Color::White,
+    };
+    Style::default().fg(color)
+}
+
+fn work_loop_gate_summary(gate: &WorkLoopGateRecord, max_chars: usize) -> String {
+    let proof = gate
+        .report_path
+        .as_ref()
+        .or(gate.transcript_path.as_ref())
+        .map(|path| format!(" / {}", truncate(path, 48)))
+        .unwrap_or_default();
+    let passed = gate
+        .passed
+        .map(|passed| format!(" / passed={passed}"))
+        .unwrap_or_default();
+    let timing = gate
+        .completed_at
+        .or(gate.started_at)
+        .map(|time| format!(" / {}", time.format("%H:%M:%S")))
+        .unwrap_or_default();
+    truncate(
+        &format!(
+            "{}:{} cycle {} {}{}{}{}",
+            gate.run_kind, gate.profile, gate.cycle, gate.kind, passed, timing, proof
+        ),
+        max_chars,
+    )
+}
+
 fn autonomous_run_summary(event: &AgentEvent) -> String {
     let profile = event.payload["profile"].as_str().unwrap_or("unknown");
     let cycles = event.payload["cycles"].as_u64().unwrap_or_default();
@@ -1304,6 +1383,43 @@ fn autonomous_run_summary(event: &AgentEvent) -> String {
         event.id,
         event.timestamp.format("%H:%M:%S"),
     )
+}
+
+fn latest_work_loop_gate_detail(
+    latest: &Option<WorkLoopGateRecord>,
+    recent: &[WorkLoopGateRecord],
+) -> Vec<Line<'static>> {
+    let Some(latest) = latest else {
+        return vec![Line::from(
+            "Gate state: waiting for planned/running/passed records.",
+        )];
+    };
+    let mut lines = vec![Line::from(format!(
+        "Gate state: {} / reason {}",
+        work_loop_gate_summary(latest, 96),
+        truncate(&latest.reason, 72),
+    ))];
+    if !latest.detail.is_empty() {
+        lines.push(Line::from(format!(
+            "Gate detail: {}",
+            truncate(&latest.detail, 96)
+        )));
+    }
+    for gate in recent.iter().take(4) {
+        lines.push(Line::from(vec![
+            Span::styled(format!("gate {:<2} ", gate.cycle), label()),
+            Span::styled(format!("{:<8}", gate.status), gate_status_style(&gate.status)),
+            Span::raw(format!(
+                "{} / {}",
+                gate.kind,
+                gate.report_path
+                    .as_ref()
+                    .map(|path| truncate(path, 74))
+                    .unwrap_or_else(|| truncate(&gate.reason, 74)),
+            )),
+        ]));
+    }
+    lines
 }
 
 fn latest_autonomous_run_detail(event: &Option<AgentEvent>) -> Line<'static> {
