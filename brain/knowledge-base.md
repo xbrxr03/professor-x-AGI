@@ -26,9 +26,9 @@ What I currently know, with sources. This grows as I research. Every claim has a
 
 **Optimal context utilization is 40–70%.** [Context Window Utilization (arXiv:2407.19794)](https://arxiv.org/abs/2407.19794): no improvement beyond 10 retrieved chunks. Llama3-70B-Instruct peaks at 7–9 chunks at 512–1024 tokens each.
 
-**For qwen2.5:14b-q4 on 12GB VRAM, the practical context limit is approximately 8K–16K tokens.** Derived from: model weights consume ~8.5–9GB, leaving ~3GB for KV cache. At 16K context, throughput drops 5–15×. At 14K context (Qwen1.5-14B equivalent), latency overhead is +700%. Conservative safe operating range: 6,000–10,000 tokens total context.
+**For qwen2.5:14b-q4 on 12GB VRAM (legacy priors — see "Primary Model Stack" below for current qwen3:8b-q4_k_m numbers), the practical context limit is approximately 8K–16K tokens.** Derived from: model weights consume ~8.5–9GB, leaving ~3GB for KV cache. At 16K context, throughput drops 5–15×. At 14K context (Qwen1.5-14B equivalent), latency overhead is +700%. Conservative safe operating range: 6,000–10,000 tokens total context. *Current qwen3:8b-q4_k_m priors widen the safe range to ~12K–24K and push T* (H1) to [8K, 14K]; see hypotheses.md H1 note on model migration.*
 
-**Quantization compounds context degradation.** [arXiv:2505.20276](https://arxiv.org/abs/2505.20276): Q4 models degrade faster at long context than FP16, particularly with RoPE positional encoding. Professor X's model class (14B Q4) is specifically tested here.
+**Quantization compounds context degradation.** [arXiv:2505.20276](https://arxiv.org/abs/2505.20276): Q4 models degrade faster at long context than FP16, particularly with RoPE positional encoding. Professor X's model class (8B Q4_K_M) is one quantization tier above the lowest tested in this paper.
 
 **Retrieval failure is the dominant bottleneck, not reasoning.** [Mem2ActBench (arXiv:2601.19935)](https://arxiv.org/abs/2601.19935): oracle injection (F1 ≈ 53.8) vs. standard retrieval (F1 ≈ 30.7) — 23-point gap. When the right memory is directly provided, performance jumps 23 points. The retrieval mechanism, not the model's reasoning, accounts for most failures.
 
@@ -40,11 +40,11 @@ What I currently know, with sources. This grows as I research. Every claim has a
 
 ## On Consumer Hardware Feasibility
 
-**qwen2.5:14b-q4 is a defensible primary model choice.** [SLMs paper (arXiv:2506.02153)](https://arxiv.org/abs/2506.02153): 7B SLMs match or surpass frontier models on structured agentic tasks (tool calling, constrained output). A Q4-quantized 14B model is a conservative, more capable choice than the 7B models benchmarked.
+**qwen3:8b-q4_k_m is a defensible primary model choice.** [SLMs paper (arXiv:2506.02153)](https://arxiv.org/abs/2506.02153): 7B SLMs match or surpass frontier models on structured agentic tasks (tool calling, constrained output). qwen3:8b-q4_k_m sits at the lower end of that 7B+ band with the SDAR-tested family advantage. *Historical note: the project originally planned qwen2.5:14b-q4 and migrated to qwen3:8b-q4_k_m in May 2026 (see "Primary Model Stack" below).*
 
-**The harness matters more than the model at this scale.** HAL's +36pp scaffold finding means a well-engineered harness around a 14B model can outperform a poorly-engineered harness around a frontier model on structured tasks. This is the empirical foundation for the thesis.
+**The harness matters more than the model at this scale.** HAL's +36pp scaffold finding means a well-engineered harness around an 8B model can outperform a poorly-engineered harness around a frontier model on structured tasks. This is the empirical foundation for the thesis.
 
-**xLAM-2-8B surpasses GPT-4o on function calling benchmarks.** [SLMs paper (arXiv:2506.02153)](https://arxiv.org/abs/2506.02153). Worth evaluating as a dedicated tool-dispatch sub-model inside Professor X alongside qwen2.5:14b-q4 as the primary reasoning model.
+**xLAM-2-8B surpasses GPT-4o on function calling benchmarks.** [SLMs paper (arXiv:2506.02153)](https://arxiv.org/abs/2506.02153). Worth evaluating as a dedicated tool-dispatch sub-model inside Professor X alongside qwen3:8b-q4_k_m as the primary reasoning model.
 
 **all-MiniLM-L6-v2 at 384 dimensions is the correct embedding model.** Used by ASI-Evolve ([arXiv:2603.29640](https://arxiv.org/abs/2603.29640)) in production. ~80MB RAM. CPU-only (no VRAM cost). ~5–10ms per embedding. CLAG ([arXiv:2603.15421](https://arxiv.org/abs/2603.15421)) validates retrieval quality using this model.
 

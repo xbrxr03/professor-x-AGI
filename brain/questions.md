@@ -14,13 +14,13 @@ Before I can claim Professor X improves, I need to know how much variance a stat
 
 ---
 
-## Q2 — Does qwen2.5:14b-q4 have a reliable self-evaluation signal?
+## Q2 — Does qwen3:8b-q4_k_m have a reliable self-evaluation signal?
 
 H5, H7, and H8 all depend on the model being able to evaluate its own output quality. If the model cannot reliably distinguish a good answer from a bad one, the evolved loop's outcome tracking is noise.
 
 **What I need:** On 50 tasks with known correct answers, have the model evaluate its own responses (good/bad) and compute correlation with the ground truth label. If correlation < 0.7, self-evaluation is unreliable and I need a rule-based evaluator for HIRO.
 
-**Known evidence:** [Reflexion (arXiv:2303.11366)](https://arxiv.org/abs/2303.11366) shows self-evaluation works in 7B+ models. But Reflexion used GPT-3.5/4. qwen2.5:14b-q4 may behave differently.
+**Known evidence:** [Reflexion (arXiv:2303.11366)](https://arxiv.org/abs/2303.11366) shows self-evaluation works in 7B+ models. But Reflexion used GPT-3.5/4; qwen3:8b-q4_k_m is at the lower end of the 7B+ band and may behave differently.
 
 ---
 
