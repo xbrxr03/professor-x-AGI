@@ -55,6 +55,10 @@ struct CliArgs {
     hiro_limit: Option<usize>,
     /// Run N static HIRO null-condition rounds and exit.
     hiro_null_rounds: Option<u32>,
+    /// H1 sweep override: hard ceiling on the per-task context budget.
+    /// Applies to --hiro and --hiro-null. Recommended sweep set (from
+    /// brain/hypotheses.md H1): 500, 1000, 2000, 4000, 6000, 10000, 16000.
+    memory_budget: Option<u32>,
     /// Print the ordered daily cycle jobs and exit.
     dry_run_daily: bool,
     /// Print current daemon/scheduler/event status and exit.
@@ -159,6 +163,7 @@ fn parse_args() -> CliArgs {
         hiro_round: None,
         hiro_limit: None,
         hiro_null_rounds: None,
+        memory_budget: None,
         dry_run_daily: false,
         status: false,
         events_limit: None,
@@ -207,6 +212,10 @@ fn parse_args() -> CliArgs {
             }
             "--hiro-null" if i + 1 < args.len() => {
                 cli.hiro_null_rounds = args[i + 1].parse::<u32>().ok();
+                i += 2;
+            }
+            "--memory-budget" if i + 1 < args.len() => {
+                cli.memory_budget = args[i + 1].parse::<u32>().ok();
                 i += 2;
             }
             "--dry-run-daily" => {
@@ -633,6 +642,7 @@ async fn main() -> Result<()> {
             Arc::clone(&events),
             cancel,
             cli.hiro_limit,
+            cli.memory_budget,
         )
         .await;
     }
@@ -647,6 +657,7 @@ async fn main() -> Result<()> {
             Arc::clone(&events),
             cancel,
             cli.hiro_limit,
+            cli.memory_budget,
         )
         .await;
     }
@@ -3023,9 +3034,16 @@ async fn run_hiro_benchmark(
     events: Arc<EventStore>,
     cancel: CancellationToken,
     hiro_limit: Option<usize>,
+    memory_budget: Option<u32>,
 ) -> Result<()> {
     info!("HIRO benchmark — round {round}");
-    let runner = HiroRunner::new(ollama, registry, policy, memory, cancel).with_events(events);
+    if let Some(b) = memory_budget {
+        info!("HIRO memory-budget override: {b} tokens");
+    }
+    let mut runner = HiroRunner::new(ollama, registry, policy, memory, cancel).with_events(events);
+    if let Some(b) = memory_budget {
+        runner = runner.with_memory_budget_override(b);
+    }
     info!("HIRO run_id={}", runner.run_id());
     let result = if let Some(limit) = hiro_limit {
         info!("HIRO benchmark task limit: {limit}");
@@ -3057,11 +3075,18 @@ async fn run_hiro_null_baseline(
     events: Arc<EventStore>,
     cancel: CancellationToken,
     hiro_limit: Option<usize>,
+    memory_budget: Option<u32>,
 ) -> Result<()> {
     info!("HIRO null-condition baseline — {rounds} static round(s)");
-    let runner = HiroRunner::new(ollama, registry, policy, memory, cancel)
+    if let Some(b) = memory_budget {
+        info!("HIRO null memory-budget override: {b} tokens");
+    }
+    let mut runner = HiroRunner::new(ollama, registry, policy, memory, cancel)
         .with_events(events)
         .as_null_baseline();
+    if let Some(b) = memory_budget {
+        runner = runner.with_memory_budget_override(b);
+    }
     info!("HIRO null run_id={}", runner.run_id());
 
     for round in 0..rounds {

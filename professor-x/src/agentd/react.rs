@@ -60,6 +60,11 @@ pub struct ReactLoop {
     current_round: u32,
     events: Option<Arc<EventStore>>,
     transcripts: Option<Arc<TranscriptStore>>,
+    /// H1 experiment hook: hard override on the context-budget ceiling
+    /// LCAP would otherwise return. `None` keeps LCAP's selection; `Some(N)`
+    /// clamps the ceiling to N tokens per task. Lets `--memory-budget N`
+    /// sweep T* without touching LCAP arm state.
+    memory_budget_override: Option<u32>,
 }
 
 impl ReactLoop {
@@ -80,6 +85,7 @@ impl ReactLoop {
             current_round: 0,
             events: None,
             transcripts: None,
+            memory_budget_override: None,
         }
     }
 
@@ -96,6 +102,15 @@ impl ReactLoop {
 
     pub fn with_transcripts(mut self, transcripts: Arc<TranscriptStore>) -> Self {
         self.transcripts = Some(transcripts);
+        self
+    }
+
+    /// H1 context-injection threshold (T*) sweep hook. When set, every task
+    /// run by this loop uses `min(LCAP-selected ceiling, override)` as its
+    /// hard context ceiling. Recommended sweep set: 500, 1000, 2000, 4000,
+    /// 6000, 10000, 16000 tokens per hypotheses.md H1 §"Proposed test".
+    pub fn with_memory_budget_override(mut self, budget: u32) -> Self {
+        self.memory_budget_override = Some(budget);
         self
     }
 
@@ -137,10 +152,26 @@ impl ReactLoop {
 
         // LCAP: select context budget (Balanced before round 10, UCB1 after)
         let category = LcapPolicy::classify(&task.description);
-        let num_ctx = {
+        let lcap_ceiling = {
             let lc = self.lcap.lock().unwrap();
             lc.select(&category, self.current_round).hard_ceiling_tokens
         };
+        let num_ctx = effective_memory_ceiling(lcap_ceiling, self.memory_budget_override);
+        if let Some(override_budget) = self.memory_budget_override {
+            self.emit_event(
+                None,
+                Some(task.id),
+                "react.memory_budget.override",
+                format!(
+                    "memory budget overridden to {num_ctx} (lcap={lcap_ceiling}, requested={override_budget})"
+                ),
+                json!({
+                    "lcap_ceiling": lcap_ceiling,
+                    "requested": override_budget,
+                    "effective": num_ctx,
+                }),
+            );
+        }
 
         for attempt in 0..task.max_attempts {
             task.attempt_count = attempt + 1;
@@ -951,3 +982,45 @@ const TOOLS_DESCRIPTION: &str = "Available tools:
 - fail          {\"reason\": \"<why>\"} — signal task failed (all options exhausted)";
 
 const REACT_SUFFIX: &str = "Now complete the task. Follow the ReAct format.\n\nThought:";
+
+/// Resolve the effective per-task context ceiling. The override only ever
+/// clamps the LCAP-selected value down; raising it would let an H1 sweep
+/// silently exceed LCAP's learned distribution and contaminate other runs.
+pub(crate) fn effective_memory_ceiling(lcap_ceiling: u32, override_budget: Option<u32>) -> u32 {
+    match override_budget {
+        Some(b) => lcap_ceiling.min(b),
+        None => lcap_ceiling,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::effective_memory_ceiling;
+
+    #[test]
+    fn override_clamps_below_lcap() {
+        assert_eq!(effective_memory_ceiling(8192, Some(4096)), 4096);
+    }
+
+    #[test]
+    fn override_never_raises_above_lcap() {
+        assert_eq!(effective_memory_ceiling(4096, Some(16384)), 4096);
+    }
+
+    #[test]
+    fn no_override_returns_lcap_value() {
+        assert_eq!(effective_memory_ceiling(8192, None), 8192);
+    }
+
+    #[test]
+    fn override_equal_to_lcap_is_identity() {
+        assert_eq!(effective_memory_ceiling(8192, Some(8192)), 8192);
+    }
+
+    #[test]
+    fn zero_override_drops_ceiling_to_zero() {
+        // Useful sanity case: --memory-budget 0 forces zero injection,
+        // matching H1's left endpoint of the sweep.
+        assert_eq!(effective_memory_ceiling(8192, Some(0)), 0);
+    }
+}

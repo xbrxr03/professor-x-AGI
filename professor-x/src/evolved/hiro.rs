@@ -173,6 +173,8 @@ pub struct HiroRunner {
     /// When true, round summaries also write to `null-baselines/`. Set this
     /// for `--hiro-null` invocations so the operator audit can find them.
     frozen_harness: bool,
+    /// H1 sweep override. Propagated to each per-task ReactLoop.
+    memory_budget_override: Option<u32>,
 }
 
 impl HiroRunner {
@@ -195,6 +197,7 @@ impl HiroRunner {
             events: None,
             artifact_root: PathBuf::from("artifacts/hiro"),
             frozen_harness: false,
+            memory_budget_override: None,
         }
     }
 
@@ -215,6 +218,14 @@ impl HiroRunner {
 
     pub fn run_id(&self) -> &str {
         &self.run_id
+    }
+
+    /// H1 sweep: cap every task's context budget at `budget` tokens. Lower
+    /// values force aggressive retrieval pruning. See `brain/hypotheses.md`
+    /// H1 §"Proposed test" for the recommended budget points.
+    pub fn with_memory_budget_override(mut self, budget: u32) -> Self {
+        self.memory_budget_override = Some(budget);
+        self
     }
 
     /// Run the full 60-task benchmark for a given round.
@@ -506,7 +517,7 @@ impl HiroRunner {
         hiro_task: &HiroTask,
         round: u32,
     ) -> Result<(bool, Vec<HiroAttemptResult>)> {
-        let react = ReactLoop::new(
+        let mut react = ReactLoop::new(
             Arc::clone(&self.ollama),
             Arc::clone(&self.registry),
             Arc::clone(&self.policy),
@@ -514,6 +525,9 @@ impl HiroRunner {
             self.cancel.clone(),
         )
         .with_lcap(Arc::clone(&self.lcap), round);
+        if let Some(budget) = self.memory_budget_override {
+            react = react.with_memory_budget_override(budget);
+        }
 
         let mut task = TaskNode::new(hiro_task.description.clone(), TaskType::Research, 50);
         task.max_attempts = 3; // pass@3
