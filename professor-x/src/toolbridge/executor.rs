@@ -139,7 +139,7 @@ impl ToolExecutor {
         }
         let result = self.dispatch(action).await;
         let elapsed = start.elapsed().as_millis() as u64;
-        match result {
+        let observation = match result {
             Ok(result) => Observation {
                 success: true,
                 output: result.output,
@@ -156,6 +156,35 @@ impl ToolExecutor {
                 execution_ms: elapsed,
                 artifacts: Vec::new(),
             },
+        };
+
+        // Voyager skill quality (arXiv:2305.16291) + EvolveR (arXiv:2510.16079):
+        // if `action.tool_name` resolves to a known procedural entry, record
+        // the outcome so its running quality score (verification_score) drifts
+        // toward the empirical success rate. Failures here only warn — they
+        // must not block the agent's main loop.
+        self.record_skill_outcome_if_skill(&action.tool_name, observation.success);
+
+        observation
+    }
+
+    fn record_skill_outcome_if_skill(&self, tool_name: &str, success: bool) {
+        let Some(memory) = self.memory.as_ref() else {
+            return;
+        };
+        // Cheap path: known built-in tool prefixes are never skills. Avoids
+        // a DB roundtrip on every tool call.
+        if is_known_builtin_tool(tool_name) {
+            return;
+        }
+        match memory.procedural.is_skill(tool_name) {
+            Ok(true) => {
+                if let Err(e) = memory.procedural.record_outcome(tool_name, success) {
+                    warn!("procedural: failed to record outcome for '{tool_name}': {e}");
+                }
+            }
+            Ok(false) => {}
+            Err(e) => warn!("procedural: skill lookup for '{tool_name}' failed: {e}"),
         }
     }
 
@@ -385,9 +414,17 @@ impl ToolExecutor {
                     }
                     "procedural" => mem
                         .procedural
-                        .list_verified(10)?
+                        .list_by_quality(0, 10)?
                         .iter()
-                        .map(|e| format!("[{}] {}", e.name, e.description))
+                        .map(|e| {
+                            format!(
+                                "[{} q={:.2} uses={}] {}",
+                                e.name,
+                                e.verification_score,
+                                e.times_used,
+                                e.description
+                            )
+                        })
                         .collect::<Vec<_>>()
                         .join("\n"),
                     _ => anyhow::bail!("unknown layer '{layer}'"),
@@ -660,6 +697,30 @@ fn req_str<'a>(p: &'a serde_json::Value, key: &str) -> Result<&'a str> {
         .ok_or_else(|| anyhow::anyhow!("missing param '{key}'"))
 }
 
+/// Built-in tool prefixes the executor dispatches itself. Any name not in this
+/// allow-list might be a SKILL.md-loaded procedural entry; the executor
+/// consults `procedural.is_skill` for those. Centralising the list keeps the
+/// skill-outcome hook from doing a DB query on every `fs.read` / `shell.*`
+/// call.
+fn is_known_builtin_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "fs.read"
+            | "fs.list"
+            | "fs.write"
+            | "shell.restricted"
+            | "memory.read"
+            | "memory.write"
+            | "web.fetch"
+            | "web.search"
+            | "patch.apply"
+            | "git.diff"
+            | "git.status"
+            | "git.log"
+            | "ollama.generate"
+    )
+}
+
 fn truncate_text(text: &str, max_chars: usize) -> String {
     if text.chars().count() <= max_chars {
         return text.to_string();
@@ -721,6 +782,38 @@ mod tests {
             tool_name: "shell.restricted".to_string(),
             params: json!({"command": command}),
             risk_score: 60,
+        }
+    }
+
+    #[test]
+    fn known_builtin_tools_skip_procedural_lookup() {
+        for name in [
+            "fs.read",
+            "fs.write",
+            "shell.restricted",
+            "memory.read",
+            "memory.write",
+            "web.fetch",
+            "patch.apply",
+        ] {
+            assert!(
+                is_known_builtin_tool(name),
+                "{name} should be a known builtin"
+            );
+        }
+    }
+
+    #[test]
+    fn skill_named_tools_consult_procedural_lookup() {
+        for name in [
+            "px-experiment-runner",
+            "px-literature-search",
+            "RetryPlanGeneration",
+        ] {
+            assert!(
+                !is_known_builtin_tool(name),
+                "{name} should not be misclassified as a builtin"
+            );
         }
     }
 
