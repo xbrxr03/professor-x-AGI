@@ -93,6 +93,8 @@ struct CliArgs {
     coding_smoke: bool,
     /// Run a first-class bounded local coding-agent session and exit.
     coding_session: bool,
+    /// Run a bounded coding-agent session while streaming the work feed.
+    coding_session_live: bool,
     /// Requested goal for --coding-session. Routed only to safe local fixtures for now.
     coding_session_goal: Option<String>,
     /// Print the last N coding-agent sessions and exit.
@@ -192,6 +194,7 @@ fn parse_args() -> CliArgs {
         hiro_smoke: false,
         coding_smoke: false,
         coding_session: false,
+        coding_session_live: false,
         coding_session_goal: None,
         coding_sessions_limit: None,
         supervised_loop_cycles: None,
@@ -317,6 +320,15 @@ fn parse_args() -> CliArgs {
             }
             "--coding-session" | "--prof-x-code" => {
                 cli.coding_session = true;
+                let goal = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .cloned();
+                cli.coding_session_goal = goal.clone();
+                i += if goal.is_some() { 2 } else { 1 };
+            }
+            "--coding-session-live" | "--prof-x-code-live" => {
+                cli.coding_session_live = true;
                 let goal = args
                     .get(i + 1)
                     .filter(|next| !next.starts_with("--"))
@@ -595,6 +607,18 @@ async fn main() -> Result<()> {
 
     if cli.coding_session {
         return run_coding_session(
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            Arc::clone(&transcripts),
+            cli.coding_session_goal.clone(),
+        )
+        .await;
+    }
+
+    if cli.coding_session_live {
+        return run_coding_session_live(
             Arc::clone(&registry),
             Arc::clone(&policy),
             Arc::clone(&memory),
@@ -2210,6 +2234,7 @@ async fn run_coding_smoke(
         events,
         transcripts,
         default_coding_exercise(),
+        true,
     )
     .await
 }
@@ -2221,6 +2246,7 @@ async fn run_coding_smoke_exercise(
     events: Arc<EventStore>,
     transcripts: Arc<TranscriptStore>,
     exercise: CodingExercise,
+    print_summary: bool,
 ) -> Result<()> {
     let workspace = std::env::temp_dir().join(format!("px-coding-smoke-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(workspace.join("src"))?;
@@ -2476,15 +2502,17 @@ async fn run_coding_smoke_exercise(
         serde_json::to_value(&report)?,
     )?;
 
-    println!("Coding smoke: {}", if passed { "passed" } else { "failed" });
-    println!("  workspace: {}", workspace.display());
-    println!("  report: {}", report_path.display());
-    if let Some(path) = &report.transcript_path {
-        println!("  transcript: {path}");
+    if print_summary {
+        println!("Coding smoke: {}", if passed { "passed" } else { "failed" });
+        println!("  workspace: {}", workspace.display());
+        println!("  report: {}", report_path.display());
+        if let Some(path) = &report.transcript_path {
+            println!("  transcript: {path}");
+        }
+        println!("  initial cargo test failed: {initial_test_failed}");
+        println!("  fs.replace applied: {}", edit.success);
+        println!("  final cargo test passed: {final_test_passed}");
     }
-    println!("  initial cargo test failed: {initial_test_failed}");
-    println!("  fs.replace applied: {}", edit.success);
-    println!("  final cargo test passed: {final_test_passed}");
 
     if !passed {
         anyhow::bail!("coding smoke failed");
@@ -2499,6 +2527,27 @@ async fn run_coding_session(
     events: Arc<EventStore>,
     transcripts: Arc<TranscriptStore>,
     requested_goal: Option<String>,
+) -> Result<()> {
+    run_coding_session_inner(
+        registry,
+        policy,
+        memory,
+        events,
+        transcripts,
+        requested_goal,
+        true,
+    )
+    .await
+}
+
+async fn run_coding_session_inner(
+    registry: Arc<std::sync::RwLock<ToolRegistry>>,
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    transcripts: Arc<TranscriptStore>,
+    requested_goal: Option<String>,
+    print_summary: bool,
 ) -> Result<()> {
     let session_id = uuid::Uuid::new_v4().to_string();
     let generated_at = chrono::Utc::now();
@@ -2547,6 +2596,7 @@ async fn run_coding_session(
         Arc::clone(&events),
         transcripts,
         exercise,
+        print_summary,
     )
     .await;
     let failure_reason = outcome.as_ref().err().map(|err| err.to_string());
@@ -2649,14 +2699,16 @@ async fn run_coding_session(
         serde_json::to_value(&report)?,
     )?;
 
-    println!("Coding session: {}", if passed { "passed" } else { "failed" });
-    println!("  session: {session_id}");
-    println!("  report: {}", report_path.display());
-    if let Some(path) = &report.transcript_path {
-        println!("  transcript: {path}");
-    }
-    if let Some(workspace) = &report.workspace {
-        println!("  workspace: {workspace}");
+    if print_summary {
+        println!("Coding session: {}", if passed { "passed" } else { "failed" });
+        println!("  session: {session_id}");
+        println!("  report: {}", report_path.display());
+        if let Some(path) = &report.transcript_path {
+            println!("  transcript: {path}");
+        }
+        if let Some(workspace) = &report.workspace {
+            println!("  workspace: {workspace}");
+        }
     }
 
     if let Err(err) = outcome {
@@ -2666,6 +2718,58 @@ async fn run_coding_session(
         anyhow::bail!("coding session failed");
     }
     Ok(())
+}
+
+async fn run_coding_session_live(
+    registry: Arc<std::sync::RwLock<ToolRegistry>>,
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    transcripts: Arc<TranscriptStore>,
+    requested_goal: Option<String>,
+) -> Result<()> {
+    let mut last_id = events.tail(1)?.last().map(|event| event.id).unwrap_or(0);
+    println!("Professor X live coding session");
+    println!("Streaming plan, policy, tool, transcript, and outcome events. Press Ctrl+C to stop.");
+    io::stdout().flush()?;
+
+    let session_events = Arc::clone(&events);
+    let mut handle = tokio::spawn(async move {
+        run_coding_session_inner(
+            registry,
+            policy,
+            memory,
+            session_events,
+            transcripts,
+            requested_goal,
+            false,
+        )
+        .await
+    });
+
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                println!("Live coding session interrupted.");
+                handle.abort();
+                anyhow::bail!("live coding session interrupted");
+            }
+            result = &mut handle => {
+                for event in events.work_after_id(last_id, 200)? {
+                    println!("{}", format_work_event(&event));
+                }
+                io::stdout().flush()?;
+                return result?;
+            }
+            _ = tokio::time::sleep(tokio::time::Duration::from_millis(250)) => {
+                for event in events.work_after_id(last_id, 100)? {
+                    last_id = event.id;
+                    println!("{}", format_work_event(&event));
+                }
+                io::stdout().flush()?;
+            }
+        }
+    }
 }
 
 fn record_smoke_step(
