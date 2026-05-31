@@ -1606,28 +1606,7 @@ fn write_autonomous_patch_apply_smoke_patch() -> Result<PathBuf> {
         .join("skills")
         .join("conductor")
         .join(format!("{skill_name}.md"));
-    let body = format!(
-        "# {skill_name}\n\
-\n\
-## Purpose\n\
-Preserve one observed autonomous patch-apply cycle as a reusable conductor note.\n\
-\n\
-## Inputs\n\
-- Generated patch path\n\
-- Current harness commit\n\
-- Work-loop cycle record\n\
-- Patch apply run report\n\
-\n\
-## Workflow\n\
-1. Build a small patch with a concrete changed path.\n\
-2. Send it through the sandbox trial run before touching main.\n\
-3. Run the main check after the patch lands.\n\
-4. Create a git commit and store the run report.\n\
-5. Show the commit id in the work feed and loop record.\n\
-\n\
-## Output Contract\n\
-Return `accepted`, `applied`, `commit`, `checks`, `diff_hash`, `diff_bytes`, and `report_path`.\n"
-    );
+    let body = autonomous_patch_apply_skill_body(&skill_name);
     let diff = unified_new_file_diff(&path, &body);
     let patch_path = std::env::temp_dir().join(format!("{skill_name}.diff"));
     std::fs::write(&patch_path, diff)?;
@@ -1653,6 +1632,32 @@ fn unified_new_file_diff(path: &std::path::Path, contents: &str) -> String {
         diff.push('\n');
     }
     diff
+}
+
+fn autonomous_patch_apply_skill_body(skill_name: &str) -> String {
+    format!(
+        r#"# {skill_name}
+
+## Purpose
+Preserve one observed autonomous patch-apply cycle as a reusable conductor note.
+
+## Inputs
+- Generated patch path
+- Current harness commit
+- Work-loop cycle record
+- Patch apply run report
+
+## Workflow
+1. Build a small patch with a concrete changed path.
+2. Send it through the sandbox trial run before touching main.
+3. Run the main check after the patch lands.
+4. Create a git commit and store the run report.
+5. Show the commit id in the work feed and loop record.
+
+## Output Contract
+Return `accepted`, `applied`, `commit`, `checks`, `diff_hash`, `diff_bytes`, and `report_path`.
+"#
+    )
 }
 
 async fn run_operator_commit_smoke(events: Arc<EventStore>) -> Result<()> {
@@ -5316,6 +5321,16 @@ mod tests {
             String::from_utf8_lossy(&check.stderr)
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn autonomous_patch_apply_skill_body_has_sections() {
+        let body = autonomous_patch_apply_skill_body("px-autonomous-patch-test");
+
+        assert!(body.contains("# px-autonomous-patch-test"));
+        assert!(body.contains("## Workflow"));
+        assert!(body.contains("## Output Contract"));
+        assert!(body.lines().count() > 10);
     }
 
     #[test]
