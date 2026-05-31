@@ -5068,123 +5068,138 @@ fn format_work_event(event: &memd::events::AgentEvent) -> String {
         .map(|id| id[..8.min(id.len())].to_string())
         .unwrap_or_else(|| "--------".to_string());
     let label = work_event_label(&event.event_type);
-    let run = event.payload["run_id"]
-        .as_str()
-        .map(|run| format!(" run={}", short_fragment(run)))
-        .unwrap_or_default();
-    let cycle = event.payload["cycle"]
-        .as_i64()
-        .map(|cycle| {
-            let total = event.payload["cycles"]
-                .as_i64()
-                .map(|total| format!("/{total}"))
-                .unwrap_or_default();
-            format!(" cycle={cycle}{total}")
-        })
-        .unwrap_or_default();
-    let job = event.payload["job"]
-        .as_str()
-        .map(|job| format!(" job={job}"))
-        .unwrap_or_default();
-    let passed = event.payload["passed"]
-        .as_bool()
-        .map(|passed| format!(" passed={passed}"))
-        .unwrap_or_default();
-    let step = event.payload["step"]
-        .as_i64()
-        .map(|step| format!(" step={step}"))
-        .unwrap_or_default();
-    let plan_step = event.payload["plan_step"]
-        .as_i64()
-        .map(|step| {
-            let total = event.payload["plan_total"]
-                .as_i64()
-                .map(|total| format!("/{total}"))
-                .unwrap_or_default();
-            format!(" plan={step}{total}")
-        })
-        .unwrap_or_default();
-    let outcome_step = event.payload["outcome_step"]
-        .as_i64()
-        .map(|step| {
-            let total = event.payload["outcome_total"]
-                .as_i64()
-                .map(|total| format!("/{total}"))
-                .unwrap_or_default();
-            format!(" outcome={step}{total}")
-        })
-        .unwrap_or_default();
-    let tool = event.payload["tool"]
-        .as_str()
-        .map(|tool| format!(" tool={tool}"))
-        .unwrap_or_default();
-    let exercise = event.payload["exercise"]
-        .as_str()
-        .map(|exercise| format!(" exercise={exercise}"))
-        .unwrap_or_default();
-    let target = event.payload["target_component"]
-        .as_str()
-        .map(|target| format!(" target={}", truncate(target, 36)))
-        .unwrap_or_default();
-    let patch = event.payload["patch_path"]
-        .as_str()
-        .map(|path| format!(" patch={}", truncate(path, 40)))
-        .unwrap_or_default();
-    let report = event.payload["report_path"]
-        .as_str()
-        .map(|path| format!(" report={}", truncate(path, 96)))
-        .unwrap_or_default();
-    let transcript = event.payload["transcript_path"]
-        .as_str()
-        .map(|path| format!(" transcript={}", truncate(path, 96)))
-        .unwrap_or_default();
-    let commit = event.payload["commit"]
-        .as_str()
-        .map(|commit| format!(" commit={}", short_fragment(commit)))
-        .unwrap_or_default();
-    let decision = event.payload["accepted"]
-        .as_bool()
-        .map(|accepted| format!(" decision={}", if accepted { "accept" } else { "reject" }))
-        .unwrap_or_default();
-    let duration = event.payload["execution_ms"]
-        .as_i64()
-        .map(|ms| format!(" {ms}ms"))
-        .unwrap_or_default();
-    let check_count = event.payload["checks"]
+
+    let mut lines = vec![format!(
+        "- #{:05} {} {:<6} {} {}",
+        event.id,
+        event.timestamp.format("%H:%M:%S"),
+        label,
+        event_action(event),
+        truncate(&event.summary, 120),
+    )];
+
+    let mut meta = vec![format!("task={task}")];
+    if let Some(run) = event.payload["run_id"].as_str() {
+        meta.push(format!("run={}", short_fragment(run)));
+    }
+    if let Some(cycle) = event.payload["cycle"].as_i64() {
+        let total = event.payload["cycles"]
+            .as_i64()
+            .map(|total| format!("/{total}"))
+            .unwrap_or_default();
+        meta.push(format!("cycle={cycle}{total}"));
+    }
+    if let Some(job) = event.payload["job"].as_str() {
+        meta.push(format!("job={job}"));
+    }
+    if let Some(step) = event.payload["step"].as_i64() {
+        meta.push(format!("step={step}"));
+    }
+    if let Some(step) = event.payload["plan_step"].as_i64() {
+        let total = event.payload["plan_total"]
+            .as_i64()
+            .map(|total| format!("/{total}"))
+            .unwrap_or_default();
+        meta.push(format!("plan={step}{total}"));
+    }
+    if let Some(step) = event.payload["outcome_step"].as_i64() {
+        let total = event.payload["outcome_total"]
+            .as_i64()
+            .map(|total| format!("/{total}"))
+            .unwrap_or_default();
+        meta.push(format!("outcome={step}{total}"));
+    }
+    if let Some(tool) = event.payload["tool"].as_str() {
+        meta.push(format!("tool={tool}"));
+    }
+    if let Some(exercise) = event.payload["exercise"].as_str() {
+        meta.push(format!("exercise={exercise}"));
+    }
+    if let Some(accepted) = event.payload["accepted"].as_bool() {
+        meta.push(format!("decision={}", if accepted { "accept" } else { "reject" }));
+    }
+    if let Some(passed) = event.payload["passed"].as_bool() {
+        meta.push(format!("passed={passed}"));
+    }
+    if let Some(ms) = event.payload["execution_ms"].as_i64() {
+        meta.push(format!("duration={ms}ms"));
+    }
+    if let Some(items) = event.payload["checks"]
         .as_array()
         .or_else(|| event.payload["planned_checks"].as_array())
         .filter(|items| !items.is_empty())
-        .map(|items| format!(" checks={}", items.len()))
-        .unwrap_or_default();
-    let diff_bytes = event.payload["diff_bytes"]
-        .as_i64()
-        .filter(|bytes| *bytes > 0)
-        .map(|bytes| format!(" diff={bytes}b"))
-        .unwrap_or_default();
-    let proof_count = event.payload["artifacts"]
-        .as_array()
-        .filter(|items| !items.is_empty())
-        .map(|items| format!(" artifacts={}", items.len()))
-        .unwrap_or_default();
-    let detail = event.payload["error"]
+    {
+        meta.push(format!("checks={}", items.len()));
+    }
+    if let Some(bytes) = event.payload["diff_bytes"].as_i64().filter(|bytes| *bytes > 0) {
+        meta.push(format!("diff={bytes}b"));
+    }
+    if let Some(items) = event.payload["artifacts"].as_array().filter(|items| !items.is_empty()) {
+        meta.push(format!("artifacts={}", items.len()));
+    }
+    lines.push(format!("  L {}", meta.join(" ")));
+
+    push_payload_line(&mut lines, "report", event.payload["report_path"].as_str());
+    push_payload_line(&mut lines, "transcript", event.payload["transcript_path"].as_str());
+    push_payload_line(&mut lines, "patch", event.payload["patch_path"].as_str());
+    push_payload_line(&mut lines, "target", event.payload["target_component"].as_str());
+    if let Some(commit) = event.payload["commit"].as_str() {
+        lines.push(format!("  L commit {}", short_fragment(commit)));
+    }
+    if let Some(detail) = event.payload["error"]
         .as_str()
         .filter(|text| !text.is_empty())
         .or_else(|| event.payload["output_preview"].as_str())
         .or_else(|| event.payload["detail"].as_str())
-        .map(|text| format!(" :: {}", truncate(text, 120)))
-        .unwrap_or_default();
-    let meta = format!(
-        "task={task}{run}{cycle}{job}{passed}{step}{plan_step}{outcome_step}{tool}{exercise}{target}{patch}{report}{transcript}{commit}{decision}{duration}{check_count}{diff_bytes}{proof_count}"
-    );
-    format!(
-        "#{:05} {} {:<6} {} {}{}",
-        event.id,
-        event.timestamp.format("%H:%M:%S"),
-        label,
-        meta,
-        truncate(&event.summary, 110),
-        detail,
-    )
+    {
+        lines.push(format!("  L detail {}", one_line(detail, 180)));
+    }
+    if let Some(items) = event.payload["artifacts"].as_array() {
+        for artifact in items.iter().take(3).filter_map(|item| item.as_str()) {
+            lines.push(format!("  L artifact {}", truncate(artifact, 140)));
+        }
+    }
+
+    lines.join("\n")
+}
+
+fn event_action(event: &memd::events::AgentEvent) -> &'static str {
+    match event.event_type.as_str() {
+        "work_loop.started" => "Started loop",
+        "work_loop.job.planned" => "Planned gate",
+        "work_loop.cycle.started" => "Started gate",
+        "work_loop.cycle.passed" => "Passed gate",
+        "work_loop.cycle.failed" => "Failed gate",
+        "work_loop.completed" => "Completed loop",
+        "work_loop.completed_with_failures" => "Completed loop with failures",
+        "tool.requested" => "Requested",
+        "tool.succeeded" => "Ran",
+        "tool.failed" => "Failed",
+        "task.queued" => "Queued task",
+        "task.started" => "Started task",
+        "task.attempt.started" => "Started attempt",
+        "task.succeeded" => "Completed task",
+        "task.failed" => "Failed task",
+        "coding.smoke.started" => "Started coding smoke",
+        "coding.smoke.passed" => "Passed coding smoke",
+        "coding.smoke.failed" => "Failed coding smoke",
+        "transcript.written" => "Wrote transcript",
+        "evolution.patch_apply.committed" => "Committed verified patch",
+        "evolution.operator_commit.committed" => "Committed operator proposal",
+        "evolution.patch_apply.rejected" | "evolution.proposal_dry_run.rejected" => {
+            "Rejected proposal"
+        }
+        event_type if event_type.starts_with("evolution.") => "Evolution event",
+        event_type if event_type.starts_with("policy.") => "Policy gate",
+        event_type if event_type.starts_with("autonomous_run.") => "Autonomous run",
+        _ => "Observed",
+    }
+}
+
+fn push_payload_line(lines: &mut Vec<String>, label: &str, value: Option<&str>) {
+    if let Some(value) = value.filter(|value| !value.is_empty()) {
+        lines.push(format!("  L {label} {}", truncate(value, 140)));
+    }
 }
 
 fn work_event_label(event_type: &str) -> &'static str {
@@ -5671,13 +5686,15 @@ mod tests {
 
         let line = format_work_event(&event);
 
+        assert!(line.contains("Passed gate"));
+        assert!(line.contains("- #00042"));
         assert!(line.contains("run=12345678"));
         assert!(line.contains("cycle=5/5"));
         assert!(line.contains("job=patch_apply_commit"));
         assert!(line.contains("passed=true"));
-        assert!(line.contains("report=professor-x/artifacts/evolution/patch-verifications/patch.json"));
-        assert!(line.contains("transcript=professor-x/artifacts/transcripts/t.json"));
-        assert!(line.contains("commit=abcdef12"));
+        assert!(line.contains("report professor-x/artifacts/evolution/patch-verifications/patch.json"));
+        assert!(line.contains("transcript professor-x/artifacts/transcripts/t.json"));
+        assert!(line.contains("commit abcdef12"));
         assert!(line.contains("5 checks"));
     }
 
