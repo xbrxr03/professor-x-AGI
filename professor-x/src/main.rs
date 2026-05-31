@@ -21,24 +21,23 @@ use agentd::graph::{ExecutionStep, TaskStatus};
 use agentd::react::ReactLoop;
 use agentd::{TaskNode, TaskQueue, TaskType};
 use artifacts::ArtifactValidator;
+use evolved::CognitionStore;
 use evolved::cognition_base::CognitionItem;
 use evolved::hiro::load_task_inventory;
 use evolved::proposer::{ChangeManifest, EvolutionNode, HarnessComponent, VerificationStatus};
 use evolved::tracker::{OutcomeTracker, TaskOutcome};
 use evolved::verify_diff_in_sandbox;
 use evolved::verify_node_in_sandbox;
-use evolved::CognitionStore;
 use evolved::{EvolvedLoop, HiroRunner};
+use memd::MemoryManager;
 use memd::coding_sessions::{CodingSessionRecord, CodingSessionStore};
 use memd::coding_smoke::{CodingSmokeRecord, CodingSmokeStore};
 use memd::events::EventStore;
 use memd::task_runs::{TaskRun, TaskRunStore};
 use memd::transcripts::{TranscriptStore, TranscriptSummary};
 use memd::work_loops::{
-    WorkLoopGateStore, WorkLoopPlannedJob, WorkLoopRunRecord, WorkLoopRunStore,
-    WorkLoopSmokeRecord,
+    WorkLoopGateStore, WorkLoopPlannedJob, WorkLoopRunRecord, WorkLoopRunStore, WorkLoopSmokeRecord,
 };
-use memd::MemoryManager;
 use policyd::{AuditStore, Decision, PermissionScope, PolicyEngine};
 use toolbridge::executor::{Action, Observation};
 use toolbridge::{ToolExecutor, ToolRegistry};
@@ -96,6 +95,10 @@ struct CliArgs {
     patch_verify_path: Option<PathBuf>,
     /// Verify a unified diff patch while streaming sandbox verification events.
     patch_verify_live_path: Option<PathBuf>,
+    /// Verify, apply, check, and commit a unified diff patch.
+    patch_apply_path: Option<PathBuf>,
+    /// Verify, apply, check, and commit a unified diff patch while streaming events.
+    patch_apply_live_path: Option<PathBuf>,
     /// Validate HIRO task inventory and evaluator substrate and exit.
     hiro_smoke: bool,
     /// Run deterministic local coding-agent edit/verify smoke and exit.
@@ -204,6 +207,8 @@ fn parse_args() -> CliArgs {
         proposal_dry_run_live: false,
         patch_verify_path: None,
         patch_verify_live_path: None,
+        patch_apply_path: None,
+        patch_apply_live_path: None,
         hiro_smoke: false,
         coding_smoke: false,
         coding_session: false,
@@ -337,6 +342,14 @@ fn parse_args() -> CliArgs {
             }
             "--verify-patch-live" if i + 1 < args.len() => {
                 cli.patch_verify_live_path = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
+            }
+            "--apply-verified-patch" | "--apply-patch-commit" if i + 1 < args.len() => {
+                cli.patch_apply_path = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
+            }
+            "--apply-verified-patch-live" | "--apply-patch-commit-live" if i + 1 < args.len() => {
+                cli.patch_apply_live_path = Some(PathBuf::from(&args[i + 1]));
                 i += 2;
             }
             "--hiro-smoke" => {
@@ -603,6 +616,14 @@ async fn main() -> Result<()> {
 
     if let Some(path) = cli.patch_verify_live_path {
         return run_patch_verify_live(Arc::clone(&events), path).await;
+    }
+
+    if let Some(path) = cli.patch_apply_path {
+        return run_patch_apply_commit(Arc::clone(&events), path).await;
+    }
+
+    if let Some(path) = cli.patch_apply_live_path {
+        return run_patch_apply_commit_live(Arc::clone(&events), path).await;
     }
 
     if cli.hiro_smoke {
@@ -906,6 +927,8 @@ struct PatchVerificationReport {
     harness_commit: String,
     accepted: bool,
     applied: bool,
+    commit: Option<String>,
+    report_commit: Option<String>,
     reason: String,
     checks: Vec<String>,
     diff_hash: Option<String>,
@@ -1121,7 +1144,11 @@ async fn execute_evolution_proposal_dry_run(
         },
         format!(
             "proposal dry-run {} without applying changes; report {}",
-            if report.accepted { "accepted" } else { "rejected" },
+            if report.accepted {
+                "accepted"
+            } else {
+                "rejected"
+            },
             path.display()
         ),
         serde_json::json!({
@@ -1141,7 +1168,11 @@ async fn run_evolution_proposal_dry_run(events: Arc<EventStore>) -> Result<()> {
     let (report, path) = execute_evolution_proposal_dry_run(events).await?;
     println!(
         "Evolution proposal dry-run: {}",
-        if report.accepted { "accepted" } else { "rejected" }
+        if report.accepted {
+            "accepted"
+        } else {
+            "rejected"
+        }
     );
     println!("  report: {}", path.display());
     println!("  target: {}", report.target_component);
@@ -1161,9 +1192,8 @@ async fn run_evolution_proposal_dry_run_live(events: Arc<EventStore>) -> Result<
     io::stdout().flush()?;
 
     let run_events = Arc::clone(&events);
-    let mut handle = tokio::spawn(async move {
-        execute_evolution_proposal_dry_run(run_events).await
-    });
+    let mut handle =
+        tokio::spawn(async move { execute_evolution_proposal_dry_run(run_events).await });
 
     loop {
         tokio::select! {
@@ -1240,6 +1270,8 @@ async fn execute_patch_verify(
         harness_commit: git_head(&repo_root).unwrap_or_else(|_| "unknown".to_string()),
         accepted: verification.outcome.accepted,
         applied: false,
+        commit: None,
+        report_commit: None,
         reason: verification.outcome.reason,
         checks: verification.outcome.checks,
         diff_hash,
@@ -1256,7 +1288,11 @@ async fn execute_patch_verify(
         },
         format!(
             "patch verification {} without applying changes; report {}",
-            if report.accepted { "accepted" } else { "rejected" },
+            if report.accepted {
+                "accepted"
+            } else {
+                "rejected"
+            },
             path.display()
         ),
         serde_json::json!({
@@ -1277,7 +1313,11 @@ async fn run_patch_verify(events: Arc<EventStore>, patch_path: PathBuf) -> Resul
     let (report, path) = execute_patch_verify(events, patch_path).await?;
     println!(
         "Patch verification: {}",
-        if report.accepted { "accepted" } else { "rejected" }
+        if report.accepted {
+            "accepted"
+        } else {
+            "rejected"
+        }
     );
     println!("  report: {}", path.display());
     println!("  patch: {}", report.patch_path);
@@ -1297,7 +1337,8 @@ async fn run_patch_verify_live(events: Arc<EventStore>, patch_path: PathBuf) -> 
     io::stdout().flush()?;
 
     let run_events = Arc::clone(&events);
-    let mut handle = tokio::spawn(async move { execute_patch_verify(run_events, patch_path).await });
+    let mut handle =
+        tokio::spawn(async move { execute_patch_verify(run_events, patch_path).await });
 
     loop {
         tokio::select! {
@@ -1325,6 +1366,237 @@ async fn run_patch_verify_live(events: Arc<EventStore>, patch_path: PathBuf) -> 
     }
 }
 
+async fn execute_patch_apply_commit(
+    events: Arc<EventStore>,
+    patch_path: PathBuf,
+) -> Result<(PatchVerificationReport, PathBuf)> {
+    let repo_root = default_repo_root();
+    if !main_worktree_clean_for_patch_apply(&repo_root)? {
+        anyhow::bail!("main worktree has source/config/artifact changes; refusing patch apply");
+    }
+    let patch_raw = std::fs::read_to_string(&patch_path)
+        .map_err(|e| anyhow::anyhow!("cannot read patch '{}': {e}", patch_path.display()))?;
+    events.append(
+        None,
+        None,
+        "evolution.patch_apply.started",
+        "starting verify-then-apply patch commit",
+        serde_json::json!({
+            "workspace": "repo-root",
+            "harness_commit": git_head(&repo_root).unwrap_or_else(|_| "unknown".to_string()),
+            "patch_path": patch_path.display().to_string(),
+        }),
+    )?;
+    events.append(
+        None,
+        None,
+        "evolution.patch_apply.verifying",
+        "verifying patch in isolated sandbox worktree before main apply",
+        serde_json::json!({
+            "workspace": "sandbox_worktree",
+            "patch_path": patch_path.display().to_string(),
+            "planned_checks": [
+                "main_worktree_clean",
+                "reward_hacking_scan",
+                "sandbox_worktree",
+                "material_diff",
+                "cargo_check",
+                "main_apply_check",
+                "main_cargo_check",
+                "git_commit"
+            ],
+        }),
+    )?;
+
+    let verification = verify_diff_in_sandbox(&repo_root, &patch_raw).await?;
+    let diff_hash = if verification.diff.is_empty() {
+        None
+    } else {
+        Some(sha256_hex(verification.diff.as_bytes()))
+    };
+    let mut checks = vec!["main_worktree_clean".to_string()];
+    checks.extend(verification.outcome.checks.clone());
+    let mut report = PatchVerificationReport {
+        generated_at: chrono::Utc::now().to_rfc3339(),
+        mode: "patch_apply_commit".to_string(),
+        patch_path: patch_path.display().to_string(),
+        workspace: "repo-root".to_string(),
+        harness_commit: git_head(&repo_root).unwrap_or_else(|_| "unknown".to_string()),
+        accepted: verification.outcome.accepted,
+        applied: false,
+        commit: None,
+        report_commit: None,
+        reason: verification.outcome.reason.clone(),
+        checks,
+        diff_hash,
+        diff_bytes: verification.diff.len(),
+    };
+
+    if !verification.outcome.accepted {
+        let path = write_patch_verification_report(&report)?;
+        events.append(
+            None,
+            None,
+            "evolution.patch_apply.rejected",
+            format!(
+                "patch rejected before main apply; report {}",
+                path.display()
+            ),
+            serde_json::json!({
+                "accepted": report.accepted,
+                "applied": report.applied,
+                "reason": report.reason,
+                "checks": report.checks,
+                "diff_hash": report.diff_hash,
+                "diff_bytes": report.diff_bytes,
+                "patch_path": report.patch_path,
+                "report_path": path,
+            }),
+        )?;
+        return Ok((report, path));
+    }
+
+    let changed_paths = changed_paths_from_unified_diff(&verification.diff)?;
+    let path = write_patch_verification_report(&report)?;
+    let apply_result = apply_verified_diff_to_main(&repo_root, &verification.diff)
+        .and_then(|_| run_main_cargo_check(&repo_root))
+        .and_then(|_| {
+            commit_verified_patch(
+                &repo_root,
+                &changed_paths,
+                &path,
+                "evolved: apply verified patch",
+            )
+        });
+
+    match apply_result {
+        Ok(commit) => {
+            report.applied = true;
+            report.commit = Some(commit.clone());
+            report.reason = format!("sandbox verification passed and committed {commit}");
+            std::fs::write(&path, serde_json::to_string_pretty(&report)?)?;
+            let report_commit = commit_patch_report_update(
+                &repo_root,
+                &path,
+                "evolved: record verified patch result",
+            )?;
+            report.report_commit = Some(report_commit.clone());
+            std::fs::write(&path, serde_json::to_string_pretty(&report)?)?;
+            let final_report_commit = commit_patch_report_update(
+                &repo_root,
+                &path,
+                "evolved: record verified patch report commit",
+            )?;
+            events.append(
+                None,
+                None,
+                "evolution.patch_apply.committed",
+                format!("committed verified patch {commit}"),
+                serde_json::json!({
+                    "accepted": true,
+                    "applied": true,
+                    "commit": commit,
+                    "report_commit": final_report_commit,
+                    "checks": report.checks,
+                    "diff_hash": report.diff_hash,
+                    "diff_bytes": report.diff_bytes,
+                    "patch_path": report.patch_path,
+                    "report_path": path,
+                }),
+            )?;
+            Ok((report, path))
+        }
+        Err(err) => {
+            let rollback = reverse_verified_diff_from_main(&repo_root, &verification.diff);
+            report.reason = format!(
+                "main apply/check/commit failed: {err}; rollback={}",
+                rollback
+                    .map(|_| "ok".to_string())
+                    .unwrap_or_else(|e| format!("failed: {e}"))
+            );
+            std::fs::write(&path, serde_json::to_string_pretty(&report)?)?;
+            events.append(
+                None,
+                None,
+                "evolution.patch_apply.failed",
+                format!("verified patch failed during main apply/check/commit: {err}"),
+                serde_json::json!({
+                    "accepted": true,
+                    "applied": false,
+                    "error": err.to_string(),
+                    "checks": report.checks,
+                    "patch_path": report.patch_path,
+                    "report_path": path,
+                }),
+            )?;
+            Ok((report, path))
+        }
+    }
+}
+
+async fn run_patch_apply_commit(events: Arc<EventStore>, patch_path: PathBuf) -> Result<()> {
+    let (report, path) = execute_patch_apply_commit(events, patch_path).await?;
+    println!(
+        "Patch apply commit: {}",
+        if report.accepted && report.applied {
+            "committed"
+        } else if report.accepted {
+            "failed"
+        } else {
+            "rejected"
+        }
+    );
+    println!("  report: {}", path.display());
+    println!("  patch: {}", report.patch_path);
+    println!("  checks: {}", report.checks.join(", "));
+    println!("  diff bytes: {}", report.diff_bytes);
+    println!("  commit: {}", report.commit.as_deref().unwrap_or("none"));
+    println!("  reason: {}", report.reason);
+    if !(report.accepted && report.applied) {
+        anyhow::bail!("patch apply commit did not commit an accepted patch");
+    }
+    Ok(())
+}
+
+async fn run_patch_apply_commit_live(events: Arc<EventStore>, patch_path: PathBuf) -> Result<()> {
+    let mut last_id = events.tail(1)?.last().map(|event| event.id).unwrap_or(0);
+    println!("Professor X live patch apply");
+    println!("Streaming verify, apply, check, and commit events.");
+    io::stdout().flush()?;
+
+    let run_events = Arc::clone(&events);
+    let mut handle =
+        tokio::spawn(async move { execute_patch_apply_commit(run_events, patch_path).await });
+
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                println!("Live patch apply interrupted.");
+                handle.abort();
+                anyhow::bail!("live patch apply interrupted");
+            }
+            result = &mut handle => {
+                for event in events.work_after_id(last_id, 200)? {
+                    println!("{}", format_work_event(&event));
+                }
+                io::stdout().flush()?;
+                let (report, _) = result??;
+                if !(report.accepted && report.applied) {
+                    anyhow::bail!("patch apply commit did not commit an accepted patch");
+                }
+                return Ok(());
+            }
+            _ = tokio::time::sleep(tokio::time::Duration::from_millis(250)) => {
+                for event in events.work_after_id(last_id, 100)? {
+                    last_id = event.id;
+                    println!("{}", format_work_event(&event));
+                }
+                io::stdout().flush()?;
+            }
+        }
+    }
+}
+
 async fn run_operator_commit_smoke(events: Arc<EventStore>) -> Result<()> {
     let (report, path) = execute_operator_commit_smoke(events).await?;
     println!(
@@ -1339,10 +1611,7 @@ async fn run_operator_commit_smoke(events: Arc<EventStore>) -> Result<()> {
     println!("  target: {}", report.target_component);
     println!("  checks: {}", report.checks.join(", "));
     println!("  reason: {}", report.reason);
-    println!(
-        "  commit: {}",
-        report.commit.as_deref().unwrap_or("none")
-    );
+    println!("  commit: {}", report.commit.as_deref().unwrap_or("none"));
     if !(report.accepted && report.applied) {
         anyhow::bail!("operator commit smoke did not commit an accepted proposal");
     }
@@ -1403,7 +1672,10 @@ async fn execute_operator_commit_smoke(
             None,
             None,
             "evolution.operator_commit.rejected",
-            format!("operator commit proposal rejected; report {}", path.display()),
+            format!(
+                "operator commit proposal rejected; report {}",
+                path.display()
+            ),
             serde_json::json!({
                 "reason": report.reason,
                 "checks": report.checks,
@@ -1725,6 +1997,72 @@ fn main_worktree_clean_for_operator_commit(repo_root: &std::path::Path) -> Resul
     Ok(String::from_utf8_lossy(&output.stdout).trim().is_empty())
 }
 
+fn main_worktree_clean_for_patch_apply(repo_root: &std::path::Path) -> Result<bool> {
+    let output = std::process::Command::new("git")
+        .args(["status", "--porcelain", "--untracked-files=all"])
+        .current_dir(repo_root)
+        .output()?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git status failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let dirty = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(status_path)
+        .any(|path| !patch_apply_ignored_status_path(path));
+    Ok(!dirty)
+}
+
+fn status_path(line: &str) -> Option<&str> {
+    let path = line.get(3..)?.trim();
+    if let Some((_, new_path)) = path.split_once(" -> ") {
+        Some(new_path.trim())
+    } else {
+        Some(path)
+    }
+}
+
+fn patch_apply_ignored_status_path(path: &str) -> bool {
+    path.starts_with("professor-x/artifacts/events/")
+        || path.starts_with("professor-x/artifacts/evolution/")
+        || path.starts_with("artifacts/events/")
+        || path.starts_with("artifacts/evolution/")
+}
+
+fn changed_paths_from_unified_diff(diff: &str) -> Result<Vec<PathBuf>> {
+    let mut paths = std::collections::BTreeSet::new();
+    for line in diff.lines() {
+        let Some(rest) = line.strip_prefix("diff --git ") else {
+            continue;
+        };
+        let parts = rest.split_whitespace().collect::<Vec<_>>();
+        if parts.len() < 2 {
+            continue;
+        }
+        let raw = if parts[1] == "/dev/null" {
+            parts[0].strip_prefix("a/").unwrap_or(parts[0])
+        } else {
+            parts[1].strip_prefix("b/").unwrap_or(parts[1])
+        };
+        let path = PathBuf::from(raw);
+        if path.is_absolute()
+            || path
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
+        {
+            anyhow::bail!("verified diff contains unsafe path '{}'", raw);
+        }
+        paths.insert(path);
+    }
+    if paths.is_empty() {
+        anyhow::bail!("verified diff did not contain changed paths");
+    }
+    Ok(paths.into_iter().collect())
+}
+
 fn apply_verified_diff_to_main(repo_root: &std::path::Path, diff: &str) -> Result<()> {
     if diff.trim().is_empty() {
         anyhow::bail!("verified diff is empty");
@@ -1800,6 +2138,86 @@ fn run_main_cargo_check(repo_root: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
+fn commit_verified_patch(
+    repo_root: &std::path::Path,
+    changed_paths: &[PathBuf],
+    report_path: &std::path::Path,
+    message: &str,
+) -> Result<String> {
+    if changed_paths.is_empty() {
+        anyhow::bail!("verified patch has no changed paths to commit");
+    }
+    let report_git_path = repo_relative_existing_path(repo_root, report_path)?;
+    let mut add = std::process::Command::new("git");
+    add.arg("add").arg("--");
+    for path in changed_paths {
+        add.arg(path);
+    }
+    add.arg(report_git_path);
+    let add = add.current_dir(repo_root).output()?;
+    if !add.status.success() {
+        anyhow::bail!("git add failed: {}", String::from_utf8_lossy(&add.stderr));
+    }
+    let commit = std::process::Command::new("git")
+        .args(["commit", "-m", message])
+        .current_dir(repo_root)
+        .output()?;
+    if !commit.status.success() {
+        anyhow::bail!(
+            "git commit failed: {}",
+            String::from_utf8_lossy(&commit.stderr)
+        );
+    }
+    git_head(repo_root)
+}
+
+fn commit_patch_report_update(
+    repo_root: &std::path::Path,
+    report_path: &std::path::Path,
+    message: &str,
+) -> Result<String> {
+    let report_git_path = repo_relative_existing_path(repo_root, report_path)?;
+    let add = std::process::Command::new("git")
+        .arg("add")
+        .arg("--")
+        .arg(report_git_path)
+        .current_dir(repo_root)
+        .output()?;
+    if !add.status.success() {
+        anyhow::bail!(
+            "git add report failed: {}",
+            String::from_utf8_lossy(&add.stderr)
+        );
+    }
+    let commit = std::process::Command::new("git")
+        .args(["commit", "-m", message])
+        .current_dir(repo_root)
+        .output()?;
+    if !commit.status.success() {
+        anyhow::bail!(
+            "git report commit failed: {}",
+            String::from_utf8_lossy(&commit.stderr)
+        );
+    }
+    git_head(repo_root)
+}
+
+fn repo_relative_existing_path(
+    repo_root: &std::path::Path,
+    path: &std::path::Path,
+) -> Result<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let canonical = absolute.canonicalize().unwrap_or(absolute);
+    let relative = canonical
+        .strip_prefix(repo_root)
+        .map_err(|_| anyhow::anyhow!("path '{}' is outside repo", canonical.display()))?;
+    Ok(relative.to_path_buf())
+}
+
 fn commit_operator_proposal(
     repo_root: &std::path::Path,
     node: &EvolutionNode,
@@ -1807,13 +2225,16 @@ fn commit_operator_proposal(
     message: &str,
 ) -> Result<String> {
     let skill_path = match &node.target_component {
-        HarnessComponent::SkillDefinition(name) => {
-            PathBuf::from("professor-x").join("skills").join(format!("{name}.md"))
-        }
+        HarnessComponent::SkillDefinition(name) => PathBuf::from("professor-x")
+            .join("skills")
+            .join(format!("{name}.md")),
         _ => anyhow::bail!("operator commit smoke only supports skill proposals"),
     };
     let report_git_path = if report_path.is_absolute() {
-        report_path.strip_prefix(repo_root).unwrap_or(report_path).to_path_buf()
+        report_path
+            .strip_prefix(repo_root)
+            .unwrap_or(report_path)
+            .to_path_buf()
     } else if report_path.starts_with("artifacts") {
         PathBuf::from("professor-x").join(report_path)
     } else {
@@ -1848,7 +2269,10 @@ fn commit_operator_report_update(
     message: &str,
 ) -> Result<String> {
     let report_git_path = if report_path.is_absolute() {
-        report_path.strip_prefix(repo_root).unwrap_or(report_path).to_path_buf()
+        report_path
+            .strip_prefix(repo_root)
+            .unwrap_or(report_path)
+            .to_path_buf()
     } else if report_path.starts_with("artifacts") {
         PathBuf::from("professor-x").join(report_path)
     } else {
@@ -1861,7 +2285,10 @@ fn commit_operator_report_update(
         .current_dir(repo_root)
         .output()?;
     if !add.status.success() {
-        anyhow::bail!("git add report failed: {}", String::from_utf8_lossy(&add.stderr));
+        anyhow::bail!(
+            "git add report failed: {}",
+            String::from_utf8_lossy(&add.stderr)
+        );
     }
     let commit = std::process::Command::new("git")
         .args(["commit", "-m", message])
@@ -1969,23 +2396,19 @@ fn parse_work_loop_job(kind: &str) -> Option<WorkLoopJob> {
 fn work_loop_job_for_cycle(profile: WorkLoopProfile, cycle: u32) -> WorkLoopJob {
     match profile {
         WorkLoopProfile::Basic => WorkLoopJob::CodingSmoke,
-        WorkLoopProfile::Core => {
-            match cycle % 4 {
-                1 => WorkLoopJob::CodingSmoke,
-                2 => WorkLoopJob::EvolutionSmoke,
-                3 => WorkLoopJob::HiroSmoke,
-                _ => WorkLoopJob::ProposalDryRun,
-            }
-        }
-        WorkLoopProfile::Commit => {
-            match cycle % 5 {
-                1 => WorkLoopJob::CodingSmoke,
-                2 => WorkLoopJob::EvolutionSmoke,
-                3 => WorkLoopJob::HiroSmoke,
-                4 => WorkLoopJob::ProposalDryRun,
-                _ => WorkLoopJob::OperatorCommit,
-            }
-        }
+        WorkLoopProfile::Core => match cycle % 4 {
+            1 => WorkLoopJob::CodingSmoke,
+            2 => WorkLoopJob::EvolutionSmoke,
+            3 => WorkLoopJob::HiroSmoke,
+            _ => WorkLoopJob::ProposalDryRun,
+        },
+        WorkLoopProfile::Commit => match cycle % 5 {
+            1 => WorkLoopJob::CodingSmoke,
+            2 => WorkLoopJob::EvolutionSmoke,
+            3 => WorkLoopJob::HiroSmoke,
+            4 => WorkLoopJob::ProposalDryRun,
+            _ => WorkLoopJob::OperatorCommit,
+        },
     }
 }
 
@@ -2169,12 +2592,7 @@ async fn run_supervised_loop(
         }),
     )?;
     for planned in &planned_jobs {
-        gate_store.record_planned(
-            &run_id,
-            run_kind.as_str(),
-            profile.as_str(),
-            planned,
-        )?;
+        gate_store.record_planned(&run_id, run_kind.as_str(), profile.as_str(), planned)?;
         events.append(
             None,
             None,
@@ -2476,7 +2894,10 @@ fn default_coding_exercise() -> CodingExercise {
 
 fn coding_exercise_for_goal(goal: &str) -> CodingExercise {
     let normalized = goal.to_ascii_lowercase();
-    if normalized.contains("multiply") || normalized.contains("multiplication") || normalized.contains("product") {
+    if normalized.contains("multiply")
+        || normalized.contains("multiplication")
+        || normalized.contains("product")
+    {
         CodingExercise {
             name: "multiply_i32",
             description: "bounded coding session: fix a failing Rust multiplication test and verify it passes",
@@ -2886,12 +3307,27 @@ async fn run_coding_session_inner(
         Some(record) => vec![
             format!(
                 "initial cargo test {}",
-                if record.initial_test_failed { "failed as expected" } else { "did not fail" }
+                if record.initial_test_failed {
+                    "failed as expected"
+                } else {
+                    "did not fail"
+                }
             ),
-            format!("patch {}", if record.edit_applied { "applied" } else { "did not apply" }),
+            format!(
+                "patch {}",
+                if record.edit_applied {
+                    "applied"
+                } else {
+                    "did not apply"
+                }
+            ),
             format!(
                 "final cargo test {}",
-                if record.final_test_passed { "passed" } else { "failed" }
+                if record.final_test_passed {
+                    "passed"
+                } else {
+                    "failed"
+                }
             ),
         ],
         None => vec!["coding smoke did not record a result".to_string()],
@@ -2900,15 +3336,27 @@ async fn run_coding_session_inner(
         Some(record) => vec![
             format!(
                 "baseline test observed: {}",
-                if record.initial_test_failed { "failed" } else { "not failed" }
+                if record.initial_test_failed {
+                    "failed"
+                } else {
+                    "not failed"
+                }
             ),
             format!(
                 "source replacement observed: {}",
-                if record.edit_applied { "applied" } else { "not applied" }
+                if record.edit_applied {
+                    "applied"
+                } else {
+                    "not applied"
+                }
             ),
             format!(
                 "verification test observed: {}",
-                if record.final_test_passed { "passed" } else { "failed" }
+                if record.final_test_passed {
+                    "passed"
+                } else {
+                    "failed"
+                }
             ),
         ],
         None => vec!["no smoke record was available for outcome extraction".to_string()],
@@ -2939,11 +3387,16 @@ async fn run_coding_session_inner(
         smoke_id: smoke.as_ref().and_then(|record| record.id),
         smoke_report_path: smoke.as_ref().map(|record| record.report_path.clone()),
         session_report_path: None,
-        transcript_path: smoke.as_ref().and_then(|record| record.transcript_path.clone()),
+        transcript_path: smoke
+            .as_ref()
+            .and_then(|record| record.transcript_path.clone()),
         checks,
         plan_steps: plan_steps.clone(),
         step_outcomes: step_outcomes.clone(),
-        artifacts: smoke.as_ref().map(|record| record.artifacts.clone()).unwrap_or_default(),
+        artifacts: smoke
+            .as_ref()
+            .map(|record| record.artifacts.clone())
+            .unwrap_or_default(),
         failure_reason,
     };
     let report_path = write_coding_session_report(&report)?;
@@ -2972,13 +3425,20 @@ async fn run_coding_session_inner(
     events.append(
         None,
         None,
-        if passed { "coding.session.passed" } else { "coding.session.failed" },
+        if passed {
+            "coding.session.passed"
+        } else {
+            "coding.session.failed"
+        },
         format!("coding session report written to {}", report_path.display()),
         serde_json::to_value(&report)?,
     )?;
 
     if print_summary {
-        println!("Coding session: {}", if passed { "passed" } else { "failed" });
+        println!(
+            "Coding session: {}",
+            if passed { "passed" } else { "failed" }
+        );
         println!("  session: {session_id}");
         println!("  report: {}", report_path.display());
         if let Some(path) = &report.transcript_path {
@@ -4041,7 +4501,10 @@ fn print_coding_sessions(memory: Arc<MemoryManager>, limit: usize) -> Result<()>
             session.status,
             &session.id[..8.min(session.id.len())],
             session.exercise,
-            session.smoke_id.map(|id| id.to_string()).unwrap_or_else(|| "none".to_string()),
+            session
+                .smoke_id
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "none".to_string()),
             session.checks.len(),
             session.artifacts.len(),
             truncate(&session.goal, 90),
@@ -4408,7 +4871,7 @@ fn truncate(text: &str, max_chars: usize) -> String {
 fn setup_signal_handlers(cancel: CancellationToken) {
     #[cfg(unix)]
     {
-        use tokio::signal::unix::{signal, SignalKind};
+        use tokio::signal::unix::{SignalKind, signal};
 
         let cancel1 = cancel.clone();
         tokio::spawn(async move {
@@ -4476,14 +4939,15 @@ fn seed_daily_schedule(scheduler: &agentd::CronScheduler, fire_now: bool) -> Res
         // Fallback artifact-kind defaults for jobs whose TOML entry does not
         // declare one. Keeps the Phase B gate active on the historically-
         // configured jobs without forcing a config rewrite on landing.
-        let inferred_kind = job.expected_artifact_kind.clone().or_else(|| {
-            match job.id.as_str() {
+        let inferred_kind = job
+            .expected_artifact_kind
+            .clone()
+            .or_else(|| match job.id.as_str() {
                 id if id.contains("daily-update") => Some("daily_update".to_string()),
                 "literature-search" => Some("literature_note".to_string()),
                 "experiment-runner" => Some("experiment_result".to_string()),
                 _ => None,
-            }
-        });
+            });
         let cron_job = CronJob {
             id: format!("daily-{}", job.id),
             name: format!("Daily {}", job.id),
@@ -4514,36 +4978,126 @@ fn seed_daily_schedule(scheduler: &agentd::CronScheduler, fire_now: bool) -> Res
 
 fn seed_cognition_base() -> Vec<CognitionItem> {
     let seeds = [
-        ("CoALA: Language agents have four memory types — working (in-context), episodic (retrievable past), semantic (factual knowledge), procedural (skills/actions).", "paper:2309.02427"),
-        ("CoALA: The action space spans storage (read/write), process (execute), and reasoning operations.", "paper:2309.02427"),
-        ("Voyager: A growing skill library of verified procedural knowledge enables lifelong learning. Skills that fail consistently are pruned.", "paper:2305.16291"),
-        ("Voyager: 4-round attempt limit per task prevents infinite loops while allowing recovery from transient failures.", "paper:2305.16291"),
-        ("Reflexion: Verbal self-reflection after failure is reinforcement learning without weight updates. Buffer max 3 reflections, oldest evicted.", "paper:2303.11366"),
-        ("ReAct: Interleaving Thought and Action/Observation is more reliable than acting alone. Thought lets the agent plan before committing to a tool call.", "paper:2210.03629"),
-        ("AHE: Three observability pillars for harness evolution: component (which files changed), experience (what was tried), decision (why changes were proposed).", "paper:2604.25850"),
-        ("AHE: Every harness modification needs a falsifiable ChangeManifest with predicted fixes and regressions. Verify predictions in the next cycle.", "paper:2604.25850"),
-        ("AHE: Seven evolvable components: system prompt, tool descriptions, skill definitions, harness config, procedural memory, middleware, core logic.", "paper:2604.25850"),
-        ("ASI-Evolve: Researcher/Engineer/Analyzer loop enables closed-loop self-improvement. Researcher proposes, Engineer experiments, Analyzer distills lessons.", "paper:2603.29640"),
-        ("ASI-Evolve: UCB1 sampling c=1.414 balances exploration (unvisited nodes) vs exploitation (high-scoring nodes).", "paper:2603.29640"),
-        ("ASI-Evolve: Cognition base stores ~100 distilled insights. Quality score updated via (success+1)/(use+2).", "paper:2603.29640"),
-        ("EvolveR: Quality formula (success_count+1)/(use_count+2) is Laplace-smoothed. Prior of 0.5 for new items, avoids zero-division.", "paper:2510.16079"),
-        ("Memory agents: Multi-signal retrieval: cosine (α=0.5) + recency decay (β=0.3, λ=0.1) + importance (γ=0.2).", "paper:2603.07670"),
-        ("Memory agents: Write pipeline: filter → tag → canonicalize → deduplicate (cosine>0.92 skip) → score → embed → cluster → write.", "paper:2603.07670"),
-        ("CLAG: Two-stage retrieval (cluster profile matching → intra-cluster) reduces latency. Cold start flat until 100 entries, split at 300.", "paper:2603.15421"),
-        ("Self-Generated ICE: Top-k similar past tasks injected as in-context examples. Zero fine-tuning needed; ALFWorld 73%→93%.", "paper:2505.00234"),
-        ("MARS: Single-cycle reflection on failure — extract principle (what not to do) + procedure (what to do instead). Write both to semantic memory.", "paper:2601.11974"),
-        ("ACE: Context window as evolving playbook. Semantic memory entries are the playbook; updated on every success/failure.", "paper:2510.04618"),
-        ("Life-Harness: Structural harness improvements transfer to 17 other models at 88.5% avg relative gain. Harness corpus = portable artifact.", "paper:2605.22166"),
-        ("DHE: 5-layer failure attribution — retrieval→context→dispatch→execution→reasoning. Targets ≥60% fix-prediction precision vs AHE 33.7%.", "design:professor-x"),
-        ("LCAP: UCB1 bandit over 5 context budget allocations per task type. c=1.414, round-level delta_p drives arm selection.", "design:professor-x"),
-        ("BF: Behavioral Fingerprint F(H_k)=[p_tool, p_plan, p_correct]. Non-uniform improvement across categories confirms H11.", "design:professor-x"),
-        ("MHE: Three levers — Lever1 parametric (SDAR QLoRA overnight), Lever2 contextual (ICE+MARS), Lever3 structural (DHE-guided evolution).", "design:professor-x"),
-        ("Externalization: Pattern B — working context in prompt, long-term in external store. Harness decides what to retrieve and when.", "paper:2604.08224"),
-        ("SLMs: qwen3:8b Q4 fits in 5.2GB VRAM, 42 tok/s, 32K context, thinking mode. Matches larger models on structured agentic tasks.", "paper:2506.02153"),
-        ("Hermes: Advance next_run_at BEFORE executing jobs, under file lock — at-most-once semantics.", "repo:hermes-agent"),
-        ("ClawOS: Merkle-chained audit log — each entry SHA-256 hashes the previous. verify_chain() at startup detects tampering.", "repo:clawos"),
-        ("ClawOS: Hook circuit breaker — 3 consecutive failures disables the hook to prevent blocking all tool calls.", "repo:clawos"),
-        ("Professor X design: Core modules (policyd gate, memd) require human approval for modification. Never autonomous.", "design:professor-x"),
+        (
+            "CoALA: Language agents have four memory types — working (in-context), episodic (retrievable past), semantic (factual knowledge), procedural (skills/actions).",
+            "paper:2309.02427",
+        ),
+        (
+            "CoALA: The action space spans storage (read/write), process (execute), and reasoning operations.",
+            "paper:2309.02427",
+        ),
+        (
+            "Voyager: A growing skill library of verified procedural knowledge enables lifelong learning. Skills that fail consistently are pruned.",
+            "paper:2305.16291",
+        ),
+        (
+            "Voyager: 4-round attempt limit per task prevents infinite loops while allowing recovery from transient failures.",
+            "paper:2305.16291",
+        ),
+        (
+            "Reflexion: Verbal self-reflection after failure is reinforcement learning without weight updates. Buffer max 3 reflections, oldest evicted.",
+            "paper:2303.11366",
+        ),
+        (
+            "ReAct: Interleaving Thought and Action/Observation is more reliable than acting alone. Thought lets the agent plan before committing to a tool call.",
+            "paper:2210.03629",
+        ),
+        (
+            "AHE: Three observability pillars for harness evolution: component (which files changed), experience (what was tried), decision (why changes were proposed).",
+            "paper:2604.25850",
+        ),
+        (
+            "AHE: Every harness modification needs a falsifiable ChangeManifest with predicted fixes and regressions. Verify predictions in the next cycle.",
+            "paper:2604.25850",
+        ),
+        (
+            "AHE: Seven evolvable components: system prompt, tool descriptions, skill definitions, harness config, procedural memory, middleware, core logic.",
+            "paper:2604.25850",
+        ),
+        (
+            "ASI-Evolve: Researcher/Engineer/Analyzer loop enables closed-loop self-improvement. Researcher proposes, Engineer experiments, Analyzer distills lessons.",
+            "paper:2603.29640",
+        ),
+        (
+            "ASI-Evolve: UCB1 sampling c=1.414 balances exploration (unvisited nodes) vs exploitation (high-scoring nodes).",
+            "paper:2603.29640",
+        ),
+        (
+            "ASI-Evolve: Cognition base stores ~100 distilled insights. Quality score updated via (success+1)/(use+2).",
+            "paper:2603.29640",
+        ),
+        (
+            "EvolveR: Quality formula (success_count+1)/(use_count+2) is Laplace-smoothed. Prior of 0.5 for new items, avoids zero-division.",
+            "paper:2510.16079",
+        ),
+        (
+            "Memory agents: Multi-signal retrieval: cosine (α=0.5) + recency decay (β=0.3, λ=0.1) + importance (γ=0.2).",
+            "paper:2603.07670",
+        ),
+        (
+            "Memory agents: Write pipeline: filter → tag → canonicalize → deduplicate (cosine>0.92 skip) → score → embed → cluster → write.",
+            "paper:2603.07670",
+        ),
+        (
+            "CLAG: Two-stage retrieval (cluster profile matching → intra-cluster) reduces latency. Cold start flat until 100 entries, split at 300.",
+            "paper:2603.15421",
+        ),
+        (
+            "Self-Generated ICE: Top-k similar past tasks injected as in-context examples. Zero fine-tuning needed; ALFWorld 73%→93%.",
+            "paper:2505.00234",
+        ),
+        (
+            "MARS: Single-cycle reflection on failure — extract principle (what not to do) + procedure (what to do instead). Write both to semantic memory.",
+            "paper:2601.11974",
+        ),
+        (
+            "ACE: Context window as evolving playbook. Semantic memory entries are the playbook; updated on every success/failure.",
+            "paper:2510.04618",
+        ),
+        (
+            "Life-Harness: Structural harness improvements transfer to 17 other models at 88.5% avg relative gain. Harness corpus = portable artifact.",
+            "paper:2605.22166",
+        ),
+        (
+            "DHE: 5-layer failure attribution — retrieval→context→dispatch→execution→reasoning. Targets ≥60% fix-prediction precision vs AHE 33.7%.",
+            "design:professor-x",
+        ),
+        (
+            "LCAP: UCB1 bandit over 5 context budget allocations per task type. c=1.414, round-level delta_p drives arm selection.",
+            "design:professor-x",
+        ),
+        (
+            "BF: Behavioral Fingerprint F(H_k)=[p_tool, p_plan, p_correct]. Non-uniform improvement across categories confirms H11.",
+            "design:professor-x",
+        ),
+        (
+            "MHE: Three levers — Lever1 parametric (SDAR QLoRA overnight), Lever2 contextual (ICE+MARS), Lever3 structural (DHE-guided evolution).",
+            "design:professor-x",
+        ),
+        (
+            "Externalization: Pattern B — working context in prompt, long-term in external store. Harness decides what to retrieve and when.",
+            "paper:2604.08224",
+        ),
+        (
+            "SLMs: qwen3:8b Q4 fits in 5.2GB VRAM, 42 tok/s, 32K context, thinking mode. Matches larger models on structured agentic tasks.",
+            "paper:2506.02153",
+        ),
+        (
+            "Hermes: Advance next_run_at BEFORE executing jobs, under file lock — at-most-once semantics.",
+            "repo:hermes-agent",
+        ),
+        (
+            "ClawOS: Merkle-chained audit log — each entry SHA-256 hashes the previous. verify_chain() at startup detects tampering.",
+            "repo:clawos",
+        ),
+        (
+            "ClawOS: Hook circuit breaker — 3 consecutive failures disables the hook to prevent blocking all tool calls.",
+            "repo:clawos",
+        ),
+        (
+            "Professor X design: Core modules (policyd gate, memd) require human approval for modification. Never autonomous.",
+            "design:professor-x",
+        ),
     ];
 
     seeds
@@ -4601,7 +5155,8 @@ mod tests {
             vec![smoke("coding_smoke", true), smoke("evolution_smoke", false)],
         )];
 
-        let plan = plan_work_loop_jobs(WorkLoopRunKind::Operator, WorkLoopProfile::Core, 3, &recent);
+        let plan =
+            plan_work_loop_jobs(WorkLoopRunKind::Operator, WorkLoopProfile::Core, 3, &recent);
 
         assert_eq!(plan[0].kind, "evolution_smoke");
         assert!(plan[0].reason.contains("latest operator run failed"));
@@ -4617,8 +5172,12 @@ mod tests {
             vec![smoke("evolution_smoke", false)],
         )];
 
-        let plan =
-            plan_work_loop_jobs(WorkLoopRunKind::Supervised, WorkLoopProfile::Core, 4, &recent);
+        let plan = plan_work_loop_jobs(
+            WorkLoopRunKind::Supervised,
+            WorkLoopProfile::Core,
+            4,
+            &recent,
+        );
 
         assert_eq!(plan[0].kind, "coding_smoke");
         assert_eq!(plan[1].kind, "evolution_smoke");
@@ -4636,5 +5195,48 @@ mod tests {
         assert_eq!(plan[3].kind, "proposal_dry_run");
         assert_eq!(plan[4].kind, "operator_commit");
         assert!(plan[4].reason.contains("git commit"));
+    }
+
+    #[test]
+    fn changed_paths_from_unified_diff_reads_added_modified_and_deleted_paths() {
+        let diff = r#"diff --git a/professor-x/skills/old.md b/professor-x/skills/old.md
+deleted file mode 100644
+index 1111111..0000000
+--- a/professor-x/skills/old.md
++++ /dev/null
+diff --git a/professor-x/skills/new.md b/professor-x/skills/new.md
+new file mode 100644
+index 0000000..2222222
+--- /dev/null
++++ b/professor-x/skills/new.md
+diff --git a/professor-x/src/main.rs b/professor-x/src/main.rs
+index 3333333..4444444 100644
+--- a/professor-x/src/main.rs
++++ b/professor-x/src/main.rs
+"#;
+
+        let paths = changed_paths_from_unified_diff(diff).unwrap();
+
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("professor-x/skills/new.md"),
+                PathBuf::from("professor-x/skills/old.md"),
+                PathBuf::from("professor-x/src/main.rs"),
+            ]
+        );
+    }
+
+    #[test]
+    fn changed_paths_from_unified_diff_rejects_parent_paths() {
+        let diff = r#"diff --git a/professor-x/src/main.rs b/../outside.rs
+index 3333333..4444444 100644
+--- a/professor-x/src/main.rs
++++ b/../outside.rs
+"#;
+
+        let err = changed_paths_from_unified_diff(diff).unwrap_err();
+
+        assert!(err.to_string().contains("unsafe path"));
     }
 }
