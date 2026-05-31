@@ -16,6 +16,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::memd::coding_sessions::{CodingSessionRecord, CodingSessionStore};
 use crate::memd::coding_smoke::{CodingSmokeRecord, CodingSmokeStore};
 use crate::memd::events::{AgentEvent, EventStore};
 use crate::memd::free_energy::FreeEnergyStore;
@@ -164,6 +165,20 @@ pub fn print_snapshot(memory: Arc<MemoryManager>, events: Arc<EventStore>) -> Re
         for gate in snapshot.recent_work_loop_gates.iter().take(5) {
             println!("      gate {}: {}", gate.cycle, work_loop_gate_summary(gate, 96));
         }
+    }
+    println!("  coding sessions: {} runs", snapshot.coding_session_count);
+    if let Some(session) = &snapshot.latest_coding_session {
+        println!(
+            "    latest session: {} / {} / report {}{}",
+            &session.id[..8.min(session.id.len())],
+            session.status,
+            session.session_report_path,
+            session
+                .transcript_path
+                .as_ref()
+                .map(|path| format!(" / transcript {path}"))
+                .unwrap_or_default(),
+        );
     }
     println!(
         "  coding smoke: {} runs, {} passed",
@@ -380,6 +395,7 @@ struct ObserverSnapshot {
     work_loop_count: i64,
     coding_smoke_count: i64,
     coding_smoke_passed: i64,
+    coding_session_count: i64,
     task_events: usize,
     tool_events: usize,
     policy_events: usize,
@@ -420,6 +436,7 @@ struct ObserverSnapshot {
     latest_transcript: Option<AgentEvent>,
     latest_run: Option<TaskRun>,
     latest_transcript_summary: Option<TranscriptSummary>,
+    latest_coding_session: Option<CodingSessionRecord>,
     latest_coding_smoke: Option<CodingSmokeRecord>,
     latest_work_loop: Option<WorkLoopRunRecord>,
     latest_work_loop_gate: Option<WorkLoopGateRecord>,
@@ -545,6 +562,9 @@ impl ObserverSnapshot {
                 .unwrap_or_else(|_| PathBuf::from("artifacts/transcripts")),
         )
         .latest()?;
+        let coding_session_store = CodingSessionStore::new(Arc::clone(&memory.db));
+        snapshot.coding_session_count = coding_session_store.count()?;
+        snapshot.latest_coding_session = coding_session_store.latest()?;
         let smoke_store = CodingSmokeStore::new(Arc::clone(&memory.db));
         snapshot.coding_smoke_count = smoke_store.count()?;
         snapshot.coding_smoke_passed = smoke_store.pass_count()?;
@@ -721,6 +741,7 @@ impl Default for ObserverSnapshot {
             work_loop_count: 0,
             coding_smoke_count: 0,
             coding_smoke_passed: 0,
+            coding_session_count: 0,
             task_events: 0,
             tool_events: 0,
             policy_events: 0,
@@ -761,6 +782,7 @@ impl Default for ObserverSnapshot {
             latest_transcript: None,
             latest_run: None,
             latest_transcript_summary: None,
+            latest_coding_session: None,
             latest_coding_smoke: None,
             latest_work_loop: None,
             latest_work_loop_gate: None,
@@ -965,6 +987,7 @@ fn draw_activity(frame: &mut Frame, area: Rect, app: &ObserverApp) {
         latest_line("tool", &app.snapshot.latest_tool),
         latest_line("policy", &app.snapshot.latest_policy),
         latest_transcript_line(&app.snapshot.latest_transcript_summary),
+        latest_coding_session_line(&app.snapshot.latest_coding_session),
         latest_line("evolve", &app.snapshot.latest_evolution),
         latest_coding_smoke_line(&app.snapshot.latest_coding_smoke),
         Line::from(vec![
@@ -1307,6 +1330,26 @@ fn latest_coding_smoke_line(smoke: &Option<CodingSmokeRecord>) -> Line<'static> 
     }
 }
 
+fn latest_coding_session_line(session: &Option<CodingSessionRecord>) -> Line<'static> {
+    match session {
+        Some(session) => Line::from(vec![
+            Span::styled("code    ", label()),
+            Span::styled(format!("{:<8}", session.status), status_style(&session.status)),
+            Span::raw(format!(
+                "{}  {} checks  {}",
+                &session.id[..8.min(session.id.len())],
+                session.checks.len(),
+                truncate(&session.session_report_path, 56),
+            )),
+        ]),
+        None => Line::from(vec![
+            Span::styled("code    ", label()),
+            Span::styled("waiting", Style::default().fg(Color::DarkGray)),
+            Span::raw("  launch with --coding-session"),
+        ]),
+    }
+}
+
 fn latest_transcript_line(transcript: &Option<TranscriptSummary>) -> Line<'static> {
     match transcript {
         Some(transcript) => Line::from(vec![
@@ -1327,7 +1370,7 @@ fn latest_transcript_line(transcript: &Option<TranscriptSummary>) -> Line<'stati
 
 fn status_style(status: &str) -> Style {
     let color = match status {
-        "Complete" | "succeeded" => Color::Green,
+        "Complete" | "succeeded" | "passed" => Color::Green,
         "Running" => Color::Cyan,
         "Failed" | "failed" | "Blocked" | "Cancelled" => Color::Red,
         _ => Color::Yellow,

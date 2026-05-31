@@ -1,4 +1,5 @@
 pub mod affect;
+pub mod coding_sessions;
 pub mod coding_smoke;
 pub mod events;
 pub mod episodic;
@@ -207,6 +208,24 @@ CREATE TABLE IF NOT EXISTS coding_smokes (
     recorded_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_coding_smokes_generated ON coding_smokes(generated_at);
+
+CREATE TABLE IF NOT EXISTS coding_sessions (
+    id TEXT PRIMARY KEY,
+    generated_at TEXT NOT NULL,
+    goal TEXT NOT NULL,
+    status TEXT NOT NULL,
+    workspace TEXT,
+    smoke_id INTEGER,
+    smoke_report_path TEXT,
+    session_report_path TEXT NOT NULL,
+    transcript_path TEXT,
+    artifacts TEXT NOT NULL DEFAULT '[]',
+    checks TEXT NOT NULL DEFAULT '[]',
+    failure_reason TEXT,
+    recorded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_coding_sessions_generated ON coding_sessions(generated_at);
+CREATE INDEX IF NOT EXISTS idx_coding_sessions_status ON coding_sessions(status);
 
 CREATE TABLE IF NOT EXISTS work_loop_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -199,6 +199,7 @@ fn work_event_where_clause() -> &'static str {
       OR event_type LIKE 'tool.%'
       OR event_type LIKE 'policy.%'
       OR event_type LIKE 'react.%'
+      OR event_type LIKE 'coding.session.%'
       OR event_type LIKE 'coding.smoke.%'
       OR event_type LIKE 'evolution.%'
       OR event_type LIKE 'autonomous_run.%'

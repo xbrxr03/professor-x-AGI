@@ -28,6 +28,7 @@ use evolved::tracker::{OutcomeTracker, TaskOutcome};
 use evolved::verify_node_in_sandbox;
 use evolved::CognitionStore;
 use evolved::{EvolvedLoop, HiroRunner};
+use memd::coding_sessions::{CodingSessionRecord, CodingSessionStore};
 use memd::coding_smoke::{CodingSmokeRecord, CodingSmokeStore};
 use memd::events::EventStore;
 use memd::task_runs::{TaskRun, TaskRunStore};
@@ -90,6 +91,10 @@ struct CliArgs {
     hiro_smoke: bool,
     /// Run deterministic local coding-agent edit/verify smoke and exit.
     coding_smoke: bool,
+    /// Run a first-class bounded local coding-agent session and exit.
+    coding_session: bool,
+    /// Print the last N coding-agent sessions and exit.
+    coding_sessions_limit: Option<usize>,
     /// Run N bounded local supervised work-loop cycles and exit.
     supervised_loop_cycles: Option<u32>,
     /// Select supervised loop job mix: basic or core.
@@ -184,6 +189,8 @@ fn parse_args() -> CliArgs {
         evolution_smoke: false,
         hiro_smoke: false,
         coding_smoke: false,
+        coding_session: false,
+        coding_sessions_limit: None,
         supervised_loop_cycles: None,
         supervised_loop_profile: WorkLoopProfile::Basic,
         operator_run_cycles: None,
@@ -305,6 +312,18 @@ fn parse_args() -> CliArgs {
                 cli.coding_smoke = true;
                 i += 1;
             }
+            "--coding-session" | "--prof-x-code" => {
+                cli.coding_session = true;
+                i += 1;
+            }
+            "--coding-sessions" => {
+                let limit = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .and_then(|next| next.parse::<usize>().ok());
+                cli.coding_sessions_limit = Some(limit.unwrap_or(10));
+                i += if limit.is_some() { 2 } else { 1 };
+            }
             "--supervised-loop" => {
                 let cycles = args
                     .get(i + 1)
@@ -381,6 +400,7 @@ async fn main() -> Result<()> {
         || cli.work_feed_limit.is_some()
         || cli.transcripts_limit.is_some()
         || cli.task_runs_limit.is_some()
+        || cli.coding_sessions_limit.is_some()
         || cli.work_loops_limit.is_some()
         || cli.task_review.is_some()
         || cli.watch
@@ -449,6 +469,10 @@ async fn main() -> Result<()> {
 
     if let Some(limit) = cli.task_runs_limit {
         return print_task_runs(Arc::clone(&memory), limit);
+    }
+
+    if let Some(limit) = cli.coding_sessions_limit {
+        return print_coding_sessions(Arc::clone(&memory), limit);
     }
 
     if let Some(limit) = cli.work_loops_limit {
@@ -547,6 +571,17 @@ async fn main() -> Result<()> {
 
     if cli.coding_smoke {
         return run_coding_smoke(
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            Arc::clone(&transcripts),
+        )
+        .await;
+    }
+
+    if cli.coding_session {
+        return run_coding_session(
             Arc::clone(&registry),
             Arc::clone(&policy),
             Arc::clone(&memory),
@@ -1538,6 +1573,22 @@ struct CodingSmokeReport {
 }
 
 #[derive(serde::Serialize)]
+struct CodingSessionReport {
+    id: String,
+    generated_at: String,
+    goal: String,
+    status: String,
+    workspace: Option<String>,
+    smoke_id: Option<i64>,
+    smoke_report_path: Option<String>,
+    session_report_path: Option<String>,
+    transcript_path: Option<String>,
+    checks: Vec<String>,
+    artifacts: Vec<String>,
+    failure_reason: Option<String>,
+}
+
+#[derive(serde::Serialize)]
 struct SupervisedLoopReport {
     run_id: String,
     run_kind: String,
@@ -2363,6 +2414,118 @@ async fn run_coding_smoke(
     Ok(())
 }
 
+async fn run_coding_session(
+    registry: Arc<std::sync::RwLock<ToolRegistry>>,
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    transcripts: Arc<TranscriptStore>,
+) -> Result<()> {
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let generated_at = chrono::Utc::now();
+    let goal = "bounded local coding session: diagnose, patch, and verify a failing Rust test".to_string();
+    let smoke_store = CodingSmokeStore::new(Arc::clone(&memory.db));
+    let before_smoke_id = smoke_store.latest()?.and_then(|record| record.id);
+    events.append(
+        None,
+        None,
+        "coding.session.started",
+        "starting bounded local coding-agent session",
+        serde_json::json!({
+            "session_id": session_id,
+            "goal": goal,
+            "mode": "local_temp_workspace",
+        }),
+    )?;
+
+    let outcome = run_coding_smoke(
+        registry,
+        policy,
+        Arc::clone(&memory),
+        Arc::clone(&events),
+        transcripts,
+    )
+    .await;
+    let failure_reason = outcome.as_ref().err().map(|err| err.to_string());
+    let smoke = smoke_store
+        .latest()?
+        .filter(|record| record.id != before_smoke_id);
+    let passed = outcome.is_ok() && smoke.as_ref().map(|record| record.passed).unwrap_or(false);
+    let checks = match &smoke {
+        Some(record) => vec![
+            format!(
+                "initial cargo test {}",
+                if record.initial_test_failed { "failed as expected" } else { "did not fail" }
+            ),
+            format!("patch {}", if record.edit_applied { "applied" } else { "did not apply" }),
+            format!(
+                "final cargo test {}",
+                if record.final_test_passed { "passed" } else { "failed" }
+            ),
+        ],
+        None => vec!["coding smoke did not record a result".to_string()],
+    };
+    let mut report = CodingSessionReport {
+        id: session_id.clone(),
+        generated_at: generated_at.to_rfc3339(),
+        goal: goal.clone(),
+        status: if passed { "passed" } else { "failed" }.to_string(),
+        workspace: smoke.as_ref().map(|record| record.workspace.clone()),
+        smoke_id: smoke.as_ref().and_then(|record| record.id),
+        smoke_report_path: smoke.as_ref().map(|record| record.report_path.clone()),
+        session_report_path: None,
+        transcript_path: smoke.as_ref().and_then(|record| record.transcript_path.clone()),
+        checks,
+        artifacts: smoke.as_ref().map(|record| record.artifacts.clone()).unwrap_or_default(),
+        failure_reason,
+    };
+    let report_path = write_coding_session_report(&report)?;
+    report.session_report_path = Some(report_path.display().to_string());
+    std::fs::write(&report_path, serde_json::to_string_pretty(&report)?)?;
+
+    CodingSessionStore::new(Arc::clone(&memory.db)).insert(&CodingSessionRecord {
+        id: session_id.clone(),
+        generated_at,
+        goal,
+        status: report.status.clone(),
+        workspace: report.workspace.clone(),
+        smoke_id: report.smoke_id,
+        smoke_report_path: report.smoke_report_path.clone(),
+        session_report_path: report_path.display().to_string(),
+        transcript_path: report.transcript_path.clone(),
+        artifacts: report.artifacts.clone(),
+        checks: report.checks.clone(),
+        failure_reason: report.failure_reason.clone(),
+        recorded_at: chrono::Utc::now(),
+    })?;
+
+    events.append(
+        None,
+        None,
+        if passed { "coding.session.passed" } else { "coding.session.failed" },
+        format!("coding session report written to {}", report_path.display()),
+        serde_json::to_value(&report)?,
+    )?;
+
+    println!("Coding session: {}", if passed { "passed" } else { "failed" });
+    println!("  session: {session_id}");
+    println!("  report: {}", report_path.display());
+    if let Some(path) = &report.transcript_path {
+        println!("  transcript: {path}");
+    }
+    if let Some(workspace) = &report.workspace {
+        println!("  workspace: {workspace}");
+    }
+
+    if let Err(err) = outcome {
+        anyhow::bail!("coding session failed: {err}");
+    }
+    if !passed {
+        anyhow::bail!("coding session failed");
+    }
+    Ok(())
+}
+
 fn record_smoke_step(
     task: &mut TaskNode,
     index: u32,
@@ -2459,13 +2622,35 @@ async fn run_smoke_tool(
 }
 
 fn write_coding_smoke_report(report: &CodingSmokeReport) -> Result<PathBuf> {
-    let dir = PathBuf::from("artifacts")
-        .join("coding-smoke")
-        .join(chrono::Utc::now().format("%Y-%m-%d").to_string());
+    let dir = std::env::var("PROFESSOR_X_CODING_SMOKE_REPORT_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            PathBuf::from("artifacts")
+                .join("coding-smoke")
+                .join(chrono::Utc::now().format("%Y-%m-%d").to_string())
+        });
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(format!(
         "smoke-{}.json",
         chrono::Utc::now().format("%H%M%S")
+    ));
+    std::fs::write(&path, serde_json::to_string_pretty(report)?)?;
+    Ok(path)
+}
+
+fn write_coding_session_report(report: &CodingSessionReport) -> Result<PathBuf> {
+    let dir = std::env::var("PROFESSOR_X_CODING_SESSION_REPORT_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            PathBuf::from("artifacts")
+                .join("coding-sessions")
+                .join(chrono::Utc::now().format("%Y-%m-%d").to_string())
+        });
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!(
+        "session-{}-{}.json",
+        chrono::Utc::now().format("%H%M%S"),
+        &report.id[..8.min(report.id.len())]
     ));
     std::fs::write(&path, serde_json::to_string_pretty(report)?)?;
     Ok(path)
@@ -3318,6 +3503,35 @@ fn print_task_runs(memory: Arc<MemoryManager>, limit: usize) -> Result<()> {
     Ok(())
 }
 
+fn print_coding_sessions(memory: Arc<MemoryManager>, limit: usize) -> Result<()> {
+    let sessions = CodingSessionStore::new(Arc::clone(&memory.db)).recent(limit)?;
+    if sessions.is_empty() {
+        println!("No coding sessions recorded yet.");
+        return Ok(());
+    }
+    println!("Recent coding sessions");
+    for session in sessions {
+        println!(
+            "{} {} session={} smoke={} checks={} artifacts={} {}",
+            session.generated_at.format("%Y-%m-%d %H:%M:%S"),
+            session.status,
+            &session.id[..8.min(session.id.len())],
+            session.smoke_id.map(|id| id.to_string()).unwrap_or_else(|| "none".to_string()),
+            session.checks.len(),
+            session.artifacts.len(),
+            truncate(&session.goal, 90),
+        );
+        println!("  report: {}", session.session_report_path);
+        if let Some(path) = &session.transcript_path {
+            println!("  transcript: {path}");
+        }
+        if let Some(reason) = &session.failure_reason {
+            println!("  failure: {}", truncate(reason, 140));
+        }
+    }
+    Ok(())
+}
+
 fn print_work_loops(memory: Arc<MemoryManager>, limit: usize) -> Result<()> {
     let runs = WorkLoopRunStore::new(Arc::clone(&memory.db)).recent(limit)?;
     if runs.is_empty() {
@@ -3577,6 +3791,8 @@ fn work_event_label(event_type: &str) -> &'static str {
         "TASK"
     } else if event_type.starts_with("react.") {
         "REACT"
+    } else if event_type.starts_with("coding.session.") {
+        "CODE"
     } else if event_type.starts_with("coding.smoke.") {
         "SMOKE"
     } else if event_type.starts_with("evolution.") {
