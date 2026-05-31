@@ -1,0 +1,95 @@
+{
+  "run_id": "6dd4dc02-7a4f-4e5c-89c5-1149fdd7b2fb",
+  "run_kind": "operator",
+  "started_at": "2026-05-31T19:58:26.986173218+00:00",
+  "completed_at": "2026-05-31T19:59:31.604792952+00:00",
+  "requested_cycles": 5,
+  "completed_cycles": 5,
+  "passed_cycles": 5,
+  "failed_cycles": 0,
+  "profile": "commit",
+  "planned_jobs": [
+    {
+      "cycle": 1,
+      "kind": "coding_smoke",
+      "label": "coding-agent smoke",
+      "reason": "commit profile starts by proving the local coding-agent edit/test gate still works"
+    },
+    {
+      "cycle": 2,
+      "kind": "evolution_smoke",
+      "label": "evolution sandbox smoke",
+      "reason": "commit profile proves sandbox accept/reject defenses before any commit-capable gate"
+    },
+    {
+      "cycle": 3,
+      "kind": "hiro_smoke",
+      "label": "HIRO inventory smoke",
+      "reason": "commit profile verifies HIRO inventory before evolution evidence is trusted"
+    },
+    {
+      "cycle": 4,
+      "kind": "proposal_dry_run",
+      "label": "evolution proposal dry-run",
+      "reason": "commit profile records a proposal dry-run before applying an accepted proposal"
+    },
+    {
+      "cycle": 5,
+      "kind": "patch_apply_commit",
+      "label": "verified patch apply commit",
+      "reason": "commit profile routes a generated patch through sandbox verify, main apply, cargo check, and git commit"
+    }
+  ],
+  "smoke_records": [
+    {
+      "cycle": 1,
+      "kind": "coding_smoke",
+      "smoke_id": 1,
+      "passed": true,
+      "report_path": "artifacts/coding-smoke/2026-05-31/smoke-195827.json",
+      "transcript_path": "artifacts/transcripts/2026-05-31/788ff030-c949-4c5e-a3e5-935b597ae588.json",
+      "workspace": "/tmp/px-coding-smoke-ef1c08ff-990e-4fd5-a702-405e6645b69b",
+      "detail": "deterministic coding smoke"
+    },
+    {
+      "cycle": 2,
+      "kind": "evolution_smoke",
+      "smoke_id": null,
+      "passed": true,
+      "report_path": "artifacts/evolution/2026-05-31/smoke-195848.json",
+      "transcript_path": null,
+      "workspace": "repo-root",
+      "detail": "3 sandbox case(s)"
+    },
+    {
+      "cycle": 3,
+      "kind": "hiro_smoke",
+      "smoke_id": null,
+      "passed": true,
+      "report_path": "artifacts/hiro/2026-05-31/smoke-195848.json",
+      "transcript_path": null,
+      "workspace": "hiro/tasks.json",
+      "detail": "60 task(s): tool=20 planning=20 correction=20"
+    },
+    {
+      "cycle": 4,
+      "kind": "proposal_dry_run",
+      "smoke_id": null,
+      "passed": true,
+      "report_path": "artifacts/evolution/proposals/dry-runs/2026-05-31/proposal-195910.json",
+      "transcript_path": null,
+      "workspace": "repo-root",
+      "detail": "4 check(s), diff_bytes=730, applied=false"
+    },
+    {
+      "cycle": 5,
+      "kind": "patch_apply_commit",
+      "smoke_id": null,
+      "passed": true,
+      "report_path": "artifacts/evolution/patch-verifications/2026-05-31/patch-195931.json",
+      "transcript_path": null,
+      "workspace": "repo-root",
+      "detail": "5 check(s), commit=63d531f, diff_bytes=336"
+    }
+  ]
+}
