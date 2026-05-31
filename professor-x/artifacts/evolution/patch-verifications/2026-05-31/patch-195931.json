@@ -5,10 +5,10 @@
   "workspace": "repo-root",
   "harness_commit": "43fd019",
   "accepted": true,
-  "applied": false,
-  "commit": null,
+  "applied": true,
+  "commit": "63d531f",
   "report_commit": null,
-  "reason": "sandbox patch verification passed",
+  "reason": "sandbox verification passed and committed 63d531f",
   "checks": [
     "main_worktree_clean",
     "reward_hacking_scan",
