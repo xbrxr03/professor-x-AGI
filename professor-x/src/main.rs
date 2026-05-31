@@ -1601,6 +1601,8 @@ struct CodingSessionReport {
     session_report_path: Option<String>,
     transcript_path: Option<String>,
     checks: Vec<String>,
+    plan_steps: Vec<String>,
+    step_outcomes: Vec<String>,
     artifacts: Vec<String>,
     failure_reason: Option<String>,
 }
@@ -2185,6 +2187,15 @@ fn coding_exercise_for_goal(goal: &str) -> CodingExercise {
     }
 }
 
+fn coding_session_plan(exercise: CodingExercise) -> Vec<String> {
+    vec![
+        format!("Create isolated Rust workspace for {}", exercise.name),
+        "Run cargo test before editing to capture the failing baseline".to_string(),
+        "Apply the smallest exact source replacement through fs.replace".to_string(),
+        "Run cargo test again and keep command artifacts plus transcript".to_string(),
+    ]
+}
+
 async fn run_coding_smoke(
     registry: Arc<std::sync::RwLock<ToolRegistry>>,
     policy: Arc<PolicyEngine>,
@@ -2496,6 +2507,7 @@ async fn run_coding_session(
     });
     let exercise = coding_exercise_for_goal(&requested_goal);
     let goal = exercise.description.to_string();
+    let plan_steps = coding_session_plan(exercise);
     let smoke_store = CodingSmokeStore::new(Arc::clone(&memory.db));
     let before_smoke_id = smoke_store.latest()?.and_then(|record| record.id);
     events.append(
@@ -2508,6 +2520,7 @@ async fn run_coding_session(
             "goal": goal,
             "requested_goal": requested_goal,
             "exercise": exercise.name,
+            "plan_steps": plan_steps,
             "mode": "local_temp_workspace",
         }),
     )?;
@@ -2540,6 +2553,23 @@ async fn run_coding_session(
         ],
         None => vec!["coding smoke did not record a result".to_string()],
     };
+    let step_outcomes = match &smoke {
+        Some(record) => vec![
+            format!(
+                "baseline test observed: {}",
+                if record.initial_test_failed { "failed" } else { "not failed" }
+            ),
+            format!(
+                "source replacement observed: {}",
+                if record.edit_applied { "applied" } else { "not applied" }
+            ),
+            format!(
+                "verification test observed: {}",
+                if record.final_test_passed { "passed" } else { "failed" }
+            ),
+        ],
+        None => vec!["no smoke record was available for outcome extraction".to_string()],
+    };
     let mut report = CodingSessionReport {
         id: session_id.clone(),
         generated_at: generated_at.to_rfc3339(),
@@ -2553,6 +2583,8 @@ async fn run_coding_session(
         session_report_path: None,
         transcript_path: smoke.as_ref().and_then(|record| record.transcript_path.clone()),
         checks,
+        plan_steps: plan_steps.clone(),
+        step_outcomes: step_outcomes.clone(),
         artifacts: smoke.as_ref().map(|record| record.artifacts.clone()).unwrap_or_default(),
         failure_reason,
     };
@@ -2573,6 +2605,8 @@ async fn run_coding_session(
         transcript_path: report.transcript_path.clone(),
         artifacts: report.artifacts.clone(),
         checks: report.checks.clone(),
+        plan_steps,
+        step_outcomes,
         failure_reason: report.failure_reason.clone(),
         recorded_at: chrono::Utc::now(),
     })?;
@@ -3601,6 +3635,12 @@ fn print_coding_sessions(memory: Arc<MemoryManager>, limit: usize) -> Result<()>
             truncate(&session.goal, 90),
         );
         println!("  report: {}", session.session_report_path);
+        for (index, step) in session.plan_steps.iter().take(4).enumerate() {
+            println!("  plan {}: {}", index + 1, truncate(step, 120));
+        }
+        for (index, outcome) in session.step_outcomes.iter().take(4).enumerate() {
+            println!("  outcome {}: {}", index + 1, truncate(outcome, 120));
+        }
         if let Some(path) = &session.transcript_path {
             println!("  transcript: {path}");
         }

@@ -17,6 +17,8 @@ pub struct CodingSessionRecord {
     pub transcript_path: Option<String>,
     pub artifacts: Vec<String>,
     pub checks: Vec<String>,
+    pub plan_steps: Vec<String>,
+    pub step_outcomes: Vec<String>,
     pub failure_reason: Option<String>,
     pub recorded_at: DateTime<Utc>,
 }
@@ -34,12 +36,15 @@ impl CodingSessionStore {
     pub fn insert(&self, record: &CodingSessionRecord) -> Result<()> {
         let artifacts = serde_json::to_string(&record.artifacts)?;
         let checks = serde_json::to_string(&record.checks)?;
+        let plan_steps = serde_json::to_string(&record.plan_steps)?;
+        let step_outcomes = serde_json::to_string(&record.step_outcomes)?;
         let db = self.db.lock().unwrap();
         db.execute(
             "INSERT OR REPLACE INTO coding_sessions
              (id, generated_at, goal, exercise, status, workspace, smoke_id, smoke_report_path,
-              session_report_path, transcript_path, artifacts, checks, failure_reason, recorded_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+              session_report_path, transcript_path, artifacts, checks, plan_steps, step_outcomes,
+              failure_reason, recorded_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 record.id,
                 record.generated_at.to_rfc3339(),
@@ -53,6 +58,8 @@ impl CodingSessionStore {
                 record.transcript_path,
                 artifacts,
                 checks,
+                plan_steps,
+                step_outcomes,
                 record.failure_reason,
                 record.recorded_at.to_rfc3339(),
             ],
@@ -65,7 +72,7 @@ impl CodingSessionStore {
         let mut stmt = db.prepare(
             "SELECT id, generated_at, goal, status, workspace, smoke_id, smoke_report_path,
                     session_report_path, transcript_path, artifacts, checks, failure_reason,
-                    recorded_at, exercise
+                    recorded_at, exercise, plan_steps, step_outcomes
              FROM coding_sessions
              ORDER BY generated_at DESC, recorded_at DESC
              LIMIT 1",
@@ -87,7 +94,7 @@ impl CodingSessionStore {
         let mut stmt = db.prepare(
             "SELECT id, generated_at, goal, status, workspace, smoke_id, smoke_report_path,
                     session_report_path, transcript_path, artifacts, checks, failure_reason,
-                    recorded_at, exercise
+                    recorded_at, exercise, plan_steps, step_outcomes
              FROM coding_sessions
              ORDER BY generated_at DESC, recorded_at DESC
              LIMIT ?1",
@@ -106,6 +113,8 @@ fn parse_record(row: &rusqlite::Row) -> rusqlite::Result<CodingSessionRecord> {
     let artifacts_raw: String = row.get(9)?;
     let checks_raw: String = row.get(10)?;
     let recorded_at_raw: String = row.get(12)?;
+    let plan_steps_raw: String = row.get(14)?;
+    let step_outcomes_raw: String = row.get(15)?;
     Ok(CodingSessionRecord {
         id: row.get(0)?,
         generated_at: parse_time(&generated_at_raw),
@@ -119,6 +128,8 @@ fn parse_record(row: &rusqlite::Row) -> rusqlite::Result<CodingSessionRecord> {
         transcript_path: row.get(8)?,
         artifacts: serde_json::from_str(&artifacts_raw).unwrap_or_default(),
         checks: serde_json::from_str(&checks_raw).unwrap_or_default(),
+        plan_steps: serde_json::from_str(&plan_steps_raw).unwrap_or_default(),
+        step_outcomes: serde_json::from_str(&step_outcomes_raw).unwrap_or_default(),
         failure_reason: row.get(11)?,
         recorded_at: parse_time(&recorded_at_raw),
     })
@@ -153,6 +164,8 @@ mod tests {
                     transcript_path TEXT,
                     artifacts TEXT NOT NULL DEFAULT '[]',
                     checks TEXT NOT NULL DEFAULT '[]',
+                    plan_steps TEXT NOT NULL DEFAULT '[]',
+                    step_outcomes TEXT NOT NULL DEFAULT '[]',
                     failure_reason TEXT,
                     recorded_at TEXT NOT NULL
                 );",
@@ -178,6 +191,16 @@ mod tests {
                     "initial cargo test failed".to_string(),
                     "final cargo test passed".to_string(),
                 ],
+                plan_steps: vec![
+                    "run tests before editing".to_string(),
+                    "apply exact patch".to_string(),
+                    "run tests after editing".to_string(),
+                ],
+                step_outcomes: vec![
+                    "initial test failed".to_string(),
+                    "patch applied".to_string(),
+                    "final test passed".to_string(),
+                ],
                 failure_reason: None,
                 recorded_at: now,
             })
@@ -187,6 +210,8 @@ mod tests {
         assert_eq!(latest.id, "session-1");
         assert_eq!(latest.exercise, "add_i32");
         assert_eq!(latest.status, "passed");
+        assert_eq!(latest.plan_steps.len(), 3);
+        assert_eq!(latest.step_outcomes.len(), 3);
         assert_eq!(latest.smoke_id, Some(7));
         assert_eq!(store.recent(5).unwrap().len(), 1);
     }

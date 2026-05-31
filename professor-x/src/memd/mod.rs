@@ -222,6 +222,8 @@ CREATE TABLE IF NOT EXISTS coding_sessions (
     transcript_path TEXT,
     artifacts TEXT NOT NULL DEFAULT '[]',
     checks TEXT NOT NULL DEFAULT '[]',
+    plan_steps TEXT NOT NULL DEFAULT '[]',
+    step_outcomes TEXT NOT NULL DEFAULT '[]',
     failure_reason TEXT,
     recorded_at TEXT NOT NULL
 );
@@ -445,7 +447,11 @@ impl MemoryManager {
         ensure_columns(
             &conn,
             "coding_sessions",
-            &[("exercise", "TEXT NOT NULL DEFAULT ''")],
+            &[
+                ("exercise", "TEXT NOT NULL DEFAULT ''"),
+                ("plan_steps", "TEXT NOT NULL DEFAULT '[]'"),
+                ("step_outcomes", "TEXT NOT NULL DEFAULT '[]'"),
+            ],
         )?;
         ensure_columns(
             &conn,

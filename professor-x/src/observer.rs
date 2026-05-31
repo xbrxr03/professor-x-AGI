@@ -169,10 +169,12 @@ pub fn print_snapshot(memory: Arc<MemoryManager>, events: Arc<EventStore>) -> Re
     println!("  coding sessions: {} runs", snapshot.coding_session_count);
     if let Some(session) = &snapshot.latest_coding_session {
         println!(
-            "    latest session: {} / {} / {} / report {}{}",
+            "    latest session: {} / {} / {} / {} plan / {} outcomes / report {}{}",
             &session.id[..8.min(session.id.len())],
             session.status,
             session.exercise,
+            session.plan_steps.len(),
+            session.step_outcomes.len(),
             session.session_report_path,
             session
                 .transcript_path
@@ -1337,10 +1339,11 @@ fn latest_coding_session_line(session: &Option<CodingSessionRecord>) -> Line<'st
             Span::styled("code    ", label()),
             Span::styled(format!("{:<8}", session.status), status_style(&session.status)),
             Span::raw(format!(
-                "{}  {}  {} checks  {}",
+                "{}  {}  {}p/{}o  {}",
                 &session.id[..8.min(session.id.len())],
                 session.exercise,
-                session.checks.len(),
+                session.plan_steps.len(),
+                session.step_outcomes.len(),
                 truncate(&session.session_report_path, 56),
             )),
         ]),
