@@ -1,0 +1,21 @@
+{
+  "generated_at": "2026-05-31T19:54:39.808982336+00:00",
+  "mode": "patch_apply_commit",
+  "patch_path": "/tmp/px-verify-patch.diff",
+  "workspace": "repo-root",
+  "harness_commit": "9357e96",
+  "accepted": true,
+  "applied": false,
+  "commit": null,
+  "report_commit": null,
+  "reason": "sandbox patch verification passed",
+  "checks": [
+    "main_worktree_clean",
+    "reward_hacking_scan",
+    "sandbox_worktree",
+    "material_diff",
+    "cargo_check"
+  ],
+  "diff_hash": "d14ceaef726066e6015057dbbf05b6bf90ef89410e3e78b5cebf8c4248bb00f6",
+  "diff_bytes": 1390
+}
