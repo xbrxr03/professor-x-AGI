@@ -75,6 +75,8 @@ struct CliArgs {
     task_runs_limit: Option<usize>,
     /// Print the last N supervised work-loop runs and exit.
     work_loops_limit: Option<usize>,
+    /// Print a detailed autonomous/work-loop run review by run id prefix, report path, or 'latest'.
+    run_review: Option<String>,
     /// Print a task transcript review by task id prefix, or 'latest'.
     task_review: Option<String>,
     /// Follow agent events until interrupted.
@@ -197,6 +199,7 @@ fn parse_args() -> CliArgs {
         transcripts_limit: None,
         task_runs_limit: None,
         work_loops_limit: None,
+        run_review: None,
         task_review: None,
         watch: false,
         watch_work: false,
@@ -303,6 +306,15 @@ fn parse_args() -> CliArgs {
                     .and_then(|next| next.parse::<usize>().ok());
                 cli.work_loops_limit = Some(limit.unwrap_or(10));
                 i += if limit.is_some() { 2 } else { 1 };
+            }
+            "--run-review" | "--loop-review" => {
+                let value = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .cloned();
+                let has_value = value.is_some();
+                cli.run_review = Some(value.unwrap_or_else(|| "latest".to_string()));
+                i += if has_value { 2 } else { 1 };
             }
             "--task-review" if i + 1 < args.len() => {
                 cli.task_review = Some(args[i + 1].clone());
@@ -544,6 +556,10 @@ async fn main() -> Result<()> {
 
     if let Some(limit) = cli.work_loops_limit {
         return print_work_loops(Arc::clone(&memory), limit);
+    }
+
+    if let Some(run_ref) = cli.run_review {
+        return print_run_review(Arc::clone(&memory), &run_ref);
     }
 
     if let Some(task_ref) = cli.task_review {
@@ -918,7 +934,7 @@ struct EvolutionProposalDryRunReport {
     diff_bytes: usize,
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct PatchVerificationReport {
     generated_at: String,
     mode: String,
@@ -2396,7 +2412,7 @@ struct CodingSessionReport {
     failure_reason: Option<String>,
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 struct SupervisedLoopReport {
     run_id: String,
     run_kind: String,
@@ -4677,6 +4693,207 @@ fn print_work_loops(memory: Arc<MemoryManager>, limit: usize) -> Result<()> {
     Ok(())
 }
 
+fn print_run_review(memory: Arc<MemoryManager>, run_ref: &str) -> Result<()> {
+    let repo_root = default_repo_root();
+    let report_path = resolve_work_loop_report_path(Arc::clone(&memory), &repo_root, run_ref)?;
+    let raw = std::fs::read_to_string(&report_path)?;
+    let report: SupervisedLoopReport = serde_json::from_str(&raw)?;
+    println!("Professor X run review");
+    println!("  run: {}", report.run_id);
+    println!("  kind/profile: {}:{}", report.run_kind, report.profile);
+    println!("  started: {}", report.started_at);
+    println!("  completed: {}", report.completed_at);
+    println!(
+        "  cycles: {}/{} passed={} failed={}",
+        report.completed_cycles, report.requested_cycles, report.passed_cycles, report.failed_cycles
+    );
+    println!("  report: {}", display_repo_path(&repo_root, &report_path));
+
+    println!("Plan");
+    for job in &report.planned_jobs {
+        println!(
+            "  {}. {} - {}",
+            job.cycle,
+            job.kind,
+            truncate(&job.reason, 120)
+        );
+    }
+
+    println!("Evidence");
+    for smoke in &report.smoke_records {
+        let status = if smoke.passed { "passed" } else { "failed" };
+        let artifact_path = resolve_report_reference(&repo_root, &smoke.report_path);
+        println!(
+            "  cycle {} {} {} :: {}",
+            smoke.cycle,
+            smoke.kind,
+            status,
+            truncate(&smoke.detail, 120)
+        );
+        println!("    report: {}", display_repo_path(&repo_root, &artifact_path));
+        if !artifact_path.exists() {
+            println!("    report_status: missing");
+        }
+        if let Some(transcript) = &smoke.transcript_path {
+            let transcript_path = resolve_report_reference(&repo_root, transcript);
+            println!(
+                "    transcript: {}{}",
+                display_repo_path(&repo_root, &transcript_path),
+                if transcript_path.exists() { "" } else { " (missing)" }
+            );
+        }
+        if smoke.kind == "patch_apply_commit" {
+            print_patch_apply_review(&repo_root, &artifact_path)?;
+        }
+    }
+    Ok(())
+}
+
+fn print_patch_apply_review(repo_root: &std::path::Path, path: &std::path::Path) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let raw = std::fs::read_to_string(path)?;
+    let report: PatchVerificationReport = serde_json::from_str(&raw)?;
+    println!(
+        "    patch: accepted={} applied={} commit={} report_commit={}",
+        report.accepted,
+        report.applied,
+        report.commit.as_deref().unwrap_or("none"),
+        report.report_commit.as_deref().unwrap_or("none")
+    );
+    println!("    checks: {}", report.checks.join(", "));
+    println!(
+        "    diff: {} bytes hash={}",
+        report.diff_bytes,
+        report.diff_hash.as_deref().unwrap_or("none")
+    );
+    println!("    reason: {}", truncate(&report.reason, 140));
+    if let Some(commit) = &report.commit {
+        let output = std::process::Command::new("git")
+            .args(["show", "--stat", "--oneline", "--no-renames", commit])
+            .current_dir(repo_root)
+            .output();
+        if let Ok(output) = output {
+            if output.status.success() {
+                let text = String::from_utf8_lossy(&output.stdout);
+                for line in text.lines().take(8) {
+                    println!("    git: {}", truncate(line, 140));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn resolve_work_loop_report_path(
+    memory: Arc<MemoryManager>,
+    repo_root: &std::path::Path,
+    run_ref: &str,
+) -> Result<PathBuf> {
+    let direct = resolve_report_reference(repo_root, run_ref);
+    if direct.exists() {
+        return Ok(direct);
+    }
+
+    if run_ref == "latest" {
+        if let Some(run) = WorkLoopRunStore::new(Arc::clone(&memory.db)).latest()? {
+            let path = resolve_report_reference(repo_root, &run.report_path);
+            if path.exists() {
+                return Ok(path);
+            }
+        }
+        return latest_work_loop_report_from_artifacts(repo_root)
+            .ok_or_else(|| anyhow::anyhow!("no work-loop report artifacts found"));
+    }
+
+    if let Some(run) = WorkLoopRunStore::new(Arc::clone(&memory.db))
+        .recent(100)?
+        .into_iter()
+        .find(|run| run.run_id.starts_with(run_ref))
+    {
+        let path = resolve_report_reference(repo_root, &run.report_path);
+        if path.exists() {
+            return Ok(path);
+        }
+    }
+
+    find_work_loop_report_by_ref(repo_root, run_ref)
+        .ok_or_else(|| anyhow::anyhow!("no work-loop report found for '{run_ref}'"))
+}
+
+fn latest_work_loop_report_from_artifacts(repo_root: &std::path::Path) -> Option<PathBuf> {
+    let mut reports = work_loop_report_artifacts(repo_root);
+    reports.sort();
+    reports.pop()
+}
+
+fn find_work_loop_report_by_ref(repo_root: &std::path::Path, run_ref: &str) -> Option<PathBuf> {
+    for path in work_loop_report_artifacts(repo_root) {
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.contains(run_ref))
+            .unwrap_or(false)
+        {
+            return Some(path);
+        }
+        if let Ok(raw) = std::fs::read_to_string(&path) {
+            if raw.contains(run_ref) {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+fn work_loop_report_artifacts(repo_root: &std::path::Path) -> Vec<PathBuf> {
+    let root = repo_root.join("professor-x").join("artifacts").join("work-loop");
+    let mut out = Vec::new();
+    let mut stack = vec![root];
+    while let Some(dir) = stack.pop() {
+        let Ok(read) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in read.flatten() {
+            let path = entry.path();
+            if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                stack.push(path);
+            } else if path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.starts_with("loop-") && name.ends_with(".json"))
+                .unwrap_or(false)
+            {
+                out.push(path);
+            }
+        }
+    }
+    out
+}
+
+fn resolve_report_reference(repo_root: &std::path::Path, raw: impl AsRef<str>) -> PathBuf {
+    let path = PathBuf::from(raw.as_ref());
+    if path.is_absolute() {
+        return path;
+    }
+    let from_root = repo_root.join(&path);
+    if from_root.exists() {
+        return from_root;
+    }
+    if path.starts_with("artifacts") {
+        return repo_root.join("professor-x").join(path);
+    }
+    from_root
+}
+
+fn display_repo_path(repo_root: &std::path::Path, path: &std::path::Path) -> String {
+    path.strip_prefix(repo_root)
+        .unwrap_or(path)
+        .display()
+        .to_string()
+}
+
 fn print_task_review(transcripts: Arc<TranscriptStore>, task_ref: &str) -> Result<()> {
     let transcript = if task_ref == "latest" {
         transcripts.latest()?
@@ -5331,6 +5548,48 @@ mod tests {
         assert!(body.contains("## Workflow"));
         assert!(body.contains("## Output Contract"));
         assert!(body.lines().count() > 10);
+    }
+
+    #[test]
+    fn resolve_report_reference_maps_artifacts_under_professor_x() {
+        let root = std::env::temp_dir().join(format!("px-report-ref-{}", uuid::Uuid::new_v4()));
+        let resolved =
+            resolve_report_reference(&root, "artifacts/work-loop/2026-05-31/loop-test.json");
+
+        assert_eq!(
+            resolved,
+            root.join("professor-x")
+                .join("artifacts")
+                .join("work-loop")
+                .join("2026-05-31")
+                .join("loop-test.json")
+        );
+    }
+
+    #[test]
+    fn latest_work_loop_report_from_artifacts_prefers_latest_path() {
+        let root = std::env::temp_dir().join(format!("px-loop-reports-{}", uuid::Uuid::new_v4()));
+        let older = root
+            .join("professor-x")
+            .join("artifacts")
+            .join("work-loop")
+            .join("2026-05-30")
+            .join("loop-235959.json");
+        let newer = root
+            .join("professor-x")
+            .join("artifacts")
+            .join("work-loop")
+            .join("2026-05-31")
+            .join("loop-000001.json");
+        std::fs::create_dir_all(older.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(newer.parent().unwrap()).unwrap();
+        std::fs::write(&older, "{}").unwrap();
+        std::fs::write(&newer, "{}").unwrap();
+
+        let latest = latest_work_loop_report_from_artifacts(&root).unwrap();
+
+        assert_eq!(latest, newer);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
