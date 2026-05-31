@@ -25,6 +25,7 @@ use evolved::cognition_base::CognitionItem;
 use evolved::hiro::load_task_inventory;
 use evolved::proposer::{ChangeManifest, EvolutionNode, HarnessComponent, VerificationStatus};
 use evolved::tracker::{OutcomeTracker, TaskOutcome};
+use evolved::verify_diff_in_sandbox;
 use evolved::verify_node_in_sandbox;
 use evolved::CognitionStore;
 use evolved::{EvolvedLoop, HiroRunner};
@@ -91,6 +92,10 @@ struct CliArgs {
     proposal_dry_run: bool,
     /// Verify one concrete non-committing evolution proposal while streaming the work feed.
     proposal_dry_run_live: bool,
+    /// Verify a unified diff patch in an isolated sandbox and exit.
+    patch_verify_path: Option<PathBuf>,
+    /// Verify a unified diff patch while streaming sandbox verification events.
+    patch_verify_live_path: Option<PathBuf>,
     /// Validate HIRO task inventory and evaluator substrate and exit.
     hiro_smoke: bool,
     /// Run deterministic local coding-agent edit/verify smoke and exit.
@@ -197,6 +202,8 @@ fn parse_args() -> CliArgs {
         evolution_smoke: false,
         proposal_dry_run: false,
         proposal_dry_run_live: false,
+        patch_verify_path: None,
+        patch_verify_live_path: None,
         hiro_smoke: false,
         coding_smoke: false,
         coding_session: false,
@@ -323,6 +330,14 @@ fn parse_args() -> CliArgs {
             "--proposal-dry-run-live" | "--verify-proposal-live" => {
                 cli.proposal_dry_run_live = true;
                 i += 1;
+            }
+            "--verify-patch" if i + 1 < args.len() => {
+                cli.patch_verify_path = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
+            }
+            "--verify-patch-live" if i + 1 < args.len() => {
+                cli.patch_verify_live_path = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
             }
             "--hiro-smoke" => {
                 cli.hiro_smoke = true;
@@ -580,6 +595,14 @@ async fn main() -> Result<()> {
 
     if cli.proposal_dry_run_live {
         return run_evolution_proposal_dry_run_live(Arc::clone(&events)).await;
+    }
+
+    if let Some(path) = cli.patch_verify_path {
+        return run_patch_verify(Arc::clone(&events), path).await;
+    }
+
+    if let Some(path) = cli.patch_verify_live_path {
+        return run_patch_verify_live(Arc::clone(&events), path).await;
     }
 
     if cli.hiro_smoke {
@@ -874,6 +897,21 @@ struct EvolutionProposalDryRunReport {
     diff_bytes: usize,
 }
 
+#[derive(Debug, serde::Serialize)]
+struct PatchVerificationReport {
+    generated_at: String,
+    mode: String,
+    patch_path: String,
+    workspace: String,
+    harness_commit: String,
+    accepted: bool,
+    applied: bool,
+    reason: String,
+    checks: Vec<String>,
+    diff_hash: Option<String>,
+    diff_bytes: usize,
+}
+
 #[derive(serde::Serialize)]
 struct HiroInventorySmokeReport {
     generated_at: String,
@@ -1133,6 +1171,140 @@ async fn run_evolution_proposal_dry_run_live(events: Arc<EventStore>) -> Result<
                 println!("Live proposal verification interrupted.");
                 handle.abort();
                 anyhow::bail!("live proposal verification interrupted");
+            }
+            result = &mut handle => {
+                for event in events.work_after_id(last_id, 200)? {
+                    println!("{}", format_work_event(&event));
+                }
+                io::stdout().flush()?;
+                let _ = result??;
+                return Ok(());
+            }
+            _ = tokio::time::sleep(tokio::time::Duration::from_millis(250)) => {
+                for event in events.work_after_id(last_id, 100)? {
+                    last_id = event.id;
+                    println!("{}", format_work_event(&event));
+                }
+                io::stdout().flush()?;
+            }
+        }
+    }
+}
+
+async fn execute_patch_verify(
+    events: Arc<EventStore>,
+    patch_path: PathBuf,
+) -> Result<(PatchVerificationReport, PathBuf)> {
+    let repo_root = default_repo_root();
+    let patch_raw = std::fs::read_to_string(&patch_path)
+        .map_err(|e| anyhow::anyhow!("cannot read patch '{}': {e}", patch_path.display()))?;
+    events.append(
+        None,
+        None,
+        "evolution.patch_verify.started",
+        "starting sandbox patch verification",
+        serde_json::json!({
+            "workspace": "repo-root",
+            "harness_commit": git_head(&repo_root).unwrap_or_else(|_| "unknown".to_string()),
+            "patch_path": patch_path.display().to_string(),
+        }),
+    )?;
+    events.append(
+        None,
+        None,
+        "evolution.patch_verify.verifying",
+        "verifying patch in isolated sandbox worktree",
+        serde_json::json!({
+            "workspace": "sandbox_worktree",
+            "patch_path": patch_path.display().to_string(),
+            "planned_checks": [
+                "reward_hacking_scan",
+                "sandbox_worktree",
+                "material_diff",
+                "cargo_check"
+            ],
+        }),
+    )?;
+
+    let verification = verify_diff_in_sandbox(&repo_root, &patch_raw).await?;
+    let diff_hash = if verification.diff.is_empty() {
+        None
+    } else {
+        Some(sha256_hex(verification.diff.as_bytes()))
+    };
+    let report = PatchVerificationReport {
+        generated_at: chrono::Utc::now().to_rfc3339(),
+        mode: "patch_verify".to_string(),
+        patch_path: patch_path.display().to_string(),
+        workspace: "repo-root".to_string(),
+        harness_commit: git_head(&repo_root).unwrap_or_else(|_| "unknown".to_string()),
+        accepted: verification.outcome.accepted,
+        applied: false,
+        reason: verification.outcome.reason,
+        checks: verification.outcome.checks,
+        diff_hash,
+        diff_bytes: verification.diff.len(),
+    };
+    let path = write_patch_verification_report(&report)?;
+    events.append(
+        None,
+        None,
+        if report.accepted {
+            "evolution.patch_verify.accepted"
+        } else {
+            "evolution.patch_verify.rejected"
+        },
+        format!(
+            "patch verification {} without applying changes; report {}",
+            if report.accepted { "accepted" } else { "rejected" },
+            path.display()
+        ),
+        serde_json::json!({
+            "accepted": report.accepted,
+            "applied": report.applied,
+            "reason": report.reason,
+            "checks": report.checks,
+            "diff_hash": report.diff_hash,
+            "diff_bytes": report.diff_bytes,
+            "patch_path": report.patch_path,
+            "report_path": path,
+        }),
+    )?;
+    Ok((report, path))
+}
+
+async fn run_patch_verify(events: Arc<EventStore>, patch_path: PathBuf) -> Result<()> {
+    let (report, path) = execute_patch_verify(events, patch_path).await?;
+    println!(
+        "Patch verification: {}",
+        if report.accepted { "accepted" } else { "rejected" }
+    );
+    println!("  report: {}", path.display());
+    println!("  patch: {}", report.patch_path);
+    println!("  checks: {}", report.checks.join(", "));
+    println!("  diff bytes: {}", report.diff_bytes);
+    if let Some(hash) = &report.diff_hash {
+        println!("  diff hash: {hash}");
+    }
+    println!("  reason: {}", report.reason);
+    Ok(())
+}
+
+async fn run_patch_verify_live(events: Arc<EventStore>, patch_path: PathBuf) -> Result<()> {
+    let mut last_id = events.tail(1)?.last().map(|event| event.id).unwrap_or(0);
+    println!("Professor X live patch verification");
+    println!("Streaming sandbox verification events. No changes will be applied.");
+    io::stdout().flush()?;
+
+    let run_events = Arc::clone(&events);
+    let mut handle = tokio::spawn(async move { execute_patch_verify(run_events, patch_path).await });
+
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                println!("Live patch verification interrupted.");
+                handle.abort();
+                anyhow::bail!("live patch verification interrupted");
             }
             result = &mut handle => {
                 for event in events.work_after_id(last_id, 200)? {
@@ -1463,6 +1635,20 @@ fn write_evolution_proposal_report(
     let path = dir.join(format!(
         "{}-{}.json",
         prefix,
+        chrono::Utc::now().format("%H%M%S")
+    ));
+    std::fs::write(&path, serde_json::to_string_pretty(report)?)?;
+    Ok(path)
+}
+
+fn write_patch_verification_report(report: &PatchVerificationReport) -> Result<PathBuf> {
+    let dir = PathBuf::from("artifacts")
+        .join("evolution")
+        .join("patch-verifications")
+        .join(chrono::Utc::now().format("%Y-%m-%d").to_string());
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!(
+        "patch-{}.json",
         chrono::Utc::now().format("%H%M%S")
     ));
     std::fs::write(&path, serde_json::to_string_pretty(report)?)?;
@@ -4125,6 +4311,10 @@ fn format_work_event(event: &memd::events::AgentEvent) -> String {
         .as_str()
         .map(|target| format!(" target={}", truncate(target, 36)))
         .unwrap_or_default();
+    let patch = event.payload["patch_path"]
+        .as_str()
+        .map(|path| format!(" patch={}", truncate(path, 40)))
+        .unwrap_or_default();
     let decision = event.payload["accepted"]
         .as_bool()
         .map(|accepted| format!(" decision={}", if accepted { "accept" } else { "reject" }))
@@ -4156,7 +4346,7 @@ fn format_work_event(event: &memd::events::AgentEvent) -> String {
         .map(|text| format!(" :: {}", truncate(text, 120)))
         .unwrap_or_default();
     format!(
-        "#{:05} {} {:<6} task={}{}{}{}{}{}{}{}{}{}{}{} {}{}",
+        "#{:05} {} {:<6} task={}{}{}{}{}{}{}{}{}{}{}{}{} {}{}",
         event.id,
         event.timestamp.format("%H:%M:%S"),
         label,
@@ -4167,6 +4357,7 @@ fn format_work_event(event: &memd::events::AgentEvent) -> String {
         tool,
         exercise,
         target,
+        patch,
         decision,
         duration,
         check_count,

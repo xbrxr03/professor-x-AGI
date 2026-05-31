@@ -130,6 +130,48 @@ pub async fn verify_node_in_sandbox(
     result
 }
 
+pub async fn verify_diff_in_sandbox(repo_root: &Path, diff: &str) -> Result<SandboxVerification> {
+    let reward_scan = analyze_reward_hacking_text(diff);
+    if reward_scan.suspicious {
+        return Ok(SandboxVerification {
+            outcome: VerificationOutcome {
+                accepted: false,
+                reason: format!(
+                    "reward-hacking scan rejected patch: {} (confidence={:.2})",
+                    reward_scan.reason, reward_scan.confidence
+                ),
+                checks: vec!["reward_hacking_scan".to_string()],
+            },
+            diff: String::new(),
+        });
+    }
+
+    let worktree = std::env::temp_dir().join(format!("px-patch-verify-{}", uuid::Uuid::new_v4()));
+    let add = tokio::process::Command::new("git")
+        .args(["worktree", "add", "--detach"])
+        .arg(&worktree)
+        .arg("HEAD")
+        .current_dir(repo_root)
+        .output()
+        .await?;
+    if !add.status.success() {
+        anyhow::bail!(
+            "git worktree add failed: {}",
+            String::from_utf8_lossy(&add.stderr)
+        );
+    }
+
+    let result = verify_diff_inside_worktree(&worktree, diff).await;
+    let cleanup = cleanup_worktree(repo_root, &worktree).await;
+    if let Err(e) = cleanup {
+        warn!(
+            "evolved: failed to clean patch sandbox worktree {}: {e}",
+            worktree.display()
+        );
+    }
+    result
+}
+
 async fn verify_node_inside_worktree(
     worktree: &Path,
     node: &EvolutionNode,
@@ -199,6 +241,59 @@ async fn verify_node_inside_worktree(
             checks,
         },
         diff,
+    })
+}
+
+async fn verify_diff_inside_worktree(worktree: &Path, diff: &str) -> Result<SandboxVerification> {
+    let mut checks = vec![
+        "reward_hacking_scan".to_string(),
+        "sandbox_worktree".to_string(),
+    ];
+    if diff.trim().is_empty() {
+        return Ok(SandboxVerification {
+            outcome: VerificationOutcome {
+                accepted: false,
+                reason: "verification rejected patch: empty diff".to_string(),
+                checks,
+            },
+            diff: String::new(),
+        });
+    }
+
+    apply_patch_to_index_at(worktree, diff).await?;
+    checks.push("material_diff".to_string());
+    if !has_cached_material_diff_at(worktree).await? {
+        return Ok(SandboxVerification {
+            outcome: VerificationOutcome {
+                accepted: false,
+                reason: "verification rejected patch: no material file diff".to_string(),
+                checks,
+            },
+            diff: String::new(),
+        });
+    }
+
+    checks.push("cargo_check".to_string());
+    let compile = run_compile_check_at(worktree).await?;
+    if !compile.accepted {
+        return Ok(SandboxVerification {
+            outcome: VerificationOutcome {
+                accepted: false,
+                reason: compile.reason,
+                checks,
+            },
+            diff: String::new(),
+        });
+    }
+
+    let verified_diff = collect_cached_diff_at(worktree).await?;
+    Ok(SandboxVerification {
+        outcome: VerificationOutcome {
+            accepted: true,
+            reason: "sandbox patch verification passed".to_string(),
+            checks,
+        },
+        diff: verified_diff,
     })
 }
 
@@ -315,6 +410,64 @@ async fn collect_diff_at(worktree: &Path, paths: &[PathBuf]) -> Result<String> {
     if !output.status.success() {
         anyhow::bail!(
             "git diff failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+async fn apply_patch_to_index_at(worktree: &Path, diff: &str) -> Result<()> {
+    let patch_path =
+        std::env::temp_dir().join(format!("px-patch-verify-{}.diff", uuid::Uuid::new_v4()));
+    std::fs::write(&patch_path, diff)?;
+    let check = tokio::process::Command::new("git")
+        .args(["apply", "--check", "--index"])
+        .arg(&patch_path)
+        .current_dir(worktree)
+        .output()
+        .await?;
+    if !check.status.success() {
+        let _ = std::fs::remove_file(&patch_path);
+        anyhow::bail!(
+            "patch failed sandbox apply check: {}",
+            String::from_utf8_lossy(&check.stderr)
+        );
+    }
+
+    let apply = tokio::process::Command::new("git")
+        .args(["apply", "--index"])
+        .arg(&patch_path)
+        .current_dir(worktree)
+        .output()
+        .await?;
+    let _ = std::fs::remove_file(&patch_path);
+    if !apply.status.success() {
+        anyhow::bail!(
+            "patch failed sandbox apply: {}",
+            String::from_utf8_lossy(&apply.stderr)
+        );
+    }
+    Ok(())
+}
+
+async fn has_cached_material_diff_at(worktree: &Path) -> Result<bool> {
+    let output = tokio::process::Command::new("git")
+        .args(["diff", "--cached", "--quiet"])
+        .current_dir(worktree)
+        .output()
+        .await?;
+    Ok(!output.status.success())
+}
+
+async fn collect_cached_diff_at(worktree: &Path) -> Result<String> {
+    let output = tokio::process::Command::new("git")
+        .args(["diff", "--cached"])
+        .current_dir(worktree)
+        .output()
+        .await?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git diff --cached failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
     }
@@ -1167,6 +1320,35 @@ mod tests {
 
         assert!(!verified.outcome.accepted);
         assert!(verified.outcome.reason.contains("reward-hacking"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn patch_sandbox_verifier_accepts_safe_diff() {
+        let root = temp_git_repo();
+        let patch = "diff --git a/skills/existing.md b/skills/existing.md\n--- a/skills/existing.md\n+++ b/skills/existing.md\n@@ -1 +1,2 @@\n When a tool fails, inspect the observation and retry with a narrower input.\n+Record the fallback reason so later review can compare the failure pattern.\n";
+
+        let verified = verify_diff_in_sandbox(&root, patch).await.unwrap();
+
+        assert!(verified.outcome.accepted, "{}", verified.outcome.reason);
+        assert!(verified.diff.contains("Record the fallback reason"));
+        let original = std::fs::read_to_string(root.join("skills/existing.md")).unwrap();
+        assert!(!original.contains("Record the fallback reason"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn patch_sandbox_verifier_rejects_noop_text() {
+        let root = temp_git_repo();
+
+        let verified = verify_diff_in_sandbox(&root, "# comment only\n// no material change\n")
+            .await
+            .unwrap();
+
+        assert!(!verified.outcome.accepted);
+        assert!(verified.outcome.reason.contains("no-op"));
 
         let _ = std::fs::remove_dir_all(root);
     }

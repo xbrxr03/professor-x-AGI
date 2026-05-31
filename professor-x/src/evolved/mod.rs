@@ -11,4 +11,4 @@ pub mod tracker;
 
 pub use cognition_base::CognitionStore;
 pub use hiro::{HiroRunner, HiroRoundResult};
-pub use loop_runner::{verify_node_in_sandbox, EvolvedLoop};
+pub use loop_runner::{verify_diff_in_sandbox, verify_node_in_sandbox, EvolvedLoop};
