@@ -1372,7 +1372,7 @@ async fn execute_patch_apply_commit(
 ) -> Result<(PatchVerificationReport, PathBuf)> {
     let repo_root = default_repo_root();
     if !main_worktree_clean_for_patch_apply(&repo_root)? {
-        anyhow::bail!("main worktree has source/config/artifact changes; refusing patch apply");
+        anyhow::bail!("main worktree has source/config/skill changes; refusing patch apply");
     }
     let patch_raw = std::fs::read_to_string(&patch_path)
         .map_err(|e| anyhow::anyhow!("cannot read patch '{}': {e}", patch_path.display()))?;
@@ -1595,6 +1595,64 @@ async fn run_patch_apply_commit_live(events: Arc<EventStore>, patch_path: PathBu
             }
         }
     }
+}
+
+fn write_autonomous_patch_apply_smoke_patch() -> Result<PathBuf> {
+    let skill_name = format!(
+        "px-autonomous-patch-{}",
+        chrono::Utc::now().format("%Y%m%d-%H%M%S")
+    );
+    let path = PathBuf::from("professor-x")
+        .join("skills")
+        .join("conductor")
+        .join(format!("{skill_name}.md"));
+    let body = format!(
+        "# {skill_name}\n\
+\n\
+## Purpose\n\
+Preserve one observed autonomous patch-apply cycle as a reusable conductor note.\n\
+\n\
+## Inputs\n\
+- Generated patch path\n\
+- Current harness commit\n\
+- Work-loop cycle record\n\
+- Patch apply run report\n\
+\n\
+## Workflow\n\
+1. Build a small patch with a concrete changed path.\n\
+2. Send it through the sandbox trial run before touching main.\n\
+3. Run the main check after the patch lands.\n\
+4. Create a git commit and store the run report.\n\
+5. Show the commit id in the work feed and loop record.\n\
+\n\
+## Output Contract\n\
+Return `accepted`, `applied`, `commit`, `checks`, `diff_hash`, `diff_bytes`, and `report_path`.\n"
+    );
+    let diff = unified_new_file_diff(&path, &body);
+    let patch_path = std::env::temp_dir().join(format!("{skill_name}.diff"));
+    std::fs::write(&patch_path, diff)?;
+    Ok(patch_path)
+}
+
+fn unified_new_file_diff(path: &std::path::Path, contents: &str) -> String {
+    let path = path.to_string_lossy().replace('\\', "/");
+    let mut lines = contents.lines().collect::<Vec<_>>();
+    if contents.ends_with('\n') {
+        // str::lines omits the final empty item for a trailing newline, which is
+        // the count git uses for a normal text file ending with newline.
+    } else {
+        lines.push("");
+    }
+    let mut diff = format!(
+        "diff --git a/{path} b/{path}\nnew file mode 100644\nindex 0000000..1111111\n--- /dev/null\n+++ b/{path}\n@@ -0,0 +{} @@\n",
+        lines.len()
+    );
+    for line in lines {
+        diff.push('+');
+        diff.push_str(line);
+        diff.push('\n');
+    }
+    diff
 }
 
 async fn run_operator_commit_smoke(events: Arc<EventStore>) -> Result<()> {
@@ -2026,10 +2084,7 @@ fn status_path(line: &str) -> Option<&str> {
 }
 
 fn patch_apply_ignored_status_path(path: &str) -> bool {
-    path.starts_with("professor-x/artifacts/events/")
-        || path.starts_with("professor-x/artifacts/evolution/")
-        || path.starts_with("artifacts/events/")
-        || path.starts_with("artifacts/evolution/")
+    path.starts_with("professor-x/artifacts/") || path.starts_with("artifacts/")
 }
 
 fn changed_paths_from_unified_diff(diff: &str) -> Result<Vec<PathBuf>> {
@@ -2357,6 +2412,7 @@ enum WorkLoopJob {
     EvolutionSmoke,
     HiroSmoke,
     ProposalDryRun,
+    PatchApplyCommit,
     OperatorCommit,
 }
 
@@ -2367,6 +2423,7 @@ impl WorkLoopJob {
             Self::EvolutionSmoke => "evolution_smoke",
             Self::HiroSmoke => "hiro_smoke",
             Self::ProposalDryRun => "proposal_dry_run",
+            Self::PatchApplyCommit => "patch_apply_commit",
             Self::OperatorCommit => "operator_commit",
         }
     }
@@ -2377,6 +2434,7 @@ impl WorkLoopJob {
             Self::EvolutionSmoke => "evolution sandbox smoke",
             Self::HiroSmoke => "HIRO inventory smoke",
             Self::ProposalDryRun => "evolution proposal dry-run",
+            Self::PatchApplyCommit => "verified patch apply commit",
             Self::OperatorCommit => "sandbox-verified operator commit",
         }
     }
@@ -2388,6 +2446,7 @@ fn parse_work_loop_job(kind: &str) -> Option<WorkLoopJob> {
         "evolution_smoke" => Some(WorkLoopJob::EvolutionSmoke),
         "hiro_smoke" => Some(WorkLoopJob::HiroSmoke),
         "proposal_dry_run" => Some(WorkLoopJob::ProposalDryRun),
+        "patch_apply_commit" => Some(WorkLoopJob::PatchApplyCommit),
         "operator_commit" => Some(WorkLoopJob::OperatorCommit),
         _ => None,
     }
@@ -2402,11 +2461,12 @@ fn work_loop_job_for_cycle(profile: WorkLoopProfile, cycle: u32) -> WorkLoopJob 
             3 => WorkLoopJob::HiroSmoke,
             _ => WorkLoopJob::ProposalDryRun,
         },
-        WorkLoopProfile::Commit => match cycle % 5 {
+        WorkLoopProfile::Commit => match cycle % 6 {
             1 => WorkLoopJob::CodingSmoke,
             2 => WorkLoopJob::EvolutionSmoke,
             3 => WorkLoopJob::HiroSmoke,
             4 => WorkLoopJob::ProposalDryRun,
+            5 => WorkLoopJob::PatchApplyCommit,
             _ => WorkLoopJob::OperatorCommit,
         },
     }
@@ -2441,6 +2501,9 @@ impl WorkLoopProfile {
             }
             (Self::Commit, WorkLoopJob::ProposalDryRun) => {
                 "commit profile records a proposal dry-run before applying an accepted proposal"
+            }
+            (Self::Commit, WorkLoopJob::PatchApplyCommit) => {
+                "commit profile routes a generated patch through sandbox verify, main apply, cargo check, and git commit"
             }
             (Self::Commit, WorkLoopJob::OperatorCommit) => {
                 "commit profile applies one sandbox-verified proposal and records the resulting git commit"
@@ -2849,6 +2912,26 @@ async fn run_work_loop_job(
                     report.checks.len(),
                     report.diff_bytes,
                     report.applied
+                ),
+            })
+        }
+        WorkLoopJob::PatchApplyCommit => {
+            let patch_path = write_autonomous_patch_apply_smoke_patch()?;
+            let (report, path) =
+                execute_patch_apply_commit(Arc::clone(&events), patch_path).await?;
+            Ok(WorkLoopSmokeRecord {
+                cycle: 0,
+                kind: job.kind().to_string(),
+                smoke_id: None,
+                passed: report.accepted && report.applied && report.commit.is_some(),
+                report_path: path.display().to_string(),
+                transcript_path: None,
+                workspace: report.workspace,
+                detail: format!(
+                    "{} check(s), commit={}, diff_bytes={}",
+                    report.checks.len(),
+                    report.commit.as_deref().unwrap_or("none"),
+                    report.diff_bytes
                 ),
             })
         }
@@ -5187,14 +5270,52 @@ mod tests {
 
     #[test]
     fn commit_profile_includes_commit_gate_after_safety_gates() {
-        let plan = plan_work_loop_jobs(WorkLoopRunKind::Operator, WorkLoopProfile::Commit, 5, &[]);
+        let plan = plan_work_loop_jobs(WorkLoopRunKind::Operator, WorkLoopProfile::Commit, 6, &[]);
 
         assert_eq!(plan[0].kind, "coding_smoke");
         assert_eq!(plan[1].kind, "evolution_smoke");
         assert_eq!(plan[2].kind, "hiro_smoke");
         assert_eq!(plan[3].kind, "proposal_dry_run");
-        assert_eq!(plan[4].kind, "operator_commit");
-        assert!(plan[4].reason.contains("git commit"));
+        assert_eq!(plan[4].kind, "patch_apply_commit");
+        assert!(plan[4].reason.contains("generated patch"));
+        assert_eq!(plan[5].kind, "operator_commit");
+        assert!(plan[5].reason.contains("git commit"));
+    }
+
+    #[test]
+    fn unified_new_file_diff_applies_as_patch() {
+        let root = std::env::temp_dir().join(format!("px-diff-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let init = std::process::Command::new("git")
+            .arg("init")
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert!(
+            init.status.success(),
+            "{}",
+            String::from_utf8_lossy(&init.stderr)
+        );
+        let diff = unified_new_file_diff(
+            std::path::Path::new("notes/example.md"),
+            "# example\n\nbody\n",
+        );
+        let patch_path = root.join("patch.diff");
+        std::fs::write(&patch_path, diff).unwrap();
+
+        let check = std::process::Command::new("git")
+            .args(["apply", "--check"])
+            .arg(&patch_path)
+            .current_dir(&root)
+            .output()
+            .unwrap();
+
+        assert!(
+            check.status.success(),
+            "{}",
+            String::from_utf8_lossy(&check.stderr)
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
