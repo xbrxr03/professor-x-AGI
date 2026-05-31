@@ -8,6 +8,7 @@ pub struct CodingSessionRecord {
     pub id: String,
     pub generated_at: DateTime<Utc>,
     pub goal: String,
+    pub exercise: String,
     pub status: String,
     pub workspace: Option<String>,
     pub smoke_id: Option<i64>,
@@ -36,13 +37,14 @@ impl CodingSessionStore {
         let db = self.db.lock().unwrap();
         db.execute(
             "INSERT OR REPLACE INTO coding_sessions
-             (id, generated_at, goal, status, workspace, smoke_id, smoke_report_path,
+             (id, generated_at, goal, exercise, status, workspace, smoke_id, smoke_report_path,
               session_report_path, transcript_path, artifacts, checks, failure_reason, recorded_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 record.id,
                 record.generated_at.to_rfc3339(),
                 record.goal,
+                record.exercise,
                 record.status,
                 record.workspace,
                 record.smoke_id,
@@ -62,7 +64,8 @@ impl CodingSessionStore {
         let db = self.db.lock().unwrap();
         let mut stmt = db.prepare(
             "SELECT id, generated_at, goal, status, workspace, smoke_id, smoke_report_path,
-                    session_report_path, transcript_path, artifacts, checks, failure_reason, recorded_at
+                    session_report_path, transcript_path, artifacts, checks, failure_reason,
+                    recorded_at, exercise
              FROM coding_sessions
              ORDER BY generated_at DESC, recorded_at DESC
              LIMIT 1",
@@ -83,7 +86,8 @@ impl CodingSessionStore {
         let db = self.db.lock().unwrap();
         let mut stmt = db.prepare(
             "SELECT id, generated_at, goal, status, workspace, smoke_id, smoke_report_path,
-                    session_report_path, transcript_path, artifacts, checks, failure_reason, recorded_at
+                    session_report_path, transcript_path, artifacts, checks, failure_reason,
+                    recorded_at, exercise
              FROM coding_sessions
              ORDER BY generated_at DESC, recorded_at DESC
              LIMIT ?1",
@@ -106,6 +110,7 @@ fn parse_record(row: &rusqlite::Row) -> rusqlite::Result<CodingSessionRecord> {
         id: row.get(0)?,
         generated_at: parse_time(&generated_at_raw),
         goal: row.get(2)?,
+        exercise: row.get(13)?,
         status: row.get(3)?,
         workspace: row.get(4)?,
         smoke_id: row.get(5)?,
@@ -139,6 +144,7 @@ mod tests {
                     id TEXT PRIMARY KEY,
                     generated_at TEXT NOT NULL,
                     goal TEXT NOT NULL,
+                    exercise TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL,
                     workspace TEXT,
                     smoke_id INTEGER,
@@ -160,6 +166,7 @@ mod tests {
                 id: "session-1".to_string(),
                 generated_at: now,
                 goal: "fix a failing Rust test".to_string(),
+                exercise: "add_i32".to_string(),
                 status: "passed".to_string(),
                 workspace: Some("/tmp/px".to_string()),
                 smoke_id: Some(7),
@@ -178,6 +185,7 @@ mod tests {
 
         let latest = store.latest().unwrap().unwrap();
         assert_eq!(latest.id, "session-1");
+        assert_eq!(latest.exercise, "add_i32");
         assert_eq!(latest.status, "passed");
         assert_eq!(latest.smoke_id, Some(7));
         assert_eq!(store.recent(5).unwrap().len(), 1);

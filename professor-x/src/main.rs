@@ -93,6 +93,8 @@ struct CliArgs {
     coding_smoke: bool,
     /// Run a first-class bounded local coding-agent session and exit.
     coding_session: bool,
+    /// Requested goal for --coding-session. Routed only to safe local fixtures for now.
+    coding_session_goal: Option<String>,
     /// Print the last N coding-agent sessions and exit.
     coding_sessions_limit: Option<usize>,
     /// Run N bounded local supervised work-loop cycles and exit.
@@ -190,6 +192,7 @@ fn parse_args() -> CliArgs {
         hiro_smoke: false,
         coding_smoke: false,
         coding_session: false,
+        coding_session_goal: None,
         coding_sessions_limit: None,
         supervised_loop_cycles: None,
         supervised_loop_profile: WorkLoopProfile::Basic,
@@ -314,7 +317,17 @@ fn parse_args() -> CliArgs {
             }
             "--coding-session" | "--prof-x-code" => {
                 cli.coding_session = true;
-                i += 1;
+                let goal = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .cloned();
+                cli.coding_session_goal = goal.clone();
+                i += if goal.is_some() { 2 } else { 1 };
+            }
+            "--coding-session-goal" if i + 1 < args.len() => {
+                cli.coding_session = true;
+                cli.coding_session_goal = Some(args[i + 1].clone());
+                i += 2;
             }
             "--coding-sessions" => {
                 let limit = args
@@ -587,6 +600,7 @@ async fn main() -> Result<()> {
             Arc::clone(&memory),
             Arc::clone(&events),
             Arc::clone(&transcripts),
+            cli.coding_session_goal.clone(),
         )
         .await;
     }
@@ -1564,6 +1578,7 @@ fn commit_operator_report_update(
 struct CodingSmokeReport {
     generated_at: String,
     workspace: String,
+    exercise: String,
     passed: bool,
     initial_test_failed: bool,
     edit_applied: bool,
@@ -1577,6 +1592,8 @@ struct CodingSessionReport {
     id: String,
     generated_at: String,
     goal: String,
+    requested_goal: String,
+    exercise: String,
     status: String,
     workspace: Option<String>,
     smoke_id: Option<i64>,
@@ -2134,6 +2151,40 @@ async fn run_work_loop_job(
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct CodingExercise {
+    name: &'static str,
+    description: &'static str,
+    source: &'static str,
+    replacement_old: &'static str,
+    replacement_new: &'static str,
+}
+
+fn default_coding_exercise() -> CodingExercise {
+    CodingExercise {
+        name: "add_i32",
+        description: "deterministic coding smoke: fix a failing Rust addition test and verify it passes",
+        source: "pub fn add(left: i32, right: i32) -> i32 {\n    left - right\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn adds_numbers() {\n        assert_eq!(add(2, 3), 5);\n    }\n}\n",
+        replacement_old: "    left - right",
+        replacement_new: "    left + right",
+    }
+}
+
+fn coding_exercise_for_goal(goal: &str) -> CodingExercise {
+    let normalized = goal.to_ascii_lowercase();
+    if normalized.contains("multiply") || normalized.contains("multiplication") || normalized.contains("product") {
+        CodingExercise {
+            name: "multiply_i32",
+            description: "bounded coding session: fix a failing Rust multiplication test and verify it passes",
+            source: "pub fn multiply(left: i32, right: i32) -> i32 {\n    left + right\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn multiplies_numbers() {\n        assert_eq!(multiply(4, 3), 12);\n    }\n}\n",
+            replacement_old: "    left + right",
+            replacement_new: "    left * right",
+        }
+    } else {
+        default_coding_exercise()
+    }
+}
+
 async fn run_coding_smoke(
     registry: Arc<std::sync::RwLock<ToolRegistry>>,
     policy: Arc<PolicyEngine>,
@@ -2141,22 +2192,34 @@ async fn run_coding_smoke(
     events: Arc<EventStore>,
     transcripts: Arc<TranscriptStore>,
 ) -> Result<()> {
+    run_coding_smoke_exercise(
+        registry,
+        policy,
+        memory,
+        events,
+        transcripts,
+        default_coding_exercise(),
+    )
+    .await
+}
+
+async fn run_coding_smoke_exercise(
+    registry: Arc<std::sync::RwLock<ToolRegistry>>,
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    transcripts: Arc<TranscriptStore>,
+    exercise: CodingExercise,
+) -> Result<()> {
     let workspace = std::env::temp_dir().join(format!("px-coding-smoke-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(workspace.join("src"))?;
     std::fs::write(
         workspace.join("Cargo.toml"),
         "[package]\nname = \"px-coding-smoke\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
     )?;
-    std::fs::write(
-        workspace.join("src/lib.rs"),
-        "pub fn add(left: i32, right: i32) -> i32 {\n    left - right\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn adds_numbers() {\n        assert_eq!(add(2, 3), 5);\n    }\n}\n",
-    )?;
+    std::fs::write(workspace.join("src/lib.rs"), exercise.source)?;
 
-    let mut task = TaskNode::new(
-        "deterministic coding smoke: fix a failing Rust test and verify it passes".to_string(),
-        TaskType::UserRequest,
-        100,
-    );
+    let mut task = TaskNode::new(exercise.description.to_string(), TaskType::UserRequest, 100);
     task.status = TaskStatus::Running;
     task.started_at = Some(chrono::Utc::now());
     task.attempt_count = 1;
@@ -2204,7 +2267,10 @@ async fn run_coding_smoke(
         Some(task.id),
         "coding.smoke.started",
         "starting deterministic coding-agent smoke",
-        serde_json::json!({"workspace": workspace}),
+        serde_json::json!({
+            "workspace": workspace,
+            "exercise": exercise.name,
+        }),
     )?;
 
     let mut scope = PermissionScope::default_autonomous().with_workspace_root(workspace.clone());
@@ -2243,8 +2309,8 @@ async fn run_coding_smoke(
         tool_name: "fs.replace".to_string(),
         params: serde_json::json!({
             "path": "src/lib.rs",
-            "old": "    left - right",
-            "new": "    left + right",
+            "old": exercise.replacement_old,
+            "new": exercise.replacement_new,
             "mode": "apply",
         }),
         risk_score: 42,
@@ -2359,6 +2425,7 @@ async fn run_coding_smoke(
     let report = CodingSmokeReport {
         generated_at: chrono::Utc::now().to_rfc3339(),
         workspace: workspace.display().to_string(),
+        exercise: exercise.name.to_string(),
         passed,
         initial_test_failed,
         edit_applied: edit.success,
@@ -2420,10 +2487,15 @@ async fn run_coding_session(
     memory: Arc<MemoryManager>,
     events: Arc<EventStore>,
     transcripts: Arc<TranscriptStore>,
+    requested_goal: Option<String>,
 ) -> Result<()> {
     let session_id = uuid::Uuid::new_v4().to_string();
     let generated_at = chrono::Utc::now();
-    let goal = "bounded local coding session: diagnose, patch, and verify a failing Rust test".to_string();
+    let requested_goal = requested_goal.unwrap_or_else(|| {
+        "bounded local coding session: diagnose, patch, and verify a failing Rust test".to_string()
+    });
+    let exercise = coding_exercise_for_goal(&requested_goal);
+    let goal = exercise.description.to_string();
     let smoke_store = CodingSmokeStore::new(Arc::clone(&memory.db));
     let before_smoke_id = smoke_store.latest()?.and_then(|record| record.id);
     events.append(
@@ -2434,16 +2506,19 @@ async fn run_coding_session(
         serde_json::json!({
             "session_id": session_id,
             "goal": goal,
+            "requested_goal": requested_goal,
+            "exercise": exercise.name,
             "mode": "local_temp_workspace",
         }),
     )?;
 
-    let outcome = run_coding_smoke(
+    let outcome = run_coding_smoke_exercise(
         registry,
         policy,
         Arc::clone(&memory),
         Arc::clone(&events),
         transcripts,
+        exercise,
     )
     .await;
     let failure_reason = outcome.as_ref().err().map(|err| err.to_string());
@@ -2469,6 +2544,8 @@ async fn run_coding_session(
         id: session_id.clone(),
         generated_at: generated_at.to_rfc3339(),
         goal: goal.clone(),
+        requested_goal: requested_goal.clone(),
+        exercise: exercise.name.to_string(),
         status: if passed { "passed" } else { "failed" }.to_string(),
         workspace: smoke.as_ref().map(|record| record.workspace.clone()),
         smoke_id: smoke.as_ref().and_then(|record| record.id),
@@ -2486,7 +2563,8 @@ async fn run_coding_session(
     CodingSessionStore::new(Arc::clone(&memory.db)).insert(&CodingSessionRecord {
         id: session_id.clone(),
         generated_at,
-        goal,
+        goal: requested_goal,
+        exercise: exercise.name.to_string(),
         status: report.status.clone(),
         workspace: report.workspace.clone(),
         smoke_id: report.smoke_id,
@@ -3512,10 +3590,11 @@ fn print_coding_sessions(memory: Arc<MemoryManager>, limit: usize) -> Result<()>
     println!("Recent coding sessions");
     for session in sessions {
         println!(
-            "{} {} session={} smoke={} checks={} artifacts={} {}",
+            "{} {} session={} exercise={} smoke={} checks={} artifacts={} {}",
             session.generated_at.format("%Y-%m-%d %H:%M:%S"),
             session.status,
             &session.id[..8.min(session.id.len())],
+            session.exercise,
             session.smoke_id.map(|id| id.to_string()).unwrap_or_else(|| "none".to_string()),
             session.checks.len(),
             session.artifacts.len(),

@@ -213,6 +213,7 @@ CREATE TABLE IF NOT EXISTS coding_sessions (
     id TEXT PRIMARY KEY,
     generated_at TEXT NOT NULL,
     goal TEXT NOT NULL,
+    exercise TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL,
     workspace TEXT,
     smoke_id INTEGER,
@@ -440,6 +441,11 @@ impl MemoryManager {
             &conn,
             "coding_smokes",
             &[("transcript_path", "TEXT")],
+        )?;
+        ensure_columns(
+            &conn,
+            "coding_sessions",
+            &[("exercise", "TEXT NOT NULL DEFAULT ''")],
         )?;
         ensure_columns(
             &conn,
