@@ -87,6 +87,10 @@ struct CliArgs {
     lab: bool,
     /// Run deterministic evolution accept/reject smoke checks and exit.
     evolution_smoke: bool,
+    /// Verify one concrete non-committing evolution proposal and exit.
+    proposal_dry_run: bool,
+    /// Verify one concrete non-committing evolution proposal while streaming the work feed.
+    proposal_dry_run_live: bool,
     /// Validate HIRO task inventory and evaluator substrate and exit.
     hiro_smoke: bool,
     /// Run deterministic local coding-agent edit/verify smoke and exit.
@@ -191,6 +195,8 @@ fn parse_args() -> CliArgs {
         observe: false,
         lab: false,
         evolution_smoke: false,
+        proposal_dry_run: false,
+        proposal_dry_run_live: false,
         hiro_smoke: false,
         coding_smoke: false,
         coding_session: false,
@@ -308,6 +314,14 @@ fn parse_args() -> CliArgs {
             }
             "--evolution-smoke" => {
                 cli.evolution_smoke = true;
+                i += 1;
+            }
+            "--proposal-dry-run" | "--verify-proposal" => {
+                cli.proposal_dry_run = true;
+                i += 1;
+            }
+            "--proposal-dry-run-live" | "--verify-proposal-live" => {
+                cli.proposal_dry_run_live = true;
                 i += 1;
             }
             "--hiro-smoke" => {
@@ -558,6 +572,14 @@ async fn main() -> Result<()> {
 
     if cli.evolution_smoke {
         return run_evolution_smoke(Arc::clone(&events)).await;
+    }
+
+    if cli.proposal_dry_run {
+        return run_evolution_proposal_dry_run(Arc::clone(&events)).await;
+    }
+
+    if cli.proposal_dry_run_live {
+        return run_evolution_proposal_dry_run_live(Arc::clone(&events)).await;
     }
 
     if cli.hiro_smoke {
@@ -1012,6 +1034,22 @@ async fn execute_evolution_proposal_dry_run(
             "motivation": node.motivation,
         }),
     )?;
+    events.append(
+        None,
+        None,
+        "evolution.proposal_dry_run.verifying",
+        "verifying proposal in isolated sandbox worktree",
+        serde_json::json!({
+            "workspace": "sandbox_worktree",
+            "target_component": format!("{:?}", node.target_component),
+            "planned_checks": [
+                "reward_hacking_scan",
+                "sandbox_worktree",
+                "material_diff",
+                "cargo_check"
+            ],
+        }),
+    )?;
 
     let verification = verify_node_in_sandbox(&repo_root, &node).await?;
     let diff_hash = if verification.diff.is_empty() {
@@ -1059,6 +1097,60 @@ async fn execute_evolution_proposal_dry_run(
         }),
     )?;
     Ok((report, path))
+}
+
+async fn run_evolution_proposal_dry_run(events: Arc<EventStore>) -> Result<()> {
+    let (report, path) = execute_evolution_proposal_dry_run(events).await?;
+    println!(
+        "Evolution proposal dry-run: {}",
+        if report.accepted { "accepted" } else { "rejected" }
+    );
+    println!("  report: {}", path.display());
+    println!("  target: {}", report.target_component);
+    println!("  checks: {}", report.checks.join(", "));
+    println!("  diff bytes: {}", report.diff_bytes);
+    if let Some(hash) = &report.diff_hash {
+        println!("  diff hash: {hash}");
+    }
+    println!("  reason: {}", report.reason);
+    Ok(())
+}
+
+async fn run_evolution_proposal_dry_run_live(events: Arc<EventStore>) -> Result<()> {
+    let mut last_id = events.tail(1)?.last().map(|event| event.id).unwrap_or(0);
+    println!("Professor X live proposal verification");
+    println!("Streaming sandbox verification events. No changes will be applied.");
+    io::stdout().flush()?;
+
+    let run_events = Arc::clone(&events);
+    let mut handle = tokio::spawn(async move {
+        execute_evolution_proposal_dry_run(run_events).await
+    });
+
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                println!("Live proposal verification interrupted.");
+                handle.abort();
+                anyhow::bail!("live proposal verification interrupted");
+            }
+            result = &mut handle => {
+                for event in events.work_after_id(last_id, 200)? {
+                    println!("{}", format_work_event(&event));
+                }
+                io::stdout().flush()?;
+                let _ = result??;
+                return Ok(());
+            }
+            _ = tokio::time::sleep(tokio::time::Duration::from_millis(250)) => {
+                for event in events.work_after_id(last_id, 100)? {
+                    last_id = event.id;
+                    println!("{}", format_work_event(&event));
+                }
+                io::stdout().flush()?;
+            }
+        }
+    }
 }
 
 async fn run_operator_commit_smoke(events: Arc<EventStore>) -> Result<()> {
@@ -4029,9 +4121,28 @@ fn format_work_event(event: &memd::events::AgentEvent) -> String {
         .as_str()
         .map(|exercise| format!(" exercise={exercise}"))
         .unwrap_or_default();
+    let target = event.payload["target_component"]
+        .as_str()
+        .map(|target| format!(" target={}", truncate(target, 36)))
+        .unwrap_or_default();
+    let decision = event.payload["accepted"]
+        .as_bool()
+        .map(|accepted| format!(" decision={}", if accepted { "accept" } else { "reject" }))
+        .unwrap_or_default();
     let duration = event.payload["execution_ms"]
         .as_i64()
         .map(|ms| format!(" {ms}ms"))
+        .unwrap_or_default();
+    let check_count = event.payload["checks"]
+        .as_array()
+        .or_else(|| event.payload["planned_checks"].as_array())
+        .filter(|items| !items.is_empty())
+        .map(|items| format!(" checks={}", items.len()))
+        .unwrap_or_default();
+    let diff_bytes = event.payload["diff_bytes"]
+        .as_i64()
+        .filter(|bytes| *bytes > 0)
+        .map(|bytes| format!(" diff={bytes}b"))
         .unwrap_or_default();
     let proof_count = event.payload["artifacts"]
         .as_array()
@@ -4045,7 +4156,7 @@ fn format_work_event(event: &memd::events::AgentEvent) -> String {
         .map(|text| format!(" :: {}", truncate(text, 120)))
         .unwrap_or_default();
     format!(
-        "#{:05} {} {:<6} task={}{}{}{}{}{}{}{} {}{}",
+        "#{:05} {} {:<6} task={}{}{}{}{}{}{}{}{}{}{}{} {}{}",
         event.id,
         event.timestamp.format("%H:%M:%S"),
         label,
@@ -4055,7 +4166,11 @@ fn format_work_event(event: &memd::events::AgentEvent) -> String {
         outcome_step,
         tool,
         exercise,
+        target,
+        decision,
         duration,
+        check_count,
+        diff_bytes,
         proof_count,
         truncate(&event.summary, 110),
         detail,
