@@ -2520,10 +2520,25 @@ async fn run_coding_session(
             "goal": goal,
             "requested_goal": requested_goal,
             "exercise": exercise.name,
-            "plan_steps": plan_steps,
+            "plan_steps": &plan_steps,
             "mode": "local_temp_workspace",
         }),
     )?;
+    for (index, step) in plan_steps.iter().enumerate() {
+        events.append(
+            None,
+            None,
+            "coding.session.plan",
+            format!("plan step {}: {}", index + 1, truncate(step, 100)),
+            serde_json::json!({
+                "session_id": session_id,
+                "exercise": exercise.name,
+                "plan_step": index + 1,
+                "plan_total": plan_steps.len(),
+                "step": step,
+            }),
+        )?;
+    }
 
     let outcome = run_coding_smoke_exercise(
         registry,
@@ -2570,6 +2585,21 @@ async fn run_coding_session(
         ],
         None => vec!["no smoke record was available for outcome extraction".to_string()],
     };
+    for (index, outcome) in step_outcomes.iter().enumerate() {
+        events.append(
+            None,
+            None,
+            "coding.session.outcome",
+            format!("outcome {}: {}", index + 1, truncate(outcome, 100)),
+            serde_json::json!({
+                "session_id": session_id,
+                "exercise": exercise.name,
+                "outcome_step": index + 1,
+                "outcome_total": step_outcomes.len(),
+                "outcome": outcome,
+            }),
+        )?;
+    }
     let mut report = CodingSessionReport {
         id: session_id.clone(),
         generated_at: generated_at.to_rfc3339(),
@@ -3867,9 +3897,33 @@ fn format_work_event(event: &memd::events::AgentEvent) -> String {
         .as_i64()
         .map(|step| format!(" step={step}"))
         .unwrap_or_default();
+    let plan_step = event.payload["plan_step"]
+        .as_i64()
+        .map(|step| {
+            let total = event.payload["plan_total"]
+                .as_i64()
+                .map(|total| format!("/{total}"))
+                .unwrap_or_default();
+            format!(" plan={step}{total}")
+        })
+        .unwrap_or_default();
+    let outcome_step = event.payload["outcome_step"]
+        .as_i64()
+        .map(|step| {
+            let total = event.payload["outcome_total"]
+                .as_i64()
+                .map(|total| format!("/{total}"))
+                .unwrap_or_default();
+            format!(" outcome={step}{total}")
+        })
+        .unwrap_or_default();
     let tool = event.payload["tool"]
         .as_str()
         .map(|tool| format!(" tool={tool}"))
+        .unwrap_or_default();
+    let exercise = event.payload["exercise"]
+        .as_str()
+        .map(|exercise| format!(" exercise={exercise}"))
         .unwrap_or_default();
     let duration = event.payload["execution_ms"]
         .as_i64()
@@ -3887,13 +3941,16 @@ fn format_work_event(event: &memd::events::AgentEvent) -> String {
         .map(|text| format!(" :: {}", truncate(text, 120)))
         .unwrap_or_default();
     format!(
-        "#{:05} {} {:<6} task={}{}{}{}{} {}{}",
+        "#{:05} {} {:<6} task={}{}{}{}{}{}{}{} {}{}",
         event.id,
         event.timestamp.format("%H:%M:%S"),
         label,
         task,
         step,
+        plan_step,
+        outcome_step,
         tool,
+        exercise,
         duration,
         proof_count,
         truncate(&event.summary, 110),
