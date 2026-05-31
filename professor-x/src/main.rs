@@ -2751,11 +2751,18 @@ async fn run_supervised_loop(
             record.cycle = cycle;
             records.push(record);
         }
+        let cycle_record = records.last().filter(|record| record.cycle == cycle);
+        let report_path = cycle_record.map(|record| record.report_path.clone());
+        let transcript_path = cycle_record.and_then(|record| record.transcript_path.clone());
+        let workspace = cycle_record.map(|record| record.workspace.clone());
+        let detail = cycle_record.map(|record| record.detail.clone());
+        let commit = cycle_record.and_then(smoke_record_commit);
+
         gate_store.finish(
             &run_id,
             cycle,
             passed,
-            records.last().filter(|record| record.cycle == cycle),
+            cycle_record,
             error.as_deref(),
         )?;
 
@@ -2780,6 +2787,11 @@ async fn run_supervised_loop(
                 "job": job.kind(),
                 "passed": passed,
                 "error": error,
+                "report_path": report_path,
+                "transcript_path": transcript_path,
+                "workspace": workspace,
+                "detail": detail,
+                "commit": commit,
             }),
         )?;
     }
@@ -2975,6 +2987,19 @@ async fn run_work_loop_job(
             })
         }
     }
+}
+
+fn smoke_record_commit(record: &WorkLoopSmokeRecord) -> Option<String> {
+    if !matches!(record.kind.as_str(), "patch_apply_commit" | "operator_commit") {
+        return None;
+    }
+    let path = resolve_report_reference(&default_repo_root(), &record.report_path);
+    let raw = std::fs::read_to_string(path).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    json.get("commit")
+        .and_then(|value| value.as_str())
+        .filter(|commit| !commit.is_empty())
+        .map(|commit| commit.to_string())
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -5043,6 +5068,28 @@ fn format_work_event(event: &memd::events::AgentEvent) -> String {
         .map(|id| id[..8.min(id.len())].to_string())
         .unwrap_or_else(|| "--------".to_string());
     let label = work_event_label(&event.event_type);
+    let run = event.payload["run_id"]
+        .as_str()
+        .map(|run| format!(" run={}", short_fragment(run)))
+        .unwrap_or_default();
+    let cycle = event.payload["cycle"]
+        .as_i64()
+        .map(|cycle| {
+            let total = event.payload["cycles"]
+                .as_i64()
+                .map(|total| format!("/{total}"))
+                .unwrap_or_default();
+            format!(" cycle={cycle}{total}")
+        })
+        .unwrap_or_default();
+    let job = event.payload["job"]
+        .as_str()
+        .map(|job| format!(" job={job}"))
+        .unwrap_or_default();
+    let passed = event.payload["passed"]
+        .as_bool()
+        .map(|passed| format!(" passed={passed}"))
+        .unwrap_or_default();
     let step = event.payload["step"]
         .as_i64()
         .map(|step| format!(" step={step}"))
@@ -5083,6 +5130,18 @@ fn format_work_event(event: &memd::events::AgentEvent) -> String {
         .as_str()
         .map(|path| format!(" patch={}", truncate(path, 40)))
         .unwrap_or_default();
+    let report = event.payload["report_path"]
+        .as_str()
+        .map(|path| format!(" report={}", truncate(path, 96)))
+        .unwrap_or_default();
+    let transcript = event.payload["transcript_path"]
+        .as_str()
+        .map(|path| format!(" transcript={}", truncate(path, 96)))
+        .unwrap_or_default();
+    let commit = event.payload["commit"]
+        .as_str()
+        .map(|commit| format!(" commit={}", short_fragment(commit)))
+        .unwrap_or_default();
     let decision = event.payload["accepted"]
         .as_bool()
         .map(|accepted| format!(" decision={}", if accepted { "accept" } else { "reject" }))
@@ -5111,26 +5170,18 @@ fn format_work_event(event: &memd::events::AgentEvent) -> String {
         .as_str()
         .filter(|text| !text.is_empty())
         .or_else(|| event.payload["output_preview"].as_str())
+        .or_else(|| event.payload["detail"].as_str())
         .map(|text| format!(" :: {}", truncate(text, 120)))
         .unwrap_or_default();
+    let meta = format!(
+        "task={task}{run}{cycle}{job}{passed}{step}{plan_step}{outcome_step}{tool}{exercise}{target}{patch}{report}{transcript}{commit}{decision}{duration}{check_count}{diff_bytes}{proof_count}"
+    );
     format!(
-        "#{:05} {} {:<6} task={}{}{}{}{}{}{}{}{}{}{}{}{} {}{}",
+        "#{:05} {} {:<6} {} {}{}",
         event.id,
         event.timestamp.format("%H:%M:%S"),
         label,
-        task,
-        step,
-        plan_step,
-        outcome_step,
-        tool,
-        exercise,
-        target,
-        patch,
-        decision,
-        duration,
-        check_count,
-        diff_bytes,
-        proof_count,
+        meta,
         truncate(&event.summary, 110),
         detail,
     )
@@ -5160,6 +5211,10 @@ fn work_event_label(event_type: &str) -> &'static str {
     } else {
         "EVENT"
     }
+}
+
+fn short_fragment(id: &str) -> &str {
+    &id[..8.min(id.len())]
 }
 
 fn truncate(text: &str, max_chars: usize) -> String {
@@ -5590,6 +5645,40 @@ mod tests {
 
         assert_eq!(latest, newer);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn format_work_event_surfaces_loop_artifact_evidence() {
+        let event = memd::events::AgentEvent {
+            id: 42,
+            timestamp: chrono::Utc::now(),
+            session_id: None,
+            task_id: None,
+            event_type: "work_loop.cycle.passed".to_string(),
+            summary: "operator cycle 5/5 passed".to_string(),
+            payload: serde_json::json!({
+                "run_id": "12345678-aaaa-bbbb-cccc-123456789abc",
+                "cycle": 5,
+                "cycles": 5,
+                "job": "patch_apply_commit",
+                "passed": true,
+                "report_path": "professor-x/artifacts/evolution/patch-verifications/patch.json",
+                "transcript_path": "professor-x/artifacts/transcripts/t.json",
+                "commit": "abcdef1234567890",
+                "detail": "5 checks, commit=abcdef1, diff_bytes=336",
+            }),
+        };
+
+        let line = format_work_event(&event);
+
+        assert!(line.contains("run=12345678"));
+        assert!(line.contains("cycle=5/5"));
+        assert!(line.contains("job=patch_apply_commit"));
+        assert!(line.contains("passed=true"));
+        assert!(line.contains("report=professor-x/artifacts/evolution/patch-verifications/patch.json"));
+        assert!(line.contains("transcript=professor-x/artifacts/transcripts/t.json"));
+        assert!(line.contains("commit=abcdef12"));
+        assert!(line.contains("5 checks"));
     }
 
     #[test]

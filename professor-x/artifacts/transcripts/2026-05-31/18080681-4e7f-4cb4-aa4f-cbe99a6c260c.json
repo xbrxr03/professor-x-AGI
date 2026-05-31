@@ -1,0 +1,186 @@
+{
+  "id": "847bf3f3-0fed-48f8-9849-c40c1a387caf",
+  "task_id": "18080681-4e7f-4cb4-aa4f-cbe99a6c260c",
+  "session_ids": [
+    "13f8528e-3e4e-4b6f-9ba5-58fa3fed2146"
+  ],
+  "task_description": "deterministic coding smoke: fix a failing Rust addition test and verify it passes",
+  "task_type": "UserRequest",
+  "status": "succeeded",
+  "started_at": "2026-05-31T20:11:52.749267624Z",
+  "completed_at": "2026-05-31T20:11:53.008144157Z",
+  "attempt_count": 1,
+  "max_attempts": 1,
+  "step_count": 3,
+  "summary": "deterministic coding smoke fixed the test and verified it",
+  "review": {
+    "tool_artifacts": [
+      "/tmp/px-coding-smoke-0d343ba3-52cf-4ff3-8eb3-f60c5eeabe11/artifacts/commands/2026-05-31/46b40db8-a6a3-46dd-b9a7-1e04f7ac3679.json",
+      "/tmp/px-coding-smoke-0d343ba3-52cf-4ff3-8eb3-f60c5eeabe11/artifacts/replacements/2026-05-31/02829d5c-32d1-4778-a305-a8e39ad8d272.diff"
+    ],
+    "changed_files": [
+      "professor-x/src/main.rs"
+    ],
+    "git_status": [
+      " M professor-x/src/main.rs"
+    ],
+    "git_diff": "diff --git a/professor-x/src/main.rs b/professor-x/src/main.rs\nindex 71e6c8e..80fabd6 100644\n--- a/professor-x/src/main.rs\n+++ b/professor-x/src/main.rs\n@@ -2751,11 +2751,18 @@ async fn run_supervised_loop(\n             record.cycle = cycle;\n             records.push(record);\n         }\n+        let cycle_record = records.last().filter(|record| record.cycle == cycle);\n+        let report_path = cycle_record.map(|record| record.report_path.clone());\n+        let transcript_path = cycle_record.and_then(|record| record.transcript_path.clone());\n+        let workspace = cycle_record.map(|record| record.workspace.clone());\n+        let detail = cycle_record.map(|record| record.detail.clone());\n+        let commit = cycle_record.and_then(smoke_record_commit);\n+\n         gate_store.finish(\n             &run_id,\n             cycle,\n             passed,\n-            records.last().filter(|record| record.cycle == cycle),\n+            cycle_record,\n             error.as_deref(),\n         )?;\n \n@@ -2780,6 +2787,11 @@ async fn run_supervised_loop(\n                 \"job\": job.kind(),\n                 \"passed\": passed,\n                 \"error\": error,\n+                \"report_path\": report_path,\n+                \"transcript_path\": transcript_path,\n+                \"workspace\": workspace,\n+                \"detail\": detail,\n+                \"commit\": commit,\n             }),\n         )?;\n     }\n@@ -2977,6 +2989,19 @@ async fn run_work_loop_job(\n     }\n }\n \n+fn smoke_record_commit(record: &WorkLoopSmokeRecord) -> Option<String> {\n+    if !matches!(record.kind.as_str(), \"patch_apply_commit\" | \"operator_commit\") {\n+        return None;\n+    }\n+    let path = resolve_report_reference(&default_repo_root(), &record.report_path);\n+    let raw = std::fs::read_to_string(path).ok()?;\n+    let json: serde_json::Value = serde_json::from_str(&raw).ok()?;\n+    json.get(\"commit\")\n+        .and_then(|value| value.as_str())\n+        .filter(|commit| !commit.is_empty())\n+        .map(|commit| commit.to_string())\n+}\n+\n #[derive(Debug, Clone, Copy)]\n struct CodingExercise {\n     name: &'static str,\n@@ -5043,6 +5068,28 @@ fn format_work_event(event: &memd::events::AgentEvent) -> String {\n         .map(|id| id[..8.min(id.len())].to_string())\n         .unwrap_or_else(|| \"--------\".to_string());\n     let label = work_event_label(&event.event_type);\n+    let run = event.payload[\"run_id\"]\n+        .as_str()\n+        .map(|run| format!(\" run={}\", short_fragment(run)))\n+        .unwrap_or_default();\n+    let cycle = event.payload[\"cycle\"]\n+        .as_i64()\n+        .map(|cycle| {\n+            let total = event.payload[\"cycles\"]\n+                .as_i64()\n+                .map(|total| format!(\"/{total}\"))\n+                .unwrap_or_default();\n+            format!(\" cycle={cycle}{total}\")\n+        })\n+        .unwrap_or_default();\n+    let job = event.payload[\"job\"]\n+        .as_str()\n+        .map(|job| format!(\" job={job}\"))\n+        .unwrap_or_default();\n+    let passed = event.payload[\"passed\"]\n+        .as_bool()\n+        .map(|passed| format!(\" passed={passed}\"))\n+        .unwrap_or_default();\n     let step = event.payload[\"step\"]\n         .as_i64()\n         .map(|step| format!(\" step={step}\"))\n@@ -5083,6 +5130,18 @@ fn format_work_event(event: &memd::events::AgentEvent) -> String {\n         .as_str()\n         .map(|path| format!(\" patch={}\", truncate(path, 40)))\n         .unwrap_or_default();\n+    let report = event.payload[\"report_path\"]\n+        .as_str()\n+        .map(|path| format!(\" report={}\", truncate(path, 96)))\n+        .unwrap_or_default();\n+    let transcript = event.payload[\"transcript_path\"]\n+        .as_str()\n+        .map(|path| format!(\" transcript={}\", truncate(path, 96)))\n+        .unwrap_or_default();\n+    let commit = event.payload[\"commit\"]\n+        .as_str()\n+        .map(|commit| format!(\" commit={}\", short_fragment(commit)))\n+        .unwrap_or_default();\n     let decision = event.payload[\"accepted\"]\n         .as_bool()\n         .map(|accepted| format!(\" decision={}\", if accepted { \"accept\" } else { \"reject\" }))\n@@ -5111,26 +5170,18 @@ fn format_work_event(event: &memd::events::AgentEvent) -> String {\n         .as_str()\n         .filter(|text| !text.is_empty())\n         .or_else(|| event.payload[\"output_preview\"].as_str())\n+        .or_else(|| event.payload[\"detail\"].as_str())\n         .map(|text| format!(\" :: {}\", truncate(text, 120)))\n         .unwrap_or_default();\n+    let meta = format!(\n+        \"task={task}{run}{cycle}{job}{passed}{step}{plan_step}{outcome_step}{tool}{exercise}{target}{patch}{report}{transcript}{commit}{decision}{duration}{check_count}{diff_bytes}{proof_count}\"\n+    );\n     format!(\n-        \"#{:05} {} {:<6} task={}{}{}{}{}{}{}{}{}{}{}{}{} {}{}\",\n+        \"#{:05} {} {:<6} {} {}{}\",\n         event.id,\n         event.timestamp.format(\"%H:%M:%S\"),\n         label,\n-        task,\n-        step,\n-        plan_step,\n-        outcome_step,\n-        tool,\n-        exercise,\n-        target,\n-        patch,\n-        decision,\n-        duration,\n-        check_count,\n-        diff_bytes,\n-        proof_count,\n+        meta,\n         truncate(&event.summary, 110),\n         detail,\n     )\n@@ -5162,6 +5213,10 @@ fn work_event_label(event_type: &str) -> &'static str {\n     }\n }\n \n+fn short_fragment(id: &str) -> &str {\n+    &id[..8.min(id.len())]\n+}\n+\n fn truncate(text: &str, max_chars: usize) -> String {\n     if text.chars().count() <= max_chars {\n         return text.to_string();\n@@ -5592,6 +5647,40 @@ mod tests {\n         let _ = std::fs::remove_dir_all(root);\n     }\n \n+    #[test]\n+    fn format_work_event_surfaces_loop_artifact_evidence() {\n+        let event = memd::events::AgentEvent {\n+            id: 42,\n+            timestamp: chrono::Utc::now(),\n+            session_id: None,\n+            task_id: None,\n+            event_type: \"work_loop.cycle.passed\".to_string(),\n+            summary: \"operator cycle 5/5 passed\".to_string(),\n+            payload: serde_json::json!({\n+                \"run_id\": \"12345678-aaaa-bbbb-cccc-123456789abc\",\n+                \"cycle\": 5,\n+                \"cycles\": 5,\n+                \"job\": \"patch_apply_commit\",\n+                \"passed\": true,\n+                \"report_path\": \"professor-x/artifacts/evolution/patch-verifications/patch.json\",\n+                \"transcript_path\": \"professor-x/artifacts/transcripts/t.json\",\n+                \"commit\": \"abcdef1234567890\",\n+                \"detail\": \"5 checks, commit=abcdef1, diff_bytes=336\",\n+            }),\n+        };\n+\n+        let line = format_work_event(&event);\n+\n+        assert!(line.contains(\"run=12345678\"));\n+        assert!(line.contains(\"cycle=5/5\"));\n+        assert!(line.contains(\"job=patch_apply_commit\"));\n+        assert!(line.contains(\"passed=true\"));\n+        assert!(line.contains(\"report=professor-x/artifacts/evolution/patch-verifications/patch.json\"));\n+        assert!(line.contains(\"transcript=professor-x/artifacts/transcripts/t.json\"));\n+        assert!(line.contains(\"commit=abcdef12\"));\n+        assert!(line.contains(\"5 checks\"));\n+    }\n+\n     #[test]\n     fn changed_paths_from_unified_diff_reads_added_modified_and_deleted_paths() {\n         let diff = r#\"diff --git a/professor-x/skills/old.md b/professor-x/skills/old.md\n",
+    "git_diff_truncated": false
+  },
+  "events": [
+    {
+      "id": 6,
+      "timestamp": "2026-05-31T20:11:52.749527964Z",
+      "session_id": null,
+      "event_type": "task.queued",
+      "summary": "queued task: deterministic coding smoke: fix a failing Rust addition test and verify it passes",
+      "payload": {
+        "max_attempts": 1,
+        "priority": 100,
+        "task_type": "UserRequest",
+        "workspace": "/tmp/px-coding-smoke-0d343ba3-52cf-4ff3-8eb3-f60c5eeabe11"
+      }
+    },
+    {
+      "id": 7,
+      "timestamp": "2026-05-31T20:11:52.749756047Z",
+      "session_id": null,
+      "event_type": "task.started",
+      "summary": "started task: deterministic coding smoke: fix a failing Rust addition test and verify it passes",
+      "payload": {
+        "max_attempts": 1,
+        "priority": 100,
+        "task_type": "UserRequest",
+        "workspace": "/tmp/px-coding-smoke-0d343ba3-52cf-4ff3-8eb3-f60c5eeabe11"
+      }
+    },
+    {
+      "id": 8,
+      "timestamp": "2026-05-31T20:11:52.749969907Z",
+      "session_id": "13f8528e-3e4e-4b6f-9ba5-58fa3fed2146",
+      "event_type": "task.attempt.started",
+      "summary": "attempt 1/1 started",
+      "payload": {
+        "attempt": 1
+      }
+    },
+    {
+      "id": 9,
+      "timestamp": "2026-05-31T20:11:52.750143409Z",
+      "session_id": null,
+      "event_type": "coding.smoke.started",
+      "summary": "starting deterministic coding-agent smoke",
+      "payload": {
+        "exercise": "add_i32",
+        "workspace": "/tmp/px-coding-smoke-0d343ba3-52cf-4ff3-8eb3-f60c5eeabe11"
+      }
+    },
+    {
+      "id": 10,
+      "timestamp": "2026-05-31T20:11:52.892873956Z",
+      "session_id": "13f8528e-3e4e-4b6f-9ba5-58fa3fed2146",
+      "event_type": "tool.failed",
+      "summary": "tool 'shell.restricted' failed in 142ms",
+      "payload": {
+        "artifacts": [],
+        "error": "exit 101:    Compiling px-coding-smoke v0.1.0 (/tmp/px-coding-smoke-0d343ba3-52cf-4ff3-8eb3-f60c5eeabe11)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s\n     Running unittests src/lib.rs (target/debug/deps/px_coding_smoke-dc3dddb89fd8a772)\nerror: test failed, to rerun pass `--lib`\n; artifact=/tmp/px-coding-smoke-0d343ba3-52cf-4ff3-8eb3-f60c5eeabe11/artifacts/commands/2026-05-31/2761c37f-4809-4e08-9abd-a4b1040518ae.json",
+        "execution_ms": 142,
+        "output_preview": "",
+        "step": 1,
+        "success": false,
+        "tool": "shell.restricted"
+      }
+    },
+    {
+      "id": 11,
+      "timestamp": "2026-05-31T20:11:52.893926318Z",
+      "session_id": "13f8528e-3e4e-4b6f-9ba5-58fa3fed2146",
+      "event_type": "tool.succeeded",
+      "summary": "tool 'fs.replace' succeeded in 0ms",
+      "payload": {
+        "artifacts": [
+          "/tmp/px-coding-smoke-0d343ba3-52cf-4ff3-8eb3-f60c5eeabe11/artifacts/replacements/2026-05-31/02829d5c-32d1-4778-a305-a8e39ad8d272.diff"
+        ],
+        "error": null,
+        "execution_ms": 0,
+        "output_preview": "replace apply succeeded for src/lib.rs; old_bytes=16 new_bytes=16; artifact=/tmp/px-coding-smoke-0d343ba3-52cf-4ff3-8eb3-f60c5eeabe11/artifacts/replacements/2026-05-31/02829d5c-32d1-4778-a305-a8e39ad8d272.diff",
+        "step": 2,
+        "success": true,
+        "tool": "fs.replace"
+      }
+    },
+    {
+      "id": 12,
+      "timestamp": "2026-05-31T20:11:53.007759039Z",
+      "session_id": "13f8528e-3e4e-4b6f-9ba5-58fa3fed2146",
+      "event_type": "tool.succeeded",
+      "summary": "tool 'shell.restricted' succeeded in 112ms",
+      "payload": {
+        "artifacts": [
+          "/tmp/px-coding-smoke-0d343ba3-52cf-4ff3-8eb3-f60c5eeabe11/artifacts/commands/2026-05-31/46b40db8-a6a3-46dd-b9a7-1e04f7ac3679.json"
+        ],
+        "error": null,
+        "execution_ms": 112,
+        "output_preview": "\nrunning 1 test\ntest tests::adds_numbers ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nstderr:    Compiling px-coding-smoke v0.1....",
+        "step": 3,
+        "success": true,
+        "tool": "shell.restricted"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "index": 1,
+      "thought": "run the failing test before editing",
+      "tool_name": "shell.restricted",
+      "params": {
+        "command": "cargo test"
+      },
+      "risk_score": 60,
+      "observation_success": false,
+      "observation_output": "",
+      "observation_error": "exit 101:    Compiling px-coding-smoke v0.1.0 (/tmp/px-coding-smoke-0d343ba3-52cf-4ff3-8eb3-f60c5eeabe11)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s\n     Running unittests src/lib.rs (target/debug/deps/px_coding_smoke-dc3dddb89fd8a772)\nerror: test failed, to rerun pass `--lib`\n; artifact=/tmp/px-coding-smoke-0d343ba3-52cf-4ff3-8eb3-f60c5eeabe11/artifacts/commands/2026-05-31/2761c37f-4809-4e08-9abd-a4b1040518ae.json",
+      "observation_artifacts": [],
+      "execution_ms": 142,
+      "timestamp": "2026-05-31T20:11:52.892766782Z"
+    },
+    {
+      "index": 2,
+      "thought": "apply the minimal exact replacement",
+      "tool_name": "fs.replace",
+      "params": {
+        "mode": "apply",
+        "new": "    left + right",
+        "old": "    left - right",
+        "path": "src/lib.rs"
+      },
+      "risk_score": 42,
+      "observation_success": true,
+      "observation_output": "replace apply succeeded for src/lib.rs; old_bytes=16 new_bytes=16; artifact=/tmp/px-coding-smoke-0d343ba3-52cf-4ff3-8eb3-f60c5eeabe11/artifacts/replacements/2026-05-31/02829d5c-32d1-4778-a305-a8e39ad8d272.diff",
+      "observation_error": null,
+      "observation_artifacts": [
+        "/tmp/px-coding-smoke-0d343ba3-52cf-4ff3-8eb3-f60c5eeabe11/artifacts/replacements/2026-05-31/02829d5c-32d1-4778-a305-a8e39ad8d272.diff"
+      ],
+      "execution_ms": 0,
+      "timestamp": "2026-05-31T20:11:52.893827162Z"
+    },
+    {
+      "index": 3,
+      "thought": "rerun tests after the fix",
+      "tool_name": "shell.restricted",
+      "params": {
+        "command": "cargo test"
+      },
+      "risk_score": 60,
+      "observation_success": true,
+      "observation_output": "\nrunning 1 test\ntest tests::adds_numbers ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nstderr:    Compiling px-coding-smoke v0.1.0 (/tmp/px-coding-smoke-0d343ba3-52cf-4ff3-8eb3-f60c5eeabe11)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s\n     Running unittests src/lib.rs (target/debug/deps/px_coding_smoke-dc3dddb89fd8a772)\n   Doc-tests px_coding_smoke\n\n[full output: /tmp/px-coding-smoke-0d343ba3-52cf-4ff3-8eb3-f60c5eeabe11/artifacts/commands/2026-05-31/46b40db8-a6a3-46dd-b9a7-1e04f7ac3679.json]",
+      "observation_error": null,
+      "observation_artifacts": [
+        "/tmp/px-coding-smoke-0d343ba3-52cf-4ff3-8eb3-f60c5eeabe11/artifacts/commands/2026-05-31/46b40db8-a6a3-46dd-b9a7-1e04f7ac3679.json"
+      ],
+      "execution_ms": 112,
+      "timestamp": "2026-05-31T20:11:53.007622249Z"
+    }
+  ],
+  "recorded_at": "2026-05-31T20:11:53.008377319Z"
+}

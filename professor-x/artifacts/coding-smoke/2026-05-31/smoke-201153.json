@@ -1,0 +1,14 @@
+{
+  "generated_at": "2026-05-31T20:11:53.020898846+00:00",
+  "workspace": "/tmp/px-coding-smoke-0d343ba3-52cf-4ff3-8eb3-f60c5eeabe11",
+  "exercise": "add_i32",
+  "passed": true,
+  "initial_test_failed": true,
+  "edit_applied": true,
+  "final_test_passed": true,
+  "transcript_path": "artifacts/transcripts/2026-05-31/18080681-4e7f-4cb4-aa4f-cbe99a6c260c.json",
+  "artifacts": [
+    "/tmp/px-coding-smoke-0d343ba3-52cf-4ff3-8eb3-f60c5eeabe11/artifacts/replacements/2026-05-31/02829d5c-32d1-4778-a305-a8e39ad8d272.diff",
+    "/tmp/px-coding-smoke-0d343ba3-52cf-4ff3-8eb3-f60c5eeabe11/artifacts/commands/2026-05-31/46b40db8-a6a3-46dd-b9a7-1e04f7ac3679.json"
+  ]
+}

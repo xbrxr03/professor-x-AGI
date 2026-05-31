@@ -1,0 +1,31 @@
+{
+  "run_id": "86375123-257c-4f27-9a01-75340c4a6365",
+  "run_kind": "operator",
+  "started_at": "2026-05-31T20:11:52.747922162+00:00",
+  "completed_at": "2026-05-31T20:11:53.021961558+00:00",
+  "requested_cycles": 1,
+  "completed_cycles": 1,
+  "passed_cycles": 1,
+  "failed_cycles": 0,
+  "profile": "core",
+  "planned_jobs": [
+    {
+      "cycle": 1,
+      "kind": "coding_smoke",
+      "label": "coding-agent smoke",
+      "reason": "core profile verifies local coding-agent edit/test capability before higher-risk gates"
+    }
+  ],
+  "smoke_records": [
+    {
+      "cycle": 1,
+      "kind": "coding_smoke",
+      "smoke_id": 1,
+      "passed": true,
+      "report_path": "artifacts/coding-smoke/2026-05-31/smoke-201153.json",
+      "transcript_path": "artifacts/transcripts/2026-05-31/18080681-4e7f-4cb4-aa4f-cbe99a6c260c.json",
+      "workspace": "/tmp/px-coding-smoke-0d343ba3-52cf-4ff3-8eb3-f60c5eeabe11",
+      "detail": "deterministic coding smoke"
+    }
+  ]
+}
