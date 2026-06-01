@@ -6919,6 +6919,7 @@ fn render_work_cockpit(
     let repo_root = default_repo_root();
     let recent_events = events.work_tail(limit)?;
     let latest_run = WorkLoopRunStore::new(Arc::clone(&memory.db)).latest()?;
+    let latest_coding_session = CodingSessionStore::new(Arc::clone(&memory.db)).latest()?;
     let gate_store = WorkLoopGateStore::new(Arc::clone(&memory.db));
     let latest_gate = gate_store.latest()?;
     let recent_gates = latest_run
@@ -6931,6 +6932,7 @@ fn render_work_cockpit(
         &repo_root,
         &recent_events,
         latest_run.as_ref(),
+        latest_coding_session.as_ref(),
         latest_gate.as_ref(),
         &recent_gates,
     ))
@@ -6940,6 +6942,7 @@ fn format_work_cockpit(
     repo_root: &std::path::Path,
     recent_events: &[memd::events::AgentEvent],
     latest_run: Option<&WorkLoopRunRecord>,
+    latest_coding_session: Option<&CodingSessionRecord>,
     latest_gate: Option<&WorkLoopGateRecord>,
     recent_gates: &[WorkLoopGateRecord],
 ) -> String {
@@ -7009,6 +7012,47 @@ fn format_work_cockpit(
             }
         }
         None => lines.push("  waiting for --operator-run, --operator-run-commit, or --lab".to_string()),
+    }
+
+    lines.push(String::new());
+    lines.push("Latest coding session".to_string());
+    match latest_coding_session {
+        Some(session) => {
+            let commit = coding_session_commit_hint(session)
+                .map(|commit| format!(" commit={commit}"))
+                .unwrap_or_default();
+            lines.push(format!(
+                "  {} session={} exercise={} checks={} artifacts={}{}",
+                session.status,
+                short_fragment(&session.id),
+                session.exercise,
+                session.checks.len(),
+                session.artifacts.len(),
+                commit,
+            ));
+            lines.push(format!("  goal {}", truncate(&session.goal, 128)));
+            lines.push(format!(
+                "  report {}",
+                truncate(&session.session_report_path, 130)
+            ));
+            if let Some(smoke_report) = &session.smoke_report_path {
+                lines.push(format!("  smoke {}", truncate(smoke_report, 130)));
+            }
+            if let Some(transcript) = &session.transcript_path {
+                lines.push(format!("  transcript {}", truncate(transcript, 130)));
+            }
+            if let Some(outcome) = session.step_outcomes.last() {
+                lines.push(format!("  last outcome {}", truncate(outcome, 130)));
+            }
+            for artifact in session.artifacts.iter().take(2) {
+                lines.push(format!("  artifact {}", truncate(artifact, 130)));
+            }
+            lines.push(format!(
+                "  commands sessions=--coding-sessions 5 report={}",
+                truncate(&session.session_report_path, 92)
+            ));
+        }
+        None => lines.push("  no coding-agent sessions recorded yet".to_string()),
     }
 
     lines.push(String::new());
@@ -8315,6 +8359,27 @@ mod tests {
             recorded_at: now,
             updated_at: now,
         };
+        let session = CodingSessionRecord {
+            id: "session-12345678-aaaa-bbbb-cccc-123456789abc".to_string(),
+            generated_at: now,
+            goal: "operator goal skill session: verify, apply, and commit goal='make work visible'".to_string(),
+            exercise: "repo_patch_apply_commit".to_string(),
+            status: "passed".to_string(),
+            workspace: Some("repo-root verified apply commit".to_string()),
+            smoke_id: None,
+            smoke_report_path: None,
+            session_report_path: "artifacts/coding-sessions/2026-06-01/session-135052-0aeff8ac.json".to_string(),
+            transcript_path: None,
+            artifacts: vec!["artifacts/evolution/patch-verifications/2026-06-01/patch-135049.json".to_string()],
+            checks: vec!["cargo_check".to_string(), "git_commit".to_string()],
+            plan_steps: Vec::new(),
+            step_outcomes: vec![
+                "main apply committed".to_string(),
+                "commit eedcd3e123456789".to_string(),
+            ],
+            failure_reason: None,
+            recorded_at: now,
+        };
         let event = memd::events::AgentEvent {
             id: 10,
             timestamp: now,
@@ -8338,6 +8403,7 @@ mod tests {
             std::path::Path::new("."),
             &[event],
             Some(&run),
+            Some(&session),
             Some(&gate),
             std::slice::from_ref(&gate),
         );
@@ -8348,6 +8414,11 @@ mod tests {
         assert!(screen.contains("operator:core run=12345678"));
         assert!(screen.contains("commands replay=--replay 12345678"));
         assert!(screen.contains("Evidence bundle"));
+        assert!(screen.contains("Latest coding session"));
+        assert!(screen.contains("passed session=session-"));
+        assert!(screen.contains("commit=eedcd3e1"));
+        assert!(screen.contains("report artifacts/coding-sessions/2026-06-01/session-135052-0aeff8ac.json"));
+        assert!(screen.contains("commands sessions=--coding-sessions 5"));
         assert!(screen.contains("proof report artifacts/coding-smoke/report.json"));
         assert!(screen.contains("proof transcript artifacts/transcripts/task.json"));
         assert!(screen.contains("Recent signal events=1"));
