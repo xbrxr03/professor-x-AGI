@@ -283,7 +283,7 @@ fn parse_args() -> CliArgs {
                 cli.task = Some(args[i + 1].clone());
                 i += 2;
             }
-            "--chat" | "--task-interactive" => {
+            "--chat" | "--prof-x-chat" | "--talk" | "--task-interactive" => {
                 cli.chat = true;
                 i += 1;
             }
@@ -5569,8 +5569,7 @@ async fn run_interactive_tasks(
         serde_json::json!({}),
     )?;
 
-    println!("Professor X interactive task mode");
-    println!("Type a task and press Enter. Commands: /status, /events [n], /quit");
+    println!("{}", format_interactive_help());
 
     loop {
         if cancel.is_cancelled() {
@@ -5590,13 +5589,39 @@ async fn run_interactive_tasks(
         if matches!(input, "/quit" | "/exit" | "quit" | "exit") {
             break;
         }
+        if matches!(input, "/help" | "help") {
+            println!("{}", format_interactive_help());
+            continue;
+        }
         if input == "/status" {
             observer::print_snapshot(Arc::clone(&memory), Arc::clone(&events))?;
+            continue;
+        }
+        if input == "/cockpit" || input == "/now" {
+            println!(
+                "{}",
+                render_work_cockpit(Arc::clone(&memory), Arc::clone(&events), 12)?
+            );
             continue;
         }
         if let Some(rest) = input.strip_prefix("/events") {
             let limit = rest.trim().parse::<usize>().unwrap_or(10);
             print_events(Arc::clone(&events), limit)?;
+            continue;
+        }
+        if let Some(rest) = input.strip_prefix("/work") {
+            let limit = rest.trim().parse::<usize>().unwrap_or(8);
+            print_work_feed(Arc::clone(&events), limit)?;
+            continue;
+        }
+        if let Some(rest) = input.strip_prefix("/sessions") {
+            let limit = rest.trim().parse::<usize>().unwrap_or(5);
+            print_coding_sessions(Arc::clone(&memory), limit)?;
+            continue;
+        }
+        if let Some(rest) = input.strip_prefix("/runs") {
+            let limit = rest.trim().parse::<usize>().unwrap_or(5);
+            print_run_log(Arc::clone(&memory), limit)?;
             continue;
         }
 
@@ -5645,6 +5670,24 @@ async fn run_interactive_tasks(
     )?;
     println!("Professor X interactive task mode stopped");
     Ok(())
+}
+
+fn format_interactive_help() -> String {
+    [
+        "Professor X interactive task mode",
+        "Type a task and press Enter.",
+        "",
+        "Operator commands",
+        "  /cockpit        show live state, current run, latest coding session, and trace",
+        "  /work [n]       show recent work/tool/task events",
+        "  /sessions [n]   show recent coding-agent sessions and evidence paths",
+        "  /runs [n]       show recent operator/autonomous run ledger entries",
+        "  /events [n]     show raw recent events",
+        "  /status         show daemon/scheduler/event snapshot",
+        "  /help           show this command list",
+        "  /quit           stop the console",
+    ]
+    .join("\n")
 }
 
 fn drain_live_task_events(
@@ -7861,6 +7904,19 @@ mod tests {
         assert!(help.contains("--coding-sessions 5"));
         assert!(help.contains("--replay latest"));
         assert!(help.contains("--validate-artifacts"));
+    }
+
+    #[test]
+    fn interactive_help_surfaces_observer_commands() {
+        let help = format_interactive_help();
+
+        assert!(help.contains("Professor X interactive task mode"));
+        assert!(help.contains("/cockpit"));
+        assert!(help.contains("/work [n]"));
+        assert!(help.contains("/sessions [n]"));
+        assert!(help.contains("/runs [n]"));
+        assert!(help.contains("/events [n]"));
+        assert!(help.contains("/status"));
     }
 
     #[test]
