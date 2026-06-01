@@ -5602,14 +5602,17 @@ async fn run_interactive_tasks(
             break;
         }
         if matches!(input, "/help" | "help") {
+            record_console_command(&events, "help", None)?;
             println!("{}", format_interactive_help());
             continue;
         }
         if input == "/status" {
+            record_console_command(&events, "status", None)?;
             observer::print_snapshot(Arc::clone(&memory), Arc::clone(&events))?;
             continue;
         }
         if input == "/cockpit" || input == "/now" {
+            record_console_command(&events, "cockpit", None)?;
             println!(
                 "{}",
                 render_work_cockpit(Arc::clone(&memory), Arc::clone(&events), 12)?
@@ -5617,51 +5620,61 @@ async fn run_interactive_tasks(
             continue;
         }
         if input == "/brief" {
+            record_console_command(&events, "brief", None)?;
             print_prof_x_brief(Arc::clone(&memory), Arc::clone(&events))?;
             continue;
         }
         if let Some(rest) = input.strip_prefix("/events") {
             let limit = rest.trim().parse::<usize>().unwrap_or(10);
+            record_console_command(&events, "events", Some(limit.to_string()))?;
             print_events(Arc::clone(&events), limit)?;
             continue;
         }
         if let Some(rest) = input.strip_prefix("/work") {
             let limit = rest.trim().parse::<usize>().unwrap_or(8);
+            record_console_command(&events, "work", Some(limit.to_string()))?;
             print_work_feed(Arc::clone(&events), limit)?;
             continue;
         }
         if let Some(rest) = input.strip_prefix("/sessions") {
             let limit = rest.trim().parse::<usize>().unwrap_or(5);
+            record_console_command(&events, "sessions", Some(limit.to_string()))?;
             print_coding_sessions(Arc::clone(&memory), limit)?;
             continue;
         }
         if let Some(rest) = input.strip_prefix("/runs") {
             let limit = rest.trim().parse::<usize>().unwrap_or(5);
+            record_console_command(&events, "runs", Some(limit.to_string()))?;
             print_run_log(Arc::clone(&memory), limit)?;
             continue;
         }
         if let Some(rest) = input.strip_prefix("/review") {
             let run_ref = nonempty_or_latest(rest);
+            record_console_command(&events, "review", Some(run_ref.to_string()))?;
             print_run_review(Arc::clone(&memory), run_ref)?;
             continue;
         }
         if let Some(rest) = input.strip_prefix("/replay") {
             let run_ref = nonempty_or_latest(rest);
+            record_console_command(&events, "replay", Some(run_ref.to_string()))?;
             print_run_replay(Arc::clone(&memory), run_ref)?;
             continue;
         }
         if let Some(rest) = input.strip_prefix("/publish") {
             let run_ref = nonempty_or_latest(rest);
+            record_console_command(&events, "publish", Some(run_ref.to_string()))?;
             publish_run_artifacts(Arc::clone(&memory), run_ref)?;
             continue;
         }
         if let Some(rest) = input.strip_prefix("/task-review") {
             let task_ref = nonempty_or_latest(rest);
+            record_console_command(&events, "task-review", Some(task_ref.to_string()))?;
             print_task_review(Arc::clone(&transcripts), task_ref)?;
             continue;
         }
         if let Some(rest) = input.strip_prefix("/run-commit") {
             let cycles = rest.trim().parse::<u32>().unwrap_or(5);
+            record_console_command(&events, "run-commit", Some(cycles.to_string()))?;
             run_autonomous_operator_run(
                 Arc::clone(&registry),
                 Arc::clone(&policy),
@@ -5677,6 +5690,7 @@ async fn run_interactive_tasks(
         }
         if let Some(rest) = input.strip_prefix("/run") {
             let cycles = rest.trim().parse::<u32>().unwrap_or(4);
+            record_console_command(&events, "run", Some(cycles.to_string()))?;
             run_autonomous_operator_run(
                 Arc::clone(&registry),
                 Arc::clone(&policy),
@@ -5761,6 +5775,28 @@ fn format_interactive_help() -> String {
         "  /quit           stop the console",
     ]
     .join("\n")
+}
+
+fn record_console_command(
+    events: &EventStore,
+    command: &str,
+    argument: Option<String>,
+) -> Result<()> {
+    let argument = argument
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty());
+    let mut payload = serde_json::json!({
+        "command": command,
+    });
+    if let Some(argument) = argument.as_deref() {
+        payload["argument"] = serde_json::json!(argument);
+    }
+    let summary = argument
+        .as_deref()
+        .map(|argument| format!("operator console command /{command} {argument}"))
+        .unwrap_or_else(|| format!("operator console command /{command}"));
+    events.append(None, None, "console.command", summary, payload)?;
+    Ok(())
 }
 
 fn nonempty_or_latest(text: &str) -> &str {
@@ -7509,6 +7545,7 @@ fn work_signal_summary(events: &[memd::events::AgentEvent]) -> String {
     let mut evolution = 0;
     let mut loop_events = 0;
     let mut transcripts = 0;
+    let mut console = 0;
     for event in events {
         let event_type = event.event_type.as_str();
         if event_type.starts_with("task.") {
@@ -7523,17 +7560,20 @@ fn work_signal_summary(events: &[memd::events::AgentEvent]) -> String {
             loop_events += 1;
         } else if event_type == "transcript.written" {
             transcripts += 1;
+        } else if event_type.starts_with("console.") {
+            console += 1;
         }
     }
     format!(
-        "events={} task={} tool={} policy={} evolution={} loop={} transcript={}",
+        "events={} task={} tool={} policy={} evolution={} loop={} transcript={} console={}",
         events.len(),
         task,
         tool,
         policy,
         evolution,
         loop_events,
-        transcripts
+        transcripts,
+        console
     )
 }
 
@@ -7694,6 +7734,12 @@ fn format_work_event(event: &memd::events::AgentEvent) -> String {
     if let Some(exercise) = event.payload["exercise"].as_str() {
         meta.push(format!("exercise={exercise}"));
     }
+    if let Some(command) = event.payload["command"].as_str() {
+        meta.push(format!("command=/{command}"));
+    }
+    if let Some(argument) = event.payload["argument"].as_str() {
+        meta.push(format!("arg={}", truncate(argument, 48)));
+    }
     if let Some(accepted) = event.payload["accepted"].as_bool() {
         meta.push(format!("decision={}", if accepted { "accept" } else { "reject" }));
     }
@@ -7775,6 +7821,7 @@ fn event_action(event: &memd::events::AgentEvent) -> &'static str {
         "coding.smoke.passed" => "Passed coding smoke",
         "coding.smoke.failed" => "Failed coding smoke",
         "transcript.written" => "Wrote transcript",
+        "console.command" => "Operator command",
         "evolution.patch_apply.committed" => "Committed verified patch",
         "evolution.operator_commit.committed" => "Committed operator proposal",
         "evolution.patch_apply.rejected" | "evolution.proposal_dry_run.rejected" => {
@@ -7806,6 +7853,8 @@ fn work_event_label(event_type: &str) -> &'static str {
         "CODE"
     } else if event_type.starts_with("coding.smoke.") {
         "SMOKE"
+    } else if event_type.starts_with("console.") {
+        "CMD"
     } else if event_type.starts_with("evolution.") {
         "EVOLVE"
     } else if event_type.starts_with("autonomous_run.") {
@@ -8155,6 +8204,41 @@ mod tests {
         assert_eq!(nonempty_or_latest(""), "latest");
         assert_eq!(nonempty_or_latest("   "), "latest");
         assert_eq!(nonempty_or_latest(" abc123 "), "abc123");
+    }
+
+    #[test]
+    fn record_console_command_is_reviewable_work_event() {
+        let db = Arc::new(std::sync::Mutex::new(
+            rusqlite::Connection::open_in_memory().unwrap(),
+        ));
+        db.lock()
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE agent_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    session_id TEXT,
+                    task_id TEXT,
+                    event_type TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    payload TEXT NOT NULL DEFAULT '{}'
+                );",
+            )
+            .unwrap();
+        let events = EventStore::new(db);
+
+        record_console_command(&events, "review", Some("latest".to_string())).unwrap();
+
+        let rows = events.work_tail(5).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].event_type, "console.command");
+        assert_eq!(rows[0].payload["command"], "review");
+        assert_eq!(rows[0].payload["argument"], "latest");
+        let line = format_work_event(&rows[0]);
+        assert!(line.contains("Operator command"));
+        assert!(line.contains("command=/review"));
+        assert!(line.contains("arg=latest"));
+        assert!(work_signal_summary(&rows).contains("console=1"));
     }
 
     #[test]

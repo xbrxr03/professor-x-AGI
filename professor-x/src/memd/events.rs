@@ -201,6 +201,7 @@ fn work_event_where_clause() -> &'static str {
       OR event_type LIKE 'react.%'
       OR event_type LIKE 'coding.session.%'
       OR event_type LIKE 'coding.smoke.%'
+      OR event_type LIKE 'console.%'
       OR event_type LIKE 'evolution.%'
       OR event_type LIKE 'autonomous_run.%'
       OR event_type LIKE 'work_loop.%'
@@ -264,15 +265,25 @@ mod tests {
                 serde_json::json!({"profile": "core", "cycles": 4}),
             )
             .unwrap();
+        store
+            .append(
+                None,
+                None,
+                "console.command",
+                "operator console command /brief",
+                serde_json::json!({"command": "brief"}),
+            )
+            .unwrap();
 
         let events = store.tail(10).unwrap();
-        assert_eq!(events.len(), 3);
+        assert_eq!(events.len(), 4);
         assert_eq!(events[0].event_type, "daemon.started");
         assert_eq!(events[1].payload["priority"], 100);
         assert_eq!(events[2].event_type, "autonomous_run.requested");
-        assert_eq!(store.after_id(events[0].id, 10).unwrap().len(), 2);
-        assert_eq!(store.work_tail(10).unwrap().len(), 2);
-        assert_eq!(store.work_after_id(0, 10).unwrap().len(), 2);
+        assert_eq!(events[3].event_type, "console.command");
+        assert_eq!(store.after_id(events[0].id, 10).unwrap().len(), 3);
+        assert_eq!(store.work_tail(10).unwrap().len(), 3);
+        assert_eq!(store.work_after_id(0, 10).unwrap().len(), 3);
         assert_eq!(
             store
                 .latest_of_type("autonomous_run.requested")
