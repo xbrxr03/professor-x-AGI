@@ -5624,6 +5624,36 @@ async fn run_interactive_tasks(
             print_run_log(Arc::clone(&memory), limit)?;
             continue;
         }
+        if let Some(rest) = input.strip_prefix("/run-commit") {
+            let cycles = rest.trim().parse::<u32>().unwrap_or(5);
+            run_autonomous_operator_run(
+                Arc::clone(&registry),
+                Arc::clone(&policy),
+                Arc::clone(&memory),
+                Arc::clone(&events),
+                Arc::clone(&transcripts),
+                cycles,
+                WorkLoopProfile::Commit,
+                false,
+            )
+            .await?;
+            continue;
+        }
+        if let Some(rest) = input.strip_prefix("/run") {
+            let cycles = rest.trim().parse::<u32>().unwrap_or(4);
+            run_autonomous_operator_run(
+                Arc::clone(&registry),
+                Arc::clone(&policy),
+                Arc::clone(&memory),
+                Arc::clone(&events),
+                Arc::clone(&transcripts),
+                cycles,
+                WorkLoopProfile::Core,
+                false,
+            )
+            .await?;
+            continue;
+        }
 
         events.append(
             None,
@@ -5682,6 +5712,8 @@ fn format_interactive_help() -> String {
         "  /work [n]       show recent work/tool/task events",
         "  /sessions [n]   show recent coding-agent sessions and evidence paths",
         "  /runs [n]       show recent operator/autonomous run ledger entries",
+        "  /run [n]        start a bounded core Prof X run",
+        "  /run-commit [n] start a commit-capable verified Prof X run",
         "  /events [n]     show raw recent events",
         "  /status         show daemon/scheduler/event snapshot",
         "  /help           show this command list",
@@ -7915,6 +7947,8 @@ mod tests {
         assert!(help.contains("/work [n]"));
         assert!(help.contains("/sessions [n]"));
         assert!(help.contains("/runs [n]"));
+        assert!(help.contains("/run [n]"));
+        assert!(help.contains("/run-commit [n]"));
         assert!(help.contains("/events [n]"));
         assert!(help.contains("/status"));
     }
