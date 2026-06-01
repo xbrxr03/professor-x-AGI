@@ -78,6 +78,8 @@ struct CliArgs {
     work_loops_limit: Option<usize>,
     /// Print a detailed autonomous/work-loop run review by run id prefix, report path, or 'latest'.
     run_review: Option<String>,
+    /// Replay a work/operator run timeline by run id prefix, report path, or 'latest'.
+    run_replay: Option<String>,
     /// Print a task transcript review by task id prefix, or 'latest'.
     task_review: Option<String>,
     /// Follow agent events until interrupted.
@@ -203,6 +205,7 @@ fn parse_args() -> CliArgs {
         task_runs_limit: None,
         work_loops_limit: None,
         run_review: None,
+        run_replay: None,
         task_review: None,
         watch: false,
         watch_work: false,
@@ -318,6 +321,15 @@ fn parse_args() -> CliArgs {
                     .cloned();
                 let has_value = value.is_some();
                 cli.run_review = Some(value.unwrap_or_else(|| "latest".to_string()));
+                i += if has_value { 2 } else { 1 };
+            }
+            "--replay" | "--run-replay" | "--loop-replay" => {
+                let value = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .cloned();
+                let has_value = value.is_some();
+                cli.run_replay = Some(value.unwrap_or_else(|| "latest".to_string()));
                 i += if has_value { 2 } else { 1 };
             }
             "--task-review" if i + 1 < args.len() => {
@@ -493,7 +505,9 @@ async fn main() -> Result<()> {
         || cli.task_runs_limit.is_some()
         || cli.coding_sessions_limit.is_some()
         || cli.work_loops_limit.is_some()
+        || cli.run_review.is_some()
         || cli.task_review.is_some()
+        || cli.run_replay.is_some()
         || cli.watch
         || cli.watch_work
         || cli.observe_work_limit.is_some()
@@ -573,6 +587,10 @@ async fn main() -> Result<()> {
 
     if let Some(run_ref) = cli.run_review {
         return print_run_review(Arc::clone(&memory), &run_ref);
+    }
+
+    if let Some(run_ref) = cli.run_replay {
+        return print_run_replay(Arc::clone(&memory), &run_ref);
     }
 
     if let Some(task_ref) = cli.task_review {
@@ -4951,6 +4969,101 @@ fn print_run_review(memory: Arc<MemoryManager>, run_ref: &str) -> Result<()> {
     Ok(())
 }
 
+fn print_run_replay(memory: Arc<MemoryManager>, run_ref: &str) -> Result<()> {
+    let repo_root = default_repo_root();
+    let report_path = resolve_work_loop_report_path(Arc::clone(&memory), &repo_root, run_ref)?;
+    let raw = std::fs::read_to_string(&report_path)?;
+    let report: SupervisedLoopReport = serde_json::from_str(&raw)?;
+    println!("Professor X run replay");
+    println!(
+        "run={} mode={}:{} cycles={}/{} passed={} failed={}",
+        short_fragment(&report.run_id),
+        report.run_kind,
+        report.profile,
+        report.completed_cycles,
+        report.requested_cycles,
+        report.passed_cycles,
+        report.failed_cycles
+    );
+    println!("report: {}", display_repo_path(&repo_root, &report_path));
+    println!();
+
+    if !report.planned_jobs.is_empty() {
+        println!("Plan");
+        for job in &report.planned_jobs {
+            println!(
+                "- cycle {} {}",
+                job.cycle,
+                truncate(&job.reason, 120)
+            );
+            println!("  L job {}", job.kind);
+        }
+        println!();
+    }
+
+    println!("Replay");
+    if report.timeline.is_empty() {
+        println!("- no timeline recorded in this run report");
+    } else {
+        for entry in &report.timeline {
+            println!("{}", format_work_replay_entry(entry));
+        }
+    }
+    Ok(())
+}
+
+fn format_work_replay_entry(entry: &WorkTimelineEntry) -> String {
+    let time = chrono::DateTime::parse_from_rfc3339(&entry.timestamp)
+        .map(|dt| dt.format("%H:%M:%S").to_string())
+        .unwrap_or_else(|_| "??:??:??".to_string());
+    let mut lines = vec![format!(
+        "- #{:05} {} {:<6} {} {}",
+        entry.event_id,
+        time,
+        entry.label,
+        entry.action,
+        truncate(&entry.summary, 118)
+    )];
+    let mut meta = Vec::new();
+    if let Some(task) = &entry.task_id {
+        meta.push(format!("task={task}"));
+    }
+    if let Some(run) = &entry.run_id {
+        meta.push(format!("run={run}"));
+    }
+    if let Some(cycle) = entry.cycle {
+        meta.push(format!("cycle={cycle}"));
+    }
+    if let Some(step) = entry.step {
+        meta.push(format!("step={step}"));
+    }
+    if let Some(job) = &entry.job {
+        meta.push(format!("job={job}"));
+    }
+    if let Some(tool) = &entry.tool {
+        meta.push(format!("tool={tool}"));
+    }
+    if let Some(passed) = entry.passed {
+        meta.push(format!("passed={passed}"));
+    }
+    if !meta.is_empty() {
+        lines.push(format!("  L {}", meta.join(" ")));
+    }
+    if let Some(detail) = &entry.detail {
+        lines.push(format!("  L detail {}", truncate(detail, 180)));
+    }
+    if let Some(report) = &entry.report_path {
+        lines.push(format!("  L report {}", truncate(report, 140)));
+    }
+    if let Some(transcript) = &entry.transcript_path {
+        lines.push(format!("  L transcript {}", truncate(transcript, 140)));
+    }
+    for artifact in entry.artifacts.iter().take(3) {
+        lines.push(format!("  L artifact {}", truncate(artifact, 140)));
+    }
+    lines.join("\n")
+}
+
 fn format_work_timeline_entry(entry: &WorkTimelineEntry) -> String {
     let time = chrono::DateTime::parse_from_rfc3339(&entry.timestamp)
         .map(|dt| dt.format("%H:%M:%S").to_string())
@@ -6191,6 +6304,39 @@ mod tests {
         assert!(line.contains("step=2"));
         assert!(line.contains("tool=fs.replace"));
         assert!(line.contains("path=src/lib.rs mode=apply"));
+    }
+
+    #[test]
+    fn format_work_replay_entry_groups_metadata_and_proofs() {
+        let entry = WorkTimelineEntry {
+            event_id: 8,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            label: "SMOKE".to_string(),
+            action: "Passed coding smoke".to_string(),
+            task_id: Some("abcd1234".to_string()),
+            run_id: Some("12345678".to_string()),
+            cycle: Some(1),
+            step: None,
+            tool: None,
+            job: Some("coding_smoke".to_string()),
+            passed: Some(true),
+            summary: "coding smoke report written to artifacts/coding-smoke/report.json".to_string(),
+            detail: Some("deterministic coding smoke".to_string()),
+            report_path: Some("artifacts/coding-smoke/report.json".to_string()),
+            transcript_path: Some("artifacts/transcripts/task.json".to_string()),
+            artifacts: vec!["artifacts/commands/cargo-test.json".to_string()],
+        };
+
+        let line = format_work_replay_entry(&entry);
+
+        assert!(line.contains("- #00008"));
+        assert!(line.contains("Passed coding smoke"));
+        assert!(line.contains("task=abcd1234"));
+        assert!(line.contains("job=coding_smoke"));
+        assert!(line.contains("passed=true"));
+        assert!(line.contains("L report artifacts/coding-smoke/report.json"));
+        assert!(line.contains("L transcript artifacts/transcripts/task.json"));
+        assert!(line.contains("L artifact artifacts/commands/cargo-test.json"));
     }
 
     #[test]
