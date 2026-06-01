@@ -82,6 +82,8 @@ struct CliArgs {
     run_review: Option<String>,
     /// Replay a work/operator run timeline by run id prefix, report path, or 'latest'.
     run_replay: Option<String>,
+    /// Commit one run's report and ledger artifacts by run id prefix, report path, or 'latest'.
+    publish_run: Option<String>,
     /// Print a task transcript review by task id prefix, or 'latest'.
     task_review: Option<String>,
     /// Follow agent events until interrupted.
@@ -209,6 +211,7 @@ fn parse_args() -> CliArgs {
         run_log_limit: None,
         run_review: None,
         run_replay: None,
+        publish_run: None,
         task_review: None,
         watch: false,
         watch_work: false,
@@ -341,6 +344,15 @@ fn parse_args() -> CliArgs {
                     .cloned();
                 let has_value = value.is_some();
                 cli.run_replay = Some(value.unwrap_or_else(|| "latest".to_string()));
+                i += if has_value { 2 } else { 1 };
+            }
+            "--publish-run" | "--publish-latest-run" | "--commit-run-log" => {
+                let value = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .cloned();
+                let has_value = value.is_some();
+                cli.publish_run = Some(value.unwrap_or_else(|| "latest".to_string()));
                 i += if has_value { 2 } else { 1 };
             }
             "--task-review" if i + 1 < args.len() => {
@@ -520,6 +532,7 @@ async fn main() -> Result<()> {
         || cli.run_review.is_some()
         || cli.task_review.is_some()
         || cli.run_replay.is_some()
+        || cli.publish_run.is_some()
         || cli.watch
         || cli.watch_work
         || cli.observe_work_limit.is_some()
@@ -607,6 +620,10 @@ async fn main() -> Result<()> {
 
     if let Some(run_ref) = cli.run_replay {
         return print_run_replay(Arc::clone(&memory), &run_ref);
+    }
+
+    if let Some(run_ref) = cli.publish_run {
+        return publish_run_artifacts(Arc::clone(&memory), &run_ref);
     }
 
     if let Some(task_ref) = cli.task_review {
@@ -5209,6 +5226,102 @@ fn print_run_replay(memory: Arc<MemoryManager>, run_ref: &str) -> Result<()> {
     Ok(())
 }
 
+fn publish_run_artifacts(memory: Arc<MemoryManager>, run_ref: &str) -> Result<()> {
+    let repo_root = default_repo_root();
+    let report_path = resolve_work_loop_report_path(Arc::clone(&memory), &repo_root, run_ref)?;
+    let raw = std::fs::read_to_string(&report_path)?;
+    let report: SupervisedLoopReport = serde_json::from_str(&raw)?;
+    let paths = publishable_run_artifact_paths(&repo_root, &report_path, &report)?;
+    let commit = commit_run_artifacts(&repo_root, &paths, &report)?;
+
+    println!("Published Professor X run {}", short_fragment(&report.run_id));
+    println!("  commit: {commit}");
+    for path in paths {
+        println!("  artifact: {}", path.display());
+    }
+    Ok(())
+}
+
+fn publishable_run_artifact_paths(
+    repo_root: &std::path::Path,
+    report_path: &std::path::Path,
+    report: &SupervisedLoopReport,
+) -> Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    paths.push(repo_relative_existing_path(repo_root, report_path)?);
+    let ledger = report
+        .ledger_path
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("run report has no ledger_path; run it again before publishing"))?;
+    paths.push(repo_relative_existing_path(
+        repo_root,
+        &resolve_report_reference(repo_root, ledger),
+    )?);
+    paths.sort();
+    paths.dedup();
+    for path in &paths {
+        if !publishable_run_artifact_path(path) {
+            anyhow::bail!(
+                "refusing to publish non-run artifact '{}'; only work-loop report/ledger artifacts are allowed",
+                path.display()
+            );
+        }
+    }
+    Ok(paths)
+}
+
+fn publishable_run_artifact_path(path: &std::path::Path) -> bool {
+    let text = path.to_string_lossy();
+    text.starts_with("professor-x/artifacts/work-loop/")
+        || text.starts_with("artifacts/work-loop/")
+}
+
+fn commit_run_artifacts(
+    repo_root: &std::path::Path,
+    paths: &[PathBuf],
+    report: &SupervisedLoopReport,
+) -> Result<String> {
+    if paths.is_empty() {
+        anyhow::bail!("no run artifacts selected for publish");
+    }
+    let mut add = std::process::Command::new("git");
+    add.arg("add").arg("--");
+    for path in paths {
+        add.arg(path);
+    }
+    let add = add.current_dir(repo_root).output()?;
+    if !add.status.success() {
+        anyhow::bail!(
+            "git add run artifacts failed: {}",
+            String::from_utf8_lossy(&add.stderr)
+        );
+    }
+    let diff = std::process::Command::new("git")
+        .args(["diff", "--cached", "--quiet", "--"])
+        .args(paths)
+        .current_dir(repo_root)
+        .status()?;
+    if diff.success() {
+        anyhow::bail!("run artifacts are already published; no staged changes");
+    }
+    let message = format!(
+        "professor-x: publish {} run {}",
+        report.run_kind,
+        short_fragment(&report.run_id)
+    );
+    let commit = std::process::Command::new("git")
+        .args(["commit", "-m", &message])
+        .current_dir(repo_root)
+        .output()?;
+    if !commit.status.success() {
+        anyhow::bail!(
+            "git publish commit failed: {}",
+            String::from_utf8_lossy(&commit.stderr)
+        );
+    }
+    git_head(repo_root)
+}
+
 fn format_work_replay_entry(entry: &WorkTimelineEntry) -> String {
     let time = chrono::DateTime::parse_from_rfc3339(&entry.timestamp)
         .map(|dt| dt.format("%H:%M:%S").to_string())
@@ -6617,6 +6730,56 @@ mod tests {
         assert!(line.contains("L ledger artifacts/work-loop/ledger/2026-06-01/run-12345678.md"));
         assert!(line.contains("cargo run -- --replay 12345678"));
         assert!(line.contains("cargo run -- --run-review 12345678"));
+    }
+
+    #[test]
+    fn publishable_run_artifact_paths_only_allows_work_loop_report_and_ledger() {
+        let root = std::env::temp_dir().join(format!("px-publish-paths-{}", uuid::Uuid::new_v4()));
+        let report_path = root
+            .join("professor-x")
+            .join("artifacts")
+            .join("work-loop")
+            .join("2026-06-01")
+            .join("loop-010000.json");
+        let ledger_path = root
+            .join("professor-x")
+            .join("artifacts")
+            .join("work-loop")
+            .join("ledger")
+            .join("2026-06-01")
+            .join("run-12345678.md");
+        std::fs::create_dir_all(report_path.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(ledger_path.parent().unwrap()).unwrap();
+        std::fs::write(&report_path, "{}").unwrap();
+        std::fs::write(&ledger_path, "# run\n").unwrap();
+        let report = SupervisedLoopReport {
+            run_id: "12345678-aaaa-bbbb-cccc-123456789abc".to_string(),
+            run_kind: "operator".to_string(),
+            started_at: "2026-06-01T01:00:00Z".to_string(),
+            completed_at: "2026-06-01T01:01:00Z".to_string(),
+            requested_cycles: 1,
+            completed_cycles: 1,
+            passed_cycles: 1,
+            failed_cycles: 0,
+            profile: "core".to_string(),
+            ledger_path: Some(ledger_path.display().to_string()),
+            planned_jobs: Vec::new(),
+            smoke_records: Vec::new(),
+            timeline: Vec::new(),
+        };
+
+        let paths = publishable_run_artifact_paths(&root, &report_path, &report).unwrap();
+
+        assert_eq!(paths.len(), 2);
+        assert!(paths.iter().any(|path| path.ends_with("loop-010000.json")));
+        assert!(paths.iter().any(|path| path.ends_with("run-12345678.md")));
+        assert!(publishable_run_artifact_path(std::path::Path::new(
+            "professor-x/artifacts/work-loop/2026-06-01/loop-010000.json"
+        )));
+        assert!(!publishable_run_artifact_path(std::path::Path::new(
+            "professor-x/src/main.rs"
+        )));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
