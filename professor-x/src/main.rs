@@ -130,6 +130,8 @@ struct CliArgs {
     operator_run_cycles: Option<u32>,
     /// Run N bounded Prof X operator cycles including one commit-capable gate and exit.
     operator_run_commit_cycles: Option<u32>,
+    /// Publish the just-completed work-loop report, ledger, and evidence as a git commit.
+    publish_after_run: bool,
     /// Run N bounded autonomous Prof X cycles using the core safety profile and exit.
     autonomous_run_cycles: Option<u32>,
     /// Run N bounded autonomous Prof X cycles including one commit-capable gate and exit.
@@ -235,6 +237,7 @@ fn parse_args() -> CliArgs {
         supervised_loop_profile: WorkLoopProfile::Basic,
         operator_run_cycles: None,
         operator_run_commit_cycles: None,
+        publish_after_run: false,
         autonomous_run_cycles: None,
         autonomous_run_commit_cycles: None,
         operator_commit_smoke: false,
@@ -480,6 +483,19 @@ fn parse_args() -> CliArgs {
                 cli.operator_run_commit_cycles = Some(cycles.unwrap_or(5));
                 i += if cycles.is_some() { 2 } else { 1 };
             }
+            "--operator-run-publish" | "--operator-run-commit-publish" => {
+                let cycles = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .and_then(|next| next.parse::<u32>().ok());
+                cli.operator_run_commit_cycles = Some(cycles.unwrap_or(5));
+                cli.publish_after_run = true;
+                i += if cycles.is_some() { 2 } else { 1 };
+            }
+            "--publish-after-run" => {
+                cli.publish_after_run = true;
+                i += 1;
+            }
             "--autonomous-run" | "--prof-x-run" => {
                 let cycles = args
                     .get(i + 1)
@@ -494,6 +510,18 @@ fn parse_args() -> CliArgs {
                     .filter(|next| !next.starts_with("--"))
                     .and_then(|next| next.parse::<u32>().ok());
                 cli.autonomous_run_commit_cycles = Some(cycles.unwrap_or(5));
+                i += if cycles.is_some() { 2 } else { 1 };
+            }
+            "--autonomous-run-publish"
+            | "--autonomous-run-commit-publish"
+            | "--prof-x-run-publish"
+            | "--prof-x-run-commit-publish" => {
+                let cycles = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .and_then(|next| next.parse::<u32>().ok());
+                cli.autonomous_run_commit_cycles = Some(cycles.unwrap_or(5));
+                cli.publish_after_run = true;
                 i += if cycles.is_some() { 2 } else { 1 };
             }
             "--operator-commit-smoke" => {
@@ -789,6 +817,7 @@ async fn main() -> Result<()> {
             Arc::clone(&transcripts),
             cycles,
             cli.supervised_loop_profile,
+            false,
         )
         .await;
     }
@@ -803,6 +832,7 @@ async fn main() -> Result<()> {
             Arc::clone(&transcripts),
             cycles,
             WorkLoopProfile::Core,
+            cli.publish_after_run,
         )
         .await;
     }
@@ -817,6 +847,7 @@ async fn main() -> Result<()> {
             Arc::clone(&transcripts),
             cycles,
             WorkLoopProfile::Commit,
+            cli.publish_after_run,
         )
         .await;
     }
@@ -830,6 +861,7 @@ async fn main() -> Result<()> {
             Arc::clone(&transcripts),
             cycles,
             WorkLoopProfile::Core,
+            cli.publish_after_run,
         )
         .await;
     }
@@ -843,6 +875,7 @@ async fn main() -> Result<()> {
             Arc::clone(&transcripts),
             cycles,
             WorkLoopProfile::Commit,
+            cli.publish_after_run,
         )
         .await;
     }
@@ -2694,6 +2727,7 @@ async fn run_autonomous_operator_run(
     transcripts: Arc<TranscriptStore>,
     cycles: u32,
     profile: WorkLoopProfile,
+    publish_after_run: bool,
 ) -> Result<()> {
     let cycles = cycles.clamp(1, 50);
     let commit_capable = profile == WorkLoopProfile::Commit;
@@ -2711,6 +2745,7 @@ async fn run_autonomous_operator_run(
             "commit_capable": commit_capable,
             "observer_command": "cargo run -- --observe",
             "work_feed_command": "cargo run -- --watch-work",
+            "publish_after_run": publish_after_run,
         }),
     )?;
 
@@ -2720,6 +2755,7 @@ async fn run_autonomous_operator_run(
     println!("  commit-capable: {commit_capable}");
     println!("  observer: cargo run -- --observe");
     println!("  work feed: cargo run -- --watch-work");
+    println!("  publish-after-run: {publish_after_run}");
 
     run_supervised_loop(
         WorkLoopRunKind::Operator,
@@ -2730,6 +2766,7 @@ async fn run_autonomous_operator_run(
         transcripts,
         cycles,
         profile,
+        publish_after_run,
     )
     .await
 }
@@ -2743,6 +2780,7 @@ async fn run_supervised_loop(
     transcripts: Arc<TranscriptStore>,
     cycles: u32,
     profile: WorkLoopProfile,
+    publish_after_run: bool,
 ) -> Result<()> {
     let run_id = uuid::Uuid::new_v4().to_string();
     let started_at = chrono::Utc::now();
@@ -2961,6 +2999,40 @@ async fn run_supervised_loop(
             "{} completed with {} failed cycle(s)",
             run_kind.label(),
             report.failed_cycles
+        );
+    }
+    if publish_after_run {
+        let published = publish_run_report_artifacts(&default_repo_root(), &report_path, &report)?;
+        events.append(
+            None,
+            None,
+            "work_loop.published",
+            format!(
+                "{} run {} published as {}",
+                run_kind.label(),
+                short_fragment(&report.run_id),
+                short_fragment(&published.commit)
+            ),
+            serde_json::json!({
+                "run_id": report.run_id,
+                "run_kind": report.run_kind,
+                "profile": report.profile,
+                "commit": published.commit.clone(),
+                "paths": published
+                    .paths
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>(),
+            }),
+        )?;
+        println!("  published: {}", published.commit);
+        for path in published.paths {
+            println!("  artifact: {}", path.display());
+        }
+    } else {
+        println!(
+            "  publish: cargo run -- --publish-run {}",
+            short_fragment(&report.run_id)
         );
     }
     Ok(())
@@ -5231,15 +5303,30 @@ fn publish_run_artifacts(memory: Arc<MemoryManager>, run_ref: &str) -> Result<()
     let report_path = resolve_work_loop_report_path(Arc::clone(&memory), &repo_root, run_ref)?;
     let raw = std::fs::read_to_string(&report_path)?;
     let report: SupervisedLoopReport = serde_json::from_str(&raw)?;
-    let paths = publishable_run_artifact_paths(&repo_root, &report_path, &report)?;
-    let commit = commit_run_artifacts(&repo_root, &paths, &report)?;
+    let published = publish_run_report_artifacts(&repo_root, &report_path, &report)?;
 
     println!("Published Professor X run {}", short_fragment(&report.run_id));
-    println!("  commit: {commit}");
-    for path in paths {
+    println!("  commit: {}", published.commit);
+    for path in published.paths {
         println!("  artifact: {}", path.display());
     }
     Ok(())
+}
+
+#[derive(Debug)]
+struct PublishedRunArtifacts {
+    commit: String,
+    paths: Vec<PathBuf>,
+}
+
+fn publish_run_report_artifacts(
+    repo_root: &std::path::Path,
+    report_path: &std::path::Path,
+    report: &SupervisedLoopReport,
+) -> Result<PublishedRunArtifacts> {
+    let paths = publishable_run_artifact_paths(repo_root, report_path, report)?;
+    let commit = commit_run_artifacts(repo_root, &paths, report)?;
+    Ok(PublishedRunArtifacts { commit, paths })
 }
 
 fn publishable_run_artifact_paths(
