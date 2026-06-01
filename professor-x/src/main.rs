@@ -5257,12 +5257,24 @@ fn publishable_run_artifact_paths(
         repo_root,
         &resolve_report_reference(repo_root, ledger),
     )?);
+    for smoke in &report.smoke_records {
+        if let Some(path) =
+            optional_publishable_run_artifact_path(repo_root, &smoke.report_path)?
+        {
+            paths.push(path);
+        }
+        if let Some(transcript) = &smoke.transcript_path {
+            if let Some(path) = optional_publishable_run_artifact_path(repo_root, transcript)? {
+                paths.push(path);
+            }
+        }
+    }
     paths.sort();
     paths.dedup();
     for path in &paths {
         if !publishable_run_artifact_path(path) {
             anyhow::bail!(
-                "refusing to publish non-run artifact '{}'; only work-loop report/ledger artifacts are allowed",
+                "refusing to publish non-run artifact '{}'; only run evidence artifacts are allowed",
                 path.display()
             );
         }
@@ -5270,10 +5282,41 @@ fn publishable_run_artifact_paths(
     Ok(paths)
 }
 
+fn optional_publishable_run_artifact_path(
+    repo_root: &std::path::Path,
+    raw: impl AsRef<str>,
+) -> Result<Option<PathBuf>> {
+    let resolved = resolve_report_reference(repo_root, raw.as_ref());
+    if !resolved.exists() {
+        return Ok(None);
+    }
+    let relative = match repo_relative_existing_path(repo_root, &resolved) {
+        Ok(path) => path,
+        Err(_) => return Ok(None),
+    };
+    if !publishable_run_artifact_path(&relative) {
+        anyhow::bail!(
+            "refusing to publish linked artifact '{}' because it is outside the run artifact allowlist",
+            relative.display()
+        );
+    }
+    Ok(Some(relative))
+}
+
 fn publishable_run_artifact_path(path: &std::path::Path) -> bool {
     let text = path.to_string_lossy();
     text.starts_with("professor-x/artifacts/work-loop/")
+        || text.starts_with("professor-x/artifacts/coding-smoke/")
+        || text.starts_with("professor-x/artifacts/coding-sessions/")
+        || text.starts_with("professor-x/artifacts/transcripts/")
+        || text.starts_with("professor-x/artifacts/evolution/")
+        || text.starts_with("professor-x/artifacts/hiro/")
         || text.starts_with("artifacts/work-loop/")
+        || text.starts_with("artifacts/coding-smoke/")
+        || text.starts_with("artifacts/coding-sessions/")
+        || text.starts_with("artifacts/transcripts/")
+        || text.starts_with("artifacts/evolution/")
+        || text.starts_with("artifacts/hiro/")
 }
 
 fn commit_run_artifacts(
@@ -6748,10 +6791,18 @@ mod tests {
             .join("ledger")
             .join("2026-06-01")
             .join("run-12345678.md");
+        let smoke_path = root
+            .join("professor-x")
+            .join("artifacts")
+            .join("coding-smoke")
+            .join("2026-06-01")
+            .join("smoke-010000.json");
         std::fs::create_dir_all(report_path.parent().unwrap()).unwrap();
         std::fs::create_dir_all(ledger_path.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(smoke_path.parent().unwrap()).unwrap();
         std::fs::write(&report_path, "{}").unwrap();
         std::fs::write(&ledger_path, "# run\n").unwrap();
+        std::fs::write(&smoke_path, "{}").unwrap();
         let report = SupervisedLoopReport {
             run_id: "12345678-aaaa-bbbb-cccc-123456789abc".to_string(),
             run_kind: "operator".to_string(),
@@ -6764,17 +6815,30 @@ mod tests {
             profile: "core".to_string(),
             ledger_path: Some(ledger_path.display().to_string()),
             planned_jobs: Vec::new(),
-            smoke_records: Vec::new(),
+            smoke_records: vec![WorkLoopSmokeRecord {
+                cycle: 1,
+                kind: "coding_smoke".to_string(),
+                smoke_id: None,
+                passed: true,
+                report_path: smoke_path.display().to_string(),
+                transcript_path: Some("/tmp/outside-transcript.json".to_string()),
+                workspace: "/tmp/px".to_string(),
+                detail: "test".to_string(),
+            }],
             timeline: Vec::new(),
         };
 
         let paths = publishable_run_artifact_paths(&root, &report_path, &report).unwrap();
 
-        assert_eq!(paths.len(), 2);
+        assert_eq!(paths.len(), 3);
         assert!(paths.iter().any(|path| path.ends_with("loop-010000.json")));
         assert!(paths.iter().any(|path| path.ends_with("run-12345678.md")));
+        assert!(paths.iter().any(|path| path.ends_with("smoke-010000.json")));
         assert!(publishable_run_artifact_path(std::path::Path::new(
             "professor-x/artifacts/work-loop/2026-06-01/loop-010000.json"
+        )));
+        assert!(publishable_run_artifact_path(std::path::Path::new(
+            "professor-x/artifacts/transcripts/2026-06-01/task.json"
         )));
         assert!(!publishable_run_artifact_path(std::path::Path::new(
             "professor-x/src/main.rs"
