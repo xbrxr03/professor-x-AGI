@@ -160,6 +160,8 @@ struct CliArgs {
     autonomous_run_commit_cycles: Option<u32>,
     /// Print the last N persisted autonomous queue items and exit.
     autonomy_queue_limit: Option<usize>,
+    /// Plan and enqueue the next autonomous work item without executing it.
+    autonomy_plan: bool,
     /// Run N persisted autonomous queue items, seeding one default item if empty.
     autonomy_step_count: Option<u32>,
     /// Run one sandbox-verified autonomous commit smoke and exit.
@@ -277,6 +279,7 @@ fn parse_args() -> CliArgs {
         autonomous_run_cycles: None,
         autonomous_run_commit_cycles: None,
         autonomy_queue_limit: None,
+        autonomy_plan: false,
         autonomy_step_count: None,
         operator_commit_smoke: false,
         evolution_cycle: false,
@@ -535,6 +538,10 @@ fn parse_args() -> CliArgs {
                 cli.autonomy_queue_limit = Some(limit.unwrap_or(10));
                 i += if limit.is_some() { 2 } else { 1 };
             }
+            "--autonomy-plan" | "--prof-x-plan" => {
+                cli.autonomy_plan = true;
+                i += 1;
+            }
             "--autonomy-step" | "--prof-x-step" => {
                 let count = args
                     .get(i + 1)
@@ -670,6 +677,7 @@ async fn main() -> Result<()> {
         || cli.task_runs_limit.is_some()
         || cli.coding_sessions_limit.is_some()
         || cli.autonomy_queue_limit.is_some()
+        || cli.autonomy_plan
         || cli.work_loops_limit.is_some()
         || cli.run_log_limit.is_some()
         || cli.brief
@@ -752,6 +760,10 @@ async fn main() -> Result<()> {
 
     if let Some(limit) = cli.autonomy_queue_limit {
         return print_autonomy_queue(Arc::clone(&memory), limit);
+    }
+
+    if cli.autonomy_plan {
+        return plan_autonomy_queue_once(Arc::clone(&memory), Arc::clone(&events));
     }
 
     if let Some(limit) = cli.work_loops_limit {
@@ -3035,6 +3047,136 @@ fn plan_work_loop_jobs(
     jobs
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AutonomyQueuePlan {
+    goal: String,
+    kind: String,
+    profile: WorkLoopProfile,
+    cycles: u32,
+    priority: u8,
+    reason: String,
+}
+
+fn plan_next_autonomy_queue_item(recent_runs: &[WorkLoopRunRecord]) -> AutonomyQueuePlan {
+    if let Some(job) = latest_failed_operator_job(recent_runs) {
+        let profile = match job {
+            WorkLoopJob::PatchApplyCommit | WorkLoopJob::OperatorCommit => WorkLoopProfile::Commit,
+            _ => WorkLoopProfile::Core,
+        };
+        return AutonomyQueuePlan {
+            goal: format!(
+                "retry failed operator gate: {} with {} safety profile",
+                job.label(),
+                profile.as_str()
+            ),
+            kind: "operator_run".to_string(),
+            profile,
+            cycles: 1,
+            priority: 90,
+            reason: format!(
+                "latest operator run failed {}; retry that gate before broadening autonomy",
+                job.kind()
+            ),
+        };
+    }
+
+    let operator_runs = recent_runs
+        .iter()
+        .filter(|run| run.run_kind == WorkLoopRunKind::Operator.as_str())
+        .collect::<Vec<_>>();
+    if operator_runs.is_empty() {
+        return AutonomyQueuePlan {
+            goal: "bootstrap autonomous harness work: prove the local coding-agent edit/test gate with evidence".to_string(),
+            kind: "operator_run".to_string(),
+            profile: WorkLoopProfile::Core,
+            cycles: 1,
+            priority: 50,
+            reason: "no operator run exists yet; start with the safest coding-agent smoke gate".to_string(),
+        };
+    }
+
+    if !operator_runs
+        .iter()
+        .any(|run| run.smoke_records.iter().any(|record| record.kind == "proposal_dry_run" && record.passed))
+    {
+        return AutonomyQueuePlan {
+            goal: "complete core autonomy coverage: coding smoke, evolution smoke, HIRO smoke, and proposal dry-run".to_string(),
+            kind: "operator_run".to_string(),
+            profile: WorkLoopProfile::Core,
+            cycles: 4,
+            priority: 70,
+            reason: "recent evidence lacks a passed proposal dry-run; run the full core safety profile before commit-capable autonomy".to_string(),
+        };
+    }
+
+    if !operator_runs
+        .iter()
+        .any(|run| run.smoke_records.iter().any(|record| record.kind == "patch_apply_commit" && record.passed))
+    {
+        return AutonomyQueuePlan {
+            goal: "advance to commit-capable autonomy: run verified patch apply and commit gate after core safety coverage".to_string(),
+            kind: "operator_run".to_string(),
+            profile: WorkLoopProfile::Commit,
+            cycles: 5,
+            priority: 60,
+            reason: "core proposal dry-run evidence exists but no passed patch_apply_commit gate is recorded".to_string(),
+        };
+    }
+
+    AutonomyQueuePlan {
+        goal: "maintenance autonomy cycle: refresh core safety evidence and watch for regressions".to_string(),
+        kind: "operator_run".to_string(),
+        profile: WorkLoopProfile::Core,
+        cycles: 4,
+        priority: 40,
+        reason: "core and commit-capable evidence exist; continue maintenance coverage while waiting for HIRO/DHE targeting".to_string(),
+    }
+}
+
+fn enqueue_planned_autonomy_item(
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+) -> Result<AutonomyQueueItem> {
+    let store = AutonomyQueueStore::new(Arc::clone(&memory.db));
+    let recent_runs = WorkLoopRunStore::new(Arc::clone(&memory.db)).recent(8)?;
+    let plan = plan_next_autonomy_queue_item(&recent_runs);
+    let item = store.enqueue(
+        plan.goal.clone(),
+        plan.kind.clone(),
+        plan.profile.as_str(),
+        plan.cycles,
+        plan.priority,
+    )?;
+    events.append(
+        None,
+        None,
+        "autonomy.queue.planned",
+        format!("planned autonomous queue item {}", short_fragment(&item.id)),
+        serde_json::json!({
+            "queue_id": item.id,
+            "goal": item.goal,
+            "kind": item.kind,
+            "profile": item.profile,
+            "cycles": item.cycles,
+            "priority": item.priority,
+            "reason": plan.reason,
+        }),
+    )?;
+    Ok(item)
+}
+
+fn plan_autonomy_queue_once(memory: Arc<MemoryManager>, events: Arc<EventStore>) -> Result<()> {
+    let store = AutonomyQueueStore::new(Arc::clone(&memory.db));
+    if store.count_pending()? > 0 {
+        println!("Autonomous queue already has pending work.");
+        return print_autonomy_queue(memory, 10);
+    }
+    let item = enqueue_planned_autonomy_item(Arc::clone(&memory), events)?;
+    println!("Planned autonomous queue item");
+    println!("{}", format_autonomy_queue_item(&item));
+    print_autonomy_queue(memory, 10)
+}
+
 async fn run_autonomous_operator_run(
     registry: Arc<std::sync::RwLock<ToolRegistry>>,
     policy: Arc<PolicyEngine>,
@@ -3099,27 +3241,7 @@ async fn run_autonomy_queue_steps(
     let count = count.clamp(1, 10);
     let store = AutonomyQueueStore::new(Arc::clone(&memory.db));
     if store.count_pending()? == 0 {
-        let seeded = store.enqueue(
-            "bootstrap autonomous harness work: run a bounded coding-agent smoke and record reviewable evidence",
-            "operator_run",
-            "core",
-            1,
-            50,
-        )?;
-        events.append(
-            None,
-            None,
-            "autonomy.queue.seeded",
-            format!("seeded autonomous queue item {}", short_fragment(&seeded.id)),
-            serde_json::json!({
-                "queue_id": seeded.id,
-                "goal": seeded.goal,
-                "kind": seeded.kind,
-                "profile": seeded.profile,
-                "cycles": seeded.cycles,
-                "priority": seeded.priority,
-            }),
-        )?;
+        enqueue_planned_autonomy_item(Arc::clone(&memory), Arc::clone(&events))?;
     }
 
     println!("Professor X autonomy queue step");
@@ -5881,6 +6003,11 @@ async fn run_interactive_tasks(
             print_autonomy_queue(Arc::clone(&memory), limit)?;
             continue;
         }
+        if input == "/plan" {
+            record_console_command(&events, "plan", None)?;
+            plan_autonomy_queue_once(Arc::clone(&memory), Arc::clone(&events))?;
+            continue;
+        }
         if let Some(rest) = input.strip_prefix("/runs") {
             let limit = rest.trim().parse::<usize>().unwrap_or(5);
             record_console_command(&events, "runs", Some(limit.to_string()))?;
@@ -6017,6 +6144,7 @@ fn format_interactive_help() -> String {
         "  /work [n]       show recent work/tool/task events",
         "  /sessions [n]   show recent coding-agent sessions and evidence paths",
         "  /queue [n]      show persistent autonomous work queue",
+        "  /plan           enqueue the next planner-selected autonomous work item",
         "  /runs [n]       show recent operator/autonomous run ledger entries",
         "  /review [run]   review latest or selected run evidence",
         "  /replay [run]   replay latest or selected run timeline",
@@ -6307,6 +6435,7 @@ fn format_operator_help() -> String {
         "",
         "Watch him work",
         "  cargo run -- --prof-x-live 5",
+        "  cargo run -- --prof-x-plan",
         "  cargo run -- --prof-x-step 1",
         "  cargo run -- --prof-x-queue 10",
         "  cargo run -- --observe-work",
@@ -8137,6 +8266,7 @@ fn event_action(event: &memd::events::AgentEvent) -> &'static str {
         "console.command" => "Operator command",
         "autonomy.queue.seeded" => "Seeded queue",
         "autonomy.queue.started" => "Started queued work",
+        "autonomy.queue.planned" => "Planned queued work",
         "autonomy.queue.completed" => "Completed queued work",
         "autonomy.queue.failed" => "Failed queued work",
         "evolution.patch_apply.committed" => "Committed verified patch",
@@ -8487,6 +8617,7 @@ mod tests {
 
         assert!(help.contains("Professor X operator commands"));
         assert!(help.contains("--prof-x-live 5"));
+        assert!(help.contains("--prof-x-plan"));
         assert!(help.contains("--prof-x-step 1"));
         assert!(help.contains("--prof-x-queue 10"));
         assert!(help.contains("--observe-work"));
@@ -8510,6 +8641,7 @@ mod tests {
         assert!(help.contains("/work [n]"));
         assert!(help.contains("/sessions [n]"));
         assert!(help.contains("/queue [n]"));
+        assert!(help.contains("/plan"));
         assert!(help.contains("/runs [n]"));
         assert!(help.contains("/review [run]"));
         assert!(help.contains("/replay [run]"));
@@ -8685,6 +8817,60 @@ mod tests {
         assert!(plan[0].reason.contains("latest operator run failed"));
         assert_eq!(plan[1].kind, "coding_smoke");
         assert_eq!(plan.len(), 3);
+    }
+
+    #[test]
+    fn autonomy_planner_retries_failed_gate_first() {
+        let recent = vec![work_loop_run(
+            "operator",
+            1,
+            vec![smoke("coding_smoke", true), smoke("hiro_smoke", false)],
+        )];
+
+        let plan = plan_next_autonomy_queue_item(&recent);
+
+        assert_eq!(plan.profile, WorkLoopProfile::Core);
+        assert_eq!(plan.cycles, 1);
+        assert_eq!(plan.priority, 90);
+        assert!(plan.goal.contains("retry failed operator gate"));
+        assert!(plan.reason.contains("hiro_smoke"));
+    }
+
+    #[test]
+    fn autonomy_planner_fills_core_coverage_before_commit_gate() {
+        let recent = vec![work_loop_run(
+            "operator",
+            0,
+            vec![smoke("coding_smoke", true)],
+        )];
+
+        let plan = plan_next_autonomy_queue_item(&recent);
+
+        assert_eq!(plan.profile, WorkLoopProfile::Core);
+        assert_eq!(plan.cycles, 4);
+        assert_eq!(plan.priority, 70);
+        assert!(plan.reason.contains("proposal dry-run"));
+    }
+
+    #[test]
+    fn autonomy_planner_advances_to_commit_after_core_coverage() {
+        let recent = vec![work_loop_run(
+            "operator",
+            0,
+            vec![
+                smoke("coding_smoke", true),
+                smoke("evolution_smoke", true),
+                smoke("hiro_smoke", true),
+                smoke("proposal_dry_run", true),
+            ],
+        )];
+
+        let plan = plan_next_autonomy_queue_item(&recent);
+
+        assert_eq!(plan.profile, WorkLoopProfile::Commit);
+        assert_eq!(plan.cycles, 5);
+        assert_eq!(plan.priority, 60);
+        assert!(plan.reason.contains("patch_apply_commit"));
     }
 
     #[test]
