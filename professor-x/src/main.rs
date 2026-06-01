@@ -5640,6 +5640,26 @@ async fn run_interactive_tasks(
             print_run_log(Arc::clone(&memory), limit)?;
             continue;
         }
+        if let Some(rest) = input.strip_prefix("/review") {
+            let run_ref = nonempty_or_latest(rest);
+            print_run_review(Arc::clone(&memory), run_ref)?;
+            continue;
+        }
+        if let Some(rest) = input.strip_prefix("/replay") {
+            let run_ref = nonempty_or_latest(rest);
+            print_run_replay(Arc::clone(&memory), run_ref)?;
+            continue;
+        }
+        if let Some(rest) = input.strip_prefix("/publish") {
+            let run_ref = nonempty_or_latest(rest);
+            publish_run_artifacts(Arc::clone(&memory), run_ref)?;
+            continue;
+        }
+        if let Some(rest) = input.strip_prefix("/task-review") {
+            let task_ref = nonempty_or_latest(rest);
+            print_task_review(Arc::clone(&transcripts), task_ref)?;
+            continue;
+        }
         if let Some(rest) = input.strip_prefix("/run-commit") {
             let cycles = rest.trim().parse::<u32>().unwrap_or(5);
             run_autonomous_operator_run(
@@ -5729,6 +5749,10 @@ fn format_interactive_help() -> String {
         "  /work [n]       show recent work/tool/task events",
         "  /sessions [n]   show recent coding-agent sessions and evidence paths",
         "  /runs [n]       show recent operator/autonomous run ledger entries",
+        "  /review [run]   review latest or selected run evidence",
+        "  /replay [run]   replay latest or selected run timeline",
+        "  /publish [run]  commit selected run report/ledger artifacts",
+        "  /task-review [task] review latest or selected task transcript",
         "  /run [n]        start a bounded core Prof X run",
         "  /run-commit [n] start a commit-capable verified Prof X run",
         "  /events [n]     show raw recent events",
@@ -5737,6 +5761,15 @@ fn format_interactive_help() -> String {
         "  /quit           stop the console",
     ]
     .join("\n")
+}
+
+fn nonempty_or_latest(text: &str) -> &str {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        "latest"
+    } else {
+        trimmed
+    }
 }
 
 fn drain_live_task_events(
@@ -8107,10 +8140,21 @@ mod tests {
         assert!(help.contains("/work [n]"));
         assert!(help.contains("/sessions [n]"));
         assert!(help.contains("/runs [n]"));
+        assert!(help.contains("/review [run]"));
+        assert!(help.contains("/replay [run]"));
+        assert!(help.contains("/publish [run]"));
+        assert!(help.contains("/task-review [task]"));
         assert!(help.contains("/run [n]"));
         assert!(help.contains("/run-commit [n]"));
         assert!(help.contains("/events [n]"));
         assert!(help.contains("/status"));
+    }
+
+    #[test]
+    fn nonempty_or_latest_defaults_blank_refs() {
+        assert_eq!(nonempty_or_latest(""), "latest");
+        assert_eq!(nonempty_or_latest("   "), "latest");
+        assert_eq!(nonempty_or_latest(" abc123 "), "abc123");
     }
 
     #[test]
