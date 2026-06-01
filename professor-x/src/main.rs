@@ -47,6 +47,8 @@ use toolbridge::{ToolExecutor, ToolRegistry};
 // ── CLI args ──────────────────────────────────────────────────────────────────
 
 struct CliArgs {
+    /// Print the practical operator command surface and exit.
+    operator_help: bool,
     /// Run a single task immediately and exit.
     task: Option<String>,
     /// Read user tasks interactively from the terminal.
@@ -209,6 +211,7 @@ impl WorkLoopProfile {
 fn parse_args() -> CliArgs {
     let args: Vec<String> = std::env::args().collect();
     let mut cli = CliArgs {
+        operator_help: false,
         task: None,
         chat: false,
         run_now: false,
@@ -266,6 +269,10 @@ fn parse_args() -> CliArgs {
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
+            "--prof-x-help" | "--operator-help" | "--commands" => {
+                cli.operator_help = true;
+                i += 1;
+            }
             "--task" if i + 1 < args.len() => {
                 cli.task = Some(args[i + 1].clone());
                 i += 2;
@@ -607,6 +614,11 @@ fn parse_args() -> CliArgs {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = parse_args();
+    if cli.operator_help {
+        print_operator_help()?;
+        return Ok(());
+    }
+
     let inspect_mode = cli.status
         || cli.events_limit.is_some()
         || cli.work_feed_limit.is_some()
@@ -5681,6 +5693,48 @@ fn load_daily_schedule() -> Result<DailyScheduleFile> {
     Ok(toml::from_str(&raw)?)
 }
 
+fn print_operator_help() -> Result<()> {
+    println!("{}", format_operator_help());
+    Ok(())
+}
+
+fn format_operator_help() -> String {
+    [
+        "Professor X operator commands",
+        "",
+        "Watch him work",
+        "  cargo run -- --prof-x-live 5",
+        "  cargo run -- --observe-work",
+        "  cargo run -- --cockpit",
+        "  cargo run -- --watch-work",
+        "",
+        "Give him a bounded coding-agent task",
+        "  cargo run -- --prof-x-code-live \"update one safe local fixture\"",
+        "  cargo run -- --coding-sessions 5",
+        "",
+        "Verify a repo patch without touching main",
+        "  cargo run -- --prof-x-code-patch-live /tmp/change.diff",
+        "",
+        "Verify, apply, test, commit, and record evidence",
+        "  cargo run -- --prof-x-code-commit-live /tmp/change.diff",
+        "  cargo run -- --coding-sessions 5",
+        "",
+        "Review and publish run evidence",
+        "  cargo run -- --run-log 5",
+        "  cargo run -- --replay latest",
+        "  cargo run -- --run-review latest",
+        "  cargo run -- --publish-run latest",
+        "",
+        "Core safety and research checks",
+        "  cargo test",
+        "  cargo run -- --validate-artifacts",
+        "  cargo run -- --hiro-smoke",
+        "",
+        "Current build target: observable, workspace-bound, verify-then-commit Rust harness.",
+    ]
+    .join("\n")
+}
+
 fn print_events(events: Arc<EventStore>, limit: usize) -> Result<()> {
     for event in events.tail(limit)? {
         println!("{}", format_event(&event));
@@ -7427,6 +7481,21 @@ mod tests {
             workspace: "/tmp/px".to_string(),
             detail: "test".to_string(),
         }
+    }
+
+    #[test]
+    fn operator_help_surfaces_live_and_commit_commands() {
+        let help = format_operator_help();
+
+        assert!(help.contains("Professor X operator commands"));
+        assert!(help.contains("--prof-x-live 5"));
+        assert!(help.contains("--observe-work"));
+        assert!(help.contains("--prof-x-code-live"));
+        assert!(help.contains("--prof-x-code-patch-live"));
+        assert!(help.contains("--prof-x-code-commit-live"));
+        assert!(help.contains("--coding-sessions 5"));
+        assert!(help.contains("--replay latest"));
+        assert!(help.contains("--validate-artifacts"));
     }
 
     #[test]
