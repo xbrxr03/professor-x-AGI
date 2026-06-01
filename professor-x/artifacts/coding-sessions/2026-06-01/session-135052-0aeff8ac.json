@@ -1,0 +1,42 @@
+{
+  "id": "0aeff8ac-f6ed-41e2-bdb8-28b2f8b4b5f1",
+  "generated_at": "2026-06-01T13:50:27.991691221+00:00",
+  "goal": "operator goal skill session: verify, apply, and commit goal='preserve operator goal provenance in session evidence' skill=px-operator-goal-20260601-135027-preserve-operator-goal-provenance-in-ses path=professor-x/skills/conductor/px-operator-goal-20260601-135027-preserve-operator-goal-provenance-in-ses.md patch=/tmp/px-operator-goal-20260601-135027-preserve-operator-goal-provenance-in-ses.diff",
+  "requested_goal": "operator goal skill session: verify, apply, and commit goal='preserve operator goal provenance in session evidence' skill=px-operator-goal-20260601-135027-preserve-operator-goal-provenance-in-ses path=professor-x/skills/conductor/px-operator-goal-20260601-135027-preserve-operator-goal-provenance-in-ses.md patch=/tmp/px-operator-goal-20260601-135027-preserve-operator-goal-provenance-in-ses.diff",
+  "exercise": "repo_patch_apply_commit",
+  "status": "passed",
+  "workspace": "repo-root verified apply commit",
+  "smoke_id": null,
+  "smoke_report_path": null,
+  "session_report_path": "artifacts/coding-sessions/2026-06-01/session-135052-0aeff8ac.json",
+  "transcript_path": null,
+  "checks": [
+    "main_worktree_clean",
+    "reward_hacking_scan",
+    "sandbox_worktree",
+    "material_diff",
+    "cargo_check",
+    "main_apply_check",
+    "main_cargo_check",
+    "git_commit"
+  ],
+  "plan_steps": [
+    "Policy-gate the patch through patch.apply before sandbox work",
+    "Verify the unified diff in an isolated worktree",
+    "Apply the verified diff to main only if sandbox checks pass",
+    "Run main cargo check and create git commit evidence",
+    "Record a coding-session report that points at the apply artifact"
+  ],
+  "step_outcomes": [
+    "policy gate allowed patch.apply apply mode",
+    "sandbox verification accepted",
+    "main apply committed",
+    "diff bytes 488",
+    "commit b441701",
+    "reason sandbox verification passed and committed b441701"
+  ],
+  "artifacts": [
+    "artifacts/evolution/patch-verifications/2026-06-01/patch-135049.json"
+  ],
+  "failure_reason": null
+}
