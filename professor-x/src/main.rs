@@ -1673,6 +1673,11 @@ async fn execute_patch_apply_commit(
         Ok(commit) => {
             report.applied = true;
             report.commit = Some(commit.clone());
+            report.checks.extend([
+                "main_apply_check".to_string(),
+                "main_cargo_check".to_string(),
+                "git_commit".to_string(),
+            ]);
             report.reason = format!("sandbox verification passed and committed {commit}");
             std::fs::write(&path, serde_json::to_string_pretty(&report)?)?;
             let report_commit = commit_patch_report_update(
