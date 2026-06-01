@@ -76,6 +76,8 @@ struct CliArgs {
     task_runs_limit: Option<usize>,
     /// Print the last N supervised work-loop runs and exit.
     work_loops_limit: Option<usize>,
+    /// Print the last N work/operator runs as a concise operator log and exit.
+    run_log_limit: Option<usize>,
     /// Print a detailed autonomous/work-loop run review by run id prefix, report path, or 'latest'.
     run_review: Option<String>,
     /// Replay a work/operator run timeline by run id prefix, report path, or 'latest'.
@@ -204,6 +206,7 @@ fn parse_args() -> CliArgs {
         transcripts_limit: None,
         task_runs_limit: None,
         work_loops_limit: None,
+        run_log_limit: None,
         run_review: None,
         run_replay: None,
         task_review: None,
@@ -312,6 +315,14 @@ fn parse_args() -> CliArgs {
                     .filter(|next| !next.starts_with("--"))
                     .and_then(|next| next.parse::<usize>().ok());
                 cli.work_loops_limit = Some(limit.unwrap_or(10));
+                i += if limit.is_some() { 2 } else { 1 };
+            }
+            "--run-log" | "--operator-log" | "--work-log" => {
+                let limit = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .and_then(|next| next.parse::<usize>().ok());
+                cli.run_log_limit = Some(limit.unwrap_or(10));
                 i += if limit.is_some() { 2 } else { 1 };
             }
             "--run-review" | "--loop-review" => {
@@ -505,6 +516,7 @@ async fn main() -> Result<()> {
         || cli.task_runs_limit.is_some()
         || cli.coding_sessions_limit.is_some()
         || cli.work_loops_limit.is_some()
+        || cli.run_log_limit.is_some()
         || cli.run_review.is_some()
         || cli.task_review.is_some()
         || cli.run_replay.is_some()
@@ -583,6 +595,10 @@ async fn main() -> Result<()> {
 
     if let Some(limit) = cli.work_loops_limit {
         return print_work_loops(Arc::clone(&memory), limit);
+    }
+
+    if let Some(limit) = cli.run_log_limit {
+        return print_run_log(Arc::clone(&memory), limit);
     }
 
     if let Some(run_ref) = cli.run_review {
@@ -4976,6 +4992,9 @@ fn print_work_loops(memory: Arc<MemoryManager>, limit: usize) -> Result<()> {
             run.failed_cycles,
             run.report_path,
         );
+        if let Some(ledger) = run_ledger_path(&run) {
+            println!("  ledger: {ledger}");
+        }
         for planned in run.planned_jobs.iter().take(8) {
             println!(
                 "  plan {}: {} reason={}",
@@ -5015,6 +5034,70 @@ fn print_work_loops(memory: Arc<MemoryManager>, limit: usize) -> Result<()> {
     Ok(())
 }
 
+fn print_run_log(memory: Arc<MemoryManager>, limit: usize) -> Result<()> {
+    let runs = WorkLoopRunStore::new(Arc::clone(&memory.db)).recent(limit)?;
+    if runs.is_empty() {
+        println!("No Professor X runs recorded yet.");
+        return Ok(());
+    }
+    println!("Professor X run log");
+    println!("Commands: --run-review <run> | --replay <run> | --observe-work");
+    for run in runs {
+        let ledger = run_ledger_path(&run);
+        println!("{}", format_run_log_entry(&run, ledger.as_deref()));
+    }
+    Ok(())
+}
+
+fn run_ledger_path(run: &WorkLoopRunRecord) -> Option<String> {
+    let repo_root = default_repo_root();
+    let report_path = resolve_report_reference(&repo_root, &run.report_path);
+    let raw = std::fs::read_to_string(report_path).ok()?;
+    let report: SupervisedLoopReport = serde_json::from_str(&raw).ok()?;
+    report.ledger_path.filter(|path| !path.is_empty())
+}
+
+fn format_run_log_entry(run: &WorkLoopRunRecord, ledger_path: Option<&str>) -> String {
+    let status = if run.failed_cycles == 0 { "passed" } else { "failed" };
+    let latest_gate = run
+        .smoke_records
+        .last()
+        .map(|record| {
+            format!(
+                "last_gate={} {}",
+                record.kind,
+                if record.passed { "passed" } else { "failed" }
+            )
+        })
+        .unwrap_or_else(|| "last_gate=none".to_string());
+    let mut lines = vec![format!(
+        "- {} {}:{} run={} cycles={}/{} passed={} failed={} {}",
+        run.recorded_at.format("%Y-%m-%d %H:%M:%S"),
+        run.run_kind,
+        run.profile,
+        short_fragment(&run.run_id),
+        run.completed_cycles,
+        run.requested_cycles,
+        run.passed_cycles,
+        run.failed_cycles,
+        status
+    )];
+    lines.push(format!("  L {latest_gate}"));
+    lines.push(format!("  L report {}", run.report_path));
+    if let Some(path) = ledger_path {
+        lines.push(format!("  L ledger {path}"));
+    }
+    lines.push(format!(
+        "  L replay cargo run -- --replay {}",
+        short_fragment(&run.run_id)
+    ));
+    lines.push(format!(
+        "  L review cargo run -- --run-review {}",
+        short_fragment(&run.run_id)
+    ));
+    lines.join("\n")
+}
+
 fn print_run_review(memory: Arc<MemoryManager>, run_ref: &str) -> Result<()> {
     let repo_root = default_repo_root();
     let report_path = resolve_work_loop_report_path(Arc::clone(&memory), &repo_root, run_ref)?;
@@ -5030,6 +5113,9 @@ fn print_run_review(memory: Arc<MemoryManager>, run_ref: &str) -> Result<()> {
         report.completed_cycles, report.requested_cycles, report.passed_cycles, report.failed_cycles
     );
     println!("  report: {}", display_repo_path(&repo_root, &report_path));
+    if let Some(path) = &report.ledger_path {
+        println!("  ledger: {path}");
+    }
 
     println!("Plan");
     for job in &report.planned_jobs {
@@ -6511,6 +6597,26 @@ mod tests {
         assert!(ledger.contains("report: `artifacts/coding-smoke/report.json`"));
         assert!(ledger.contains("transcript: `artifacts/transcripts/task.json`"));
         assert!(ledger.contains("#00008 `TOOL` `Running`"));
+    }
+
+    #[test]
+    fn format_run_log_entry_points_to_review_replay_and_ledger() {
+        let mut run = work_loop_run("operator", 0, vec![smoke("coding_smoke", true)]);
+        run.run_id = "12345678-aaaa-bbbb-cccc-123456789abc".to_string();
+
+        let line = format_run_log_entry(
+            &run,
+            Some("artifacts/work-loop/ledger/2026-06-01/run-12345678.md"),
+        );
+
+        assert!(line.contains("operator:core"));
+        assert!(line.contains("run=12345678"));
+        assert!(line.contains("passed=1 failed=0 passed"));
+        assert!(line.contains("last_gate=coding_smoke passed"));
+        assert!(line.contains("L report artifacts/work-loop/test.json"));
+        assert!(line.contains("L ledger artifacts/work-loop/ledger/2026-06-01/run-12345678.md"));
+        assert!(line.contains("cargo run -- --replay 12345678"));
+        assert!(line.contains("cargo run -- --run-review 12345678"));
     }
 
     #[test]
