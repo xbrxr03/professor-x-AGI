@@ -91,6 +91,8 @@ struct CliArgs {
     watch: bool,
     /// Follow work/task/tool events until interrupted.
     watch_work: bool,
+    /// Print a one-shot coding-agent-style cockpit for current Prof X work.
+    work_cockpit_once: bool,
     /// Refresh a coding-agent-style terminal cockpit for current Prof X work.
     observe_work_limit: Option<usize>,
     /// Open the full-screen terminal observer.
@@ -220,6 +222,7 @@ fn parse_args() -> CliArgs {
         task_review: None,
         watch: false,
         watch_work: false,
+        work_cockpit_once: false,
         observe_work_limit: None,
         observe: false,
         lab: false,
@@ -372,6 +375,10 @@ fn parse_args() -> CliArgs {
             }
             "--watch-work" => {
                 cli.watch_work = true;
+                i += 1;
+            }
+            "--cockpit" | "--work-cockpit-once" | "--operator-cockpit" => {
+                cli.work_cockpit_once = true;
                 i += 1;
             }
             "--observe-work" | "--work-cockpit" => {
@@ -687,6 +694,10 @@ async fn main() -> Result<()> {
 
     if cli.watch_work {
         return watch_work_feed(Arc::clone(&events)).await;
+    }
+
+    if cli.work_cockpit_once {
+        return print_work_cockpit(Arc::clone(&memory), Arc::clone(&events), 16);
     }
 
     if let Some(limit) = cli.observe_work_limit {
@@ -6063,6 +6074,15 @@ async fn observe_work_cockpit(
     Ok(())
 }
 
+fn print_work_cockpit(
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    limit: usize,
+) -> Result<()> {
+    println!("{}", render_work_cockpit(memory, events, limit)?);
+    Ok(())
+}
+
 fn render_work_cockpit(
     memory: Arc<MemoryManager>,
     events: Arc<EventStore>,
@@ -6102,10 +6122,19 @@ fn format_work_cockpit(
         "clock {}  source ~/.professor-x/state.db + professor-x/artifacts/events/*.jsonl",
         chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
     ));
+    lines.push(format!(
+        "state {}  {}",
+        cockpit_state(latest_run, latest_gate),
+        cockpit_latest_activity(recent_events)
+    ));
     lines.push(String::new());
     lines.push("Current run".to_string());
     match latest_run {
         Some(run) => {
+            lines.push(format!(
+                "  progress {}",
+                cockpit_progress(run.completed_cycles, run.requested_cycles)
+            ));
             lines.push(format!(
                 "  {}:{} run={} cycles={}/{} passed={} failed={} report={}",
                 run.run_kind,
@@ -6117,6 +6146,12 @@ fn format_work_cockpit(
                 run.failed_cycles,
                 truncate(&run.report_path, 120),
             ));
+            lines.push(format!(
+                "  commands replay={} review={} publish={}",
+                format!("--replay {}", short_fragment(&run.run_id)),
+                format!("--run-review {}", short_fragment(&run.run_id)),
+                format!("--publish-run {}", short_fragment(&run.run_id)),
+            ));
             for job in run.planned_jobs.iter().take(4) {
                 lines.push(format!(
                     "  plan {:>2}: {:<18} {}",
@@ -6124,6 +6159,25 @@ fn format_work_cockpit(
                     job.kind,
                     truncate(&job.reason, 92)
                 ));
+            }
+            if !run.smoke_records.is_empty() {
+                lines.push(String::new());
+                lines.push("Evidence bundle".to_string());
+                for smoke in run.smoke_records.iter().rev().take(6).rev() {
+                    lines.push(format!(
+                        "  {:>2}. {:<20} {:<6} {}",
+                        smoke.cycle,
+                        smoke.kind,
+                        if smoke.passed { "passed" } else { "failed" },
+                        truncate(&smoke.report_path, 96)
+                    ));
+                    if let Some(transcript) = &smoke.transcript_path {
+                        lines.push(format!("      transcript {}", truncate(transcript, 110)));
+                    }
+                    if !smoke.detail.is_empty() {
+                        lines.push(format!("      detail {}", truncate(&smoke.detail, 110)));
+                    }
+                }
             }
         }
         None => lines.push("  waiting for --operator-run, --operator-run-commit, or --lab".to_string()),
@@ -6185,10 +6239,65 @@ fn format_work_cockpit(
     }
     lines.push(String::new());
     lines.push(
-        "Commands: --prof-x-live-publish 1 | --observe-work | --replay latest | --run-review latest"
+        "Commands: --cockpit | --prof-x-live-publish 6 | --observe-work | --replay latest | --run-review latest"
             .to_string(),
     );
     lines.join("\n")
+}
+
+fn cockpit_state(
+    latest_run: Option<&WorkLoopRunRecord>,
+    latest_gate: Option<&WorkLoopGateRecord>,
+) -> &'static str {
+    if latest_gate
+        .map(|gate| gate.status.as_str() == "running")
+        .unwrap_or(false)
+    {
+        return "RUNNING";
+    }
+    if latest_run
+        .map(|run| run.failed_cycles > 0)
+        .unwrap_or(false)
+    {
+        return "NEEDS-REVIEW";
+    }
+    if latest_run
+        .map(|run| run.completed_cycles == run.requested_cycles && run.failed_cycles == 0)
+        .unwrap_or(false)
+    {
+        return "READY";
+    }
+    "IDLE"
+}
+
+fn cockpit_latest_activity(events: &[memd::events::AgentEvent]) -> String {
+    events
+        .last()
+        .map(|event| {
+            format!(
+                "last_event=#{:05} {} {}",
+                event.id,
+                event.timestamp.format("%H:%M:%S"),
+                truncate(&event.summary, 80)
+            )
+        })
+        .unwrap_or_else(|| "last_event=none".to_string())
+}
+
+fn cockpit_progress(completed: u32, requested: u32) -> String {
+    let width = 12usize;
+    let filled = if requested == 0 {
+        0
+    } else {
+        ((completed.min(requested) as usize) * width) / requested as usize
+    };
+    format!(
+        "[{}{}] {}/{}",
+        "#".repeat(filled),
+        ".".repeat(width.saturating_sub(filled)),
+        completed,
+        requested
+    )
 }
 
 fn work_signal_summary(events: &[memd::events::AgentEvent]) -> String {
@@ -7241,7 +7350,16 @@ mod tests {
                 label: "coding smoke".to_string(),
                 reason: "prove local coding-agent edit and verification".to_string(),
             }],
-            smoke_records: Vec::new(),
+            smoke_records: vec![WorkLoopSmokeRecord {
+                cycle: 1,
+                kind: "coding_smoke".to_string(),
+                smoke_id: None,
+                passed: true,
+                report_path: "artifacts/coding-smoke/report.json".to_string(),
+                transcript_path: Some("artifacts/transcripts/task.json".to_string()),
+                workspace: "/tmp/professor-x-work".to_string(),
+                detail: "deterministic coding smoke".to_string(),
+            }],
             recorded_at: now,
         };
         let gate = WorkLoopGateRecord {
@@ -7292,12 +7410,67 @@ mod tests {
         );
 
         assert!(screen.contains("Professor X live work cockpit"));
+        assert!(screen.contains("state IDLE"));
+        assert!(screen.contains("progress [######......] 1/2"));
         assert!(screen.contains("operator:core run=12345678"));
+        assert!(screen.contains("commands replay=--replay 12345678"));
+        assert!(screen.contains("Evidence bundle"));
         assert!(screen.contains("proof report artifacts/coding-smoke/report.json"));
         assert!(screen.contains("proof transcript artifacts/transcripts/task.json"));
         assert!(screen.contains("Recent signal events=1"));
         assert!(screen.contains("Passed gate"));
+        assert!(screen.contains("--cockpit"));
+        assert!(screen.contains("--prof-x-live-publish 6"));
         assert!(screen.contains("--run-review latest"));
+    }
+
+    #[test]
+    fn cockpit_state_and_progress_are_operator_readable() {
+        let now = chrono::Utc::now();
+        let mut run = WorkLoopRunRecord {
+            id: None,
+            run_id: "run-1".to_string(),
+            run_kind: "operator".to_string(),
+            profile: "commit".to_string(),
+            started_at: now,
+            completed_at: now,
+            requested_cycles: 6,
+            completed_cycles: 6,
+            passed_cycles: 6,
+            failed_cycles: 0,
+            report_path: "artifacts/work-loop/report.json".to_string(),
+            planned_jobs: Vec::new(),
+            smoke_records: Vec::new(),
+            recorded_at: now,
+        };
+        assert_eq!(cockpit_state(Some(&run), None), "READY");
+        assert_eq!(cockpit_progress(6, 6), "[############] 6/6");
+
+        run.failed_cycles = 1;
+        assert_eq!(cockpit_state(Some(&run), None), "NEEDS-REVIEW");
+
+        let gate = WorkLoopGateRecord {
+            id: None,
+            run_id: run.run_id.clone(),
+            run_kind: run.run_kind.clone(),
+            profile: run.profile.clone(),
+            cycle: 3,
+            kind: "hiro_smoke".to_string(),
+            label: "HIRO smoke".to_string(),
+            reason: "verify benchmark inventory".to_string(),
+            status: "running".to_string(),
+            started_at: Some(now),
+            completed_at: None,
+            passed: None,
+            report_path: None,
+            transcript_path: None,
+            workspace: None,
+            detail: "running benchmark inventory".to_string(),
+            recorded_at: now,
+            updated_at: now,
+        };
+        assert_eq!(cockpit_state(Some(&run), Some(&gate)), "RUNNING");
+        assert_eq!(cockpit_progress(3, 6), "[######......] 3/6");
     }
 
     #[test]
