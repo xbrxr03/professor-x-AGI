@@ -5,16 +5,19 @@
   "workspace": "repo-root",
   "harness_commit": "294a94f",
   "accepted": true,
-  "applied": false,
-  "commit": null,
+  "applied": true,
+  "commit": "eedcd3e",
   "report_commit": null,
-  "reason": "sandbox patch verification passed",
+  "reason": "sandbox verification passed and committed eedcd3e",
   "checks": [
     "main_worktree_clean",
     "reward_hacking_scan",
     "sandbox_worktree",
     "material_diff",
-    "cargo_check"
+    "cargo_check",
+    "main_apply_check",
+    "main_cargo_check",
+    "git_commit"
   ],
   "diff_hash": "891d28d91d276c044837659ea988bfdd3b2d48b7f02bd3cffea084acc41b31eb",
   "diff_bytes": 868
