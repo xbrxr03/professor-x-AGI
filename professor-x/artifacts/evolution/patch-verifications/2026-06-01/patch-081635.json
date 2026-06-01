@@ -1,0 +1,21 @@
+{
+  "generated_at": "2026-06-01T08:16:35.973122224+00:00",
+  "mode": "patch_apply_commit",
+  "patch_path": "/tmp/px-autonomous-patch-20260601-081614.diff",
+  "workspace": "repo-root",
+  "harness_commit": "2d6bfc8",
+  "accepted": true,
+  "applied": false,
+  "commit": null,
+  "report_commit": null,
+  "reason": "sandbox patch verification passed",
+  "checks": [
+    "main_worktree_clean",
+    "reward_hacking_scan",
+    "sandbox_worktree",
+    "material_diff",
+    "cargo_check"
+  ],
+  "diff_hash": "a7f1770ba8962c096c57381d93108be1c333fd8e9b4cfe9ea7ebbf3234ee7cda",
+  "diff_bytes": 336
+}
