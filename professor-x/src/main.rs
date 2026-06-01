@@ -2827,6 +2827,14 @@ async fn run_supervised_loop_live(
     println!("  publish-after-run: {publish_after_run}");
     println!("  observer in another terminal: cargo run -- --observe-work");
     println!("  streaming work feed below");
+    for planned in planned_live_run_jobs(Arc::clone(&memory), run_kind, profile, cycles)? {
+        println!(
+            "  plan {:>2}: {:<18} {}",
+            planned.cycle,
+            planned.kind,
+            truncate(&planned.reason, 92)
+        );
+    }
     io::stdout().flush()?;
 
     let run_memory = Arc::clone(&memory);
@@ -2858,9 +2866,16 @@ async fn run_supervised_loop_live(
                     println!("{}", format_work_event(&event));
                 }
                 io::stdout().flush()?;
-                result??;
-                print_latest_live_run_summary(Arc::clone(&memory))?;
-                return Ok(());
+                match result? {
+                    Ok(()) => {
+                        print_latest_live_run_summary(Arc::clone(&memory), publish_after_run)?;
+                        return Ok(());
+                    }
+                    Err(err) => {
+                        print_latest_live_run_summary(Arc::clone(&memory), publish_after_run)?;
+                        return Err(err);
+                    }
+                }
             }
             _ = tokio::time::sleep(tokio::time::Duration::from_millis(250)) => {
                 for event in events.work_after_id(last_id, 100)? {
@@ -2873,7 +2888,25 @@ async fn run_supervised_loop_live(
     }
 }
 
-fn print_latest_live_run_summary(memory: Arc<MemoryManager>) -> Result<()> {
+fn planned_live_run_jobs(
+    memory: Arc<MemoryManager>,
+    run_kind: WorkLoopRunKind,
+    profile: WorkLoopProfile,
+    cycles: u32,
+) -> Result<Vec<WorkLoopPlannedJob>> {
+    let recent_runs = WorkLoopRunStore::new(Arc::clone(&memory.db)).recent(5)?;
+    Ok(plan_work_loop_jobs(
+        run_kind,
+        profile,
+        cycles.clamp(1, 50),
+        &recent_runs,
+    ))
+}
+
+fn print_latest_live_run_summary(
+    memory: Arc<MemoryManager>,
+    publish_after_run: bool,
+) -> Result<()> {
     let Some(run) = WorkLoopRunStore::new(Arc::clone(&memory.db)).latest()? else {
         println!("Professor X live run finished, but no run record was found.");
         return Ok(());
@@ -2884,7 +2917,9 @@ fn print_latest_live_run_summary(memory: Arc<MemoryManager>) -> Result<()> {
     println!("  L watch latest cargo run -- --observe-work");
     println!("  L replay latest cargo run -- --replay {run_ref}");
     println!("  L review latest cargo run -- --run-review {run_ref}");
-    if run.failed_cycles == 0 {
+    if publish_after_run {
+        println!("  L publish latest already requested for this run");
+    } else if run.failed_cycles == 0 {
         println!("  L publish latest cargo run -- --publish-run {run_ref}");
     }
     Ok(())
