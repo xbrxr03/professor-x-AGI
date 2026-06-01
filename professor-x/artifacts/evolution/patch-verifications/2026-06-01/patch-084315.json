@@ -7,7 +7,7 @@
   "accepted": true,
   "applied": true,
   "commit": "65c2b24",
-  "report_commit": null,
+  "report_commit": "5934107",
   "reason": "sandbox verification passed and committed 65c2b24",
   "checks": [
     "main_worktree_clean",
