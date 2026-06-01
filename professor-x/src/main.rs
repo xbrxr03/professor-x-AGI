@@ -6920,6 +6920,7 @@ fn render_work_cockpit(
     let recent_events = events.work_tail(limit)?;
     let latest_run = WorkLoopRunStore::new(Arc::clone(&memory.db)).latest()?;
     let latest_coding_session = CodingSessionStore::new(Arc::clone(&memory.db)).latest()?;
+    let runtime_line = cockpit_runtime_line(&repo_root);
     let gate_store = WorkLoopGateStore::new(Arc::clone(&memory.db));
     let latest_gate = gate_store.latest()?;
     let recent_gates = latest_run
@@ -6930,6 +6931,7 @@ fn render_work_cockpit(
 
     Ok(format_work_cockpit(
         &repo_root,
+        &runtime_line,
         &recent_events,
         latest_run.as_ref(),
         latest_coding_session.as_ref(),
@@ -6940,6 +6942,7 @@ fn render_work_cockpit(
 
 fn format_work_cockpit(
     repo_root: &std::path::Path,
+    runtime_line: &str,
     recent_events: &[memd::events::AgentEvent],
     latest_run: Option<&WorkLoopRunRecord>,
     latest_coding_session: Option<&CodingSessionRecord>,
@@ -6953,6 +6956,7 @@ fn format_work_cockpit(
         "clock {}  source ~/.professor-x/state.db + professor-x/artifacts/events/*.jsonl",
         chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
     ));
+    lines.push(format!("runtime {runtime_line}"));
     lines.push(format!(
         "state {}  {}",
         cockpit_state(latest_run, latest_gate),
@@ -7217,7 +7221,63 @@ fn cockpit_git_line(repo_root: &std::path::Path) -> String {
     let status = command_stdout(repo_root, "git", &["status", "--short"])
         .map(|text| if text.is_empty() { "clean" } else { "dirty" })
         .unwrap_or("unknown");
-    format!("{branch} @ {commit} {status}")
+    let latest_evolved = command_stdout(
+        repo_root,
+        "git",
+        &["log", "--grep=^evolved:", "--format=%h %s", "-1"],
+    )
+    .filter(|text| !text.is_empty())
+    .unwrap_or_else(|| "none".to_string());
+    format!("{branch} @ {commit} {status} evolved={}", truncate(&latest_evolved, 72))
+}
+
+fn cockpit_runtime_line(repo_root: &std::path::Path) -> String {
+    let current_pid = std::process::id();
+    let professor_x_peers = process_count("professor-x", Some(current_pid)).unwrap_or(0);
+    let ollama_count = process_count("ollama", None).unwrap_or(0);
+    let model_hint = command_stdout(repo_root, "ollama", &["list"])
+        .map(|output| {
+            if output.to_ascii_lowercase().contains("qwen3:8b-q4_k_m") {
+                "model=qwen3:8b-q4_k_m"
+            } else {
+                "model=missing"
+            }
+        })
+        .unwrap_or("model=unknown");
+    format!(
+        "pid={} profx_peer={} ollama={} {}",
+        current_pid,
+        professor_x_peers,
+        if ollama_count > 0 { "up" } else { "down" },
+        model_hint
+    )
+}
+
+fn process_count(needle: &str, exclude_pid: Option<u32>) -> Option<usize> {
+    let output = std::process::Command::new("ps")
+        .args(["-eo", "pid=,args="])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let count = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim_start();
+            let (pid_raw, args) = trimmed.split_once(char::is_whitespace)?;
+            let pid = pid_raw.parse::<u32>().ok()?;
+            Some((pid, args.trim_start()))
+        })
+        .filter(|(pid, args)| {
+            Some(*pid) != exclude_pid
+                && args.contains(needle)
+                && !args.contains("target/debug/deps/professor_x-")
+                && !args.contains("rg ")
+                && !args.contains("ps -eo")
+        })
+        .count();
+    Some(count)
 }
 
 fn command_stdout(repo_root: &std::path::Path, command: &str, args: &[&str]) -> Option<String> {
@@ -8401,6 +8461,7 @@ mod tests {
 
         let screen = format_work_cockpit(
             std::path::Path::new("."),
+            "pid=123 profx_peer=1 ollama=up model=qwen3:8b-q4_k_m",
             &[event],
             Some(&run),
             Some(&session),
@@ -8409,6 +8470,7 @@ mod tests {
         );
 
         assert!(screen.contains("Professor X live work cockpit"));
+        assert!(screen.contains("runtime pid=123 profx_peer=1 ollama=up model=qwen3:8b-q4_k_m"));
         assert!(screen.contains("state IDLE"));
         assert!(screen.contains("progress [######......] 1/2"));
         assert!(screen.contains("operator:core run=12345678"));
