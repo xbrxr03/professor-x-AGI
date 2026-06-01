@@ -125,8 +125,12 @@ struct CliArgs {
     coding_session_goal: Option<String>,
     /// Verify a repo patch as a coding-agent session without applying it.
     repo_patch_path: Option<PathBuf>,
+    /// Verify a repo patch as a coding-agent session while streaming events.
+    repo_patch_live_path: Option<PathBuf>,
     /// Verify, apply, and commit a repo patch as a coding-agent session.
     repo_patch_commit_path: Option<PathBuf>,
+    /// Verify, apply, and commit a repo patch as a coding-agent session while streaming events.
+    repo_patch_commit_live_path: Option<PathBuf>,
     /// Print the last N coding-agent sessions and exit.
     coding_sessions_limit: Option<usize>,
     /// Run N bounded local supervised work-loop cycles and exit.
@@ -243,7 +247,9 @@ fn parse_args() -> CliArgs {
         coding_session_live: false,
         coding_session_goal: None,
         repo_patch_path: None,
+        repo_patch_live_path: None,
         repo_patch_commit_path: None,
+        repo_patch_commit_live_path: None,
         coding_sessions_limit: None,
         supervised_loop_cycles: None,
         supervised_loop_profile: WorkLoopProfile::Basic,
@@ -466,8 +472,16 @@ fn parse_args() -> CliArgs {
                 cli.repo_patch_path = Some(PathBuf::from(&args[i + 1]));
                 i += 2;
             }
+            "--repo-patch-live" | "--prof-x-code-patch-live" if i + 1 < args.len() => {
+                cli.repo_patch_live_path = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
+            }
             "--repo-patch-commit" | "--prof-x-code-commit" if i + 1 < args.len() => {
                 cli.repo_patch_commit_path = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
+            }
+            "--repo-patch-commit-live" | "--prof-x-code-commit-live" if i + 1 < args.len() => {
+                cli.repo_patch_commit_live_path = Some(PathBuf::from(&args[i + 1]));
                 i += 2;
             }
             "--coding-sessions" => {
@@ -865,8 +879,28 @@ async fn main() -> Result<()> {
         .await;
     }
 
+    if let Some(path) = cli.repo_patch_live_path {
+        return run_repo_patch_coding_session_live(
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            path,
+        )
+        .await;
+    }
+
     if let Some(path) = cli.repo_patch_commit_path {
         return run_repo_patch_commit_coding_session(
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            path,
+        )
+        .await;
+    }
+
+    if let Some(path) = cli.repo_patch_commit_live_path {
+        return run_repo_patch_commit_coding_session_live(
             Arc::clone(&policy),
             Arc::clone(&memory),
             Arc::clone(&events),
@@ -4259,6 +4293,47 @@ async fn run_repo_patch_coding_session(
     Ok(())
 }
 
+async fn run_repo_patch_coding_session_live(
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    patch_path: PathBuf,
+) -> Result<()> {
+    let mut last_id = events.tail(1)?.last().map(|event| event.id).unwrap_or(0);
+    println!("Professor X live repo patch coding session");
+    println!("Streaming policy, sandbox verification, and coding-session evidence. No changes will be applied.");
+    io::stdout().flush()?;
+
+    let run_events = Arc::clone(&events);
+    let mut handle = tokio::spawn(async move {
+        run_repo_patch_coding_session(policy, memory, run_events, patch_path).await
+    });
+
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                println!("Live repo patch coding session interrupted.");
+                handle.abort();
+                anyhow::bail!("live repo patch coding session interrupted");
+            }
+            result = &mut handle => {
+                for event in events.work_after_id(last_id, 200)? {
+                    println!("{}", format_work_event(&event));
+                }
+                io::stdout().flush()?;
+                return result?;
+            }
+            _ = tokio::time::sleep(tokio::time::Duration::from_millis(250)) => {
+                for event in events.work_after_id(last_id, 100)? {
+                    last_id = event.id;
+                    println!("{}", format_work_event(&event));
+                }
+                io::stdout().flush()?;
+            }
+        }
+    }
+}
+
 async fn run_repo_patch_commit_coding_session(
     policy: Arc<PolicyEngine>,
     memory: Arc<MemoryManager>,
@@ -4471,6 +4546,47 @@ async fn run_repo_patch_commit_coding_session(
         anyhow::bail!("repo patch commit coding session failed");
     }
     Ok(())
+}
+
+async fn run_repo_patch_commit_coding_session_live(
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    patch_path: PathBuf,
+) -> Result<()> {
+    let mut last_id = events.tail(1)?.last().map(|event| event.id).unwrap_or(0);
+    println!("Professor X live repo patch commit session");
+    println!("Streaming policy, sandbox verification, main apply, cargo check, commit, and coding-session evidence.");
+    io::stdout().flush()?;
+
+    let run_events = Arc::clone(&events);
+    let mut handle = tokio::spawn(async move {
+        run_repo_patch_commit_coding_session(policy, memory, run_events, patch_path).await
+    });
+
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                println!("Live repo patch commit session interrupted.");
+                handle.abort();
+                anyhow::bail!("live repo patch commit session interrupted");
+            }
+            result = &mut handle => {
+                for event in events.work_after_id(last_id, 200)? {
+                    println!("{}", format_work_event(&event));
+                }
+                io::stdout().flush()?;
+                return result?;
+            }
+            _ = tokio::time::sleep(tokio::time::Duration::from_millis(250)) => {
+                for event in events.work_after_id(last_id, 100)? {
+                    last_id = event.id;
+                    println!("{}", format_work_event(&event));
+                }
+                io::stdout().flush()?;
+            }
+        }
+    }
 }
 
 fn record_smoke_step(
