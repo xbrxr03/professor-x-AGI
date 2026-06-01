@@ -81,6 +81,8 @@ struct CliArgs {
     work_loops_limit: Option<usize>,
     /// Print the last N work/operator runs as a concise operator log and exit.
     run_log_limit: Option<usize>,
+    /// Print one compact Prof X operator brief and exit.
+    brief: bool,
     /// Print a detailed autonomous/work-loop run review by run id prefix, report path, or 'latest'.
     run_review: Option<String>,
     /// Replay a work/operator run timeline by run id prefix, report path, or 'latest'.
@@ -231,6 +233,7 @@ fn parse_args() -> CliArgs {
         task_runs_limit: None,
         work_loops_limit: None,
         run_log_limit: None,
+        brief: false,
         run_review: None,
         run_replay: None,
         publish_run: None,
@@ -362,6 +365,10 @@ fn parse_args() -> CliArgs {
                     .and_then(|next| next.parse::<usize>().ok());
                 cli.run_log_limit = Some(limit.unwrap_or(10));
                 i += if limit.is_some() { 2 } else { 1 };
+            }
+            "--brief" | "--prof-x-brief" | "--now-brief" => {
+                cli.brief = true;
+                i += 1;
             }
             "--run-review" | "--loop-review" => {
                 let value = args
@@ -641,6 +648,7 @@ async fn main() -> Result<()> {
         || cli.coding_sessions_limit.is_some()
         || cli.work_loops_limit.is_some()
         || cli.run_log_limit.is_some()
+        || cli.brief
         || cli.run_review.is_some()
         || cli.task_review.is_some()
         || cli.run_replay.is_some()
@@ -724,6 +732,10 @@ async fn main() -> Result<()> {
 
     if let Some(limit) = cli.run_log_limit {
         return print_run_log(Arc::clone(&memory), limit);
+    }
+
+    if cli.brief {
+        return print_prof_x_brief(Arc::clone(&memory), Arc::clone(&events));
     }
 
     if let Some(run_ref) = cli.run_review {
@@ -5604,6 +5616,10 @@ async fn run_interactive_tasks(
             );
             continue;
         }
+        if input == "/brief" {
+            print_prof_x_brief(Arc::clone(&memory), Arc::clone(&events))?;
+            continue;
+        }
         if let Some(rest) = input.strip_prefix("/events") {
             let limit = rest.trim().parse::<usize>().unwrap_or(10);
             print_events(Arc::clone(&events), limit)?;
@@ -5708,6 +5724,7 @@ fn format_interactive_help() -> String {
         "Type a task and press Enter.",
         "",
         "Operator commands",
+        "  /brief         show latest run, coding session, evidence, and next commands",
         "  /cockpit        show live state, current run, latest coding session, and trace",
         "  /work [n]       show recent work/tool/task events",
         "  /sessions [n]   show recent coding-agent sessions and evidence paths",
@@ -6199,6 +6216,148 @@ fn print_run_log(memory: Arc<MemoryManager>, limit: usize) -> Result<()> {
         println!("{}", format_run_log_entry(&run, ledger.as_deref()));
     }
     Ok(())
+}
+
+fn print_prof_x_brief(memory: Arc<MemoryManager>, events: Arc<EventStore>) -> Result<()> {
+    let latest_run = WorkLoopRunStore::new(Arc::clone(&memory.db)).latest()?;
+    let latest_session = CodingSessionStore::new(Arc::clone(&memory.db)).latest()?;
+    let recent_events = events.work_tail(12)?;
+    println!(
+        "{}",
+        format_prof_x_brief(
+            latest_run.as_ref(),
+            latest_session.as_ref(),
+            &recent_events
+        )
+    );
+    Ok(())
+}
+
+fn format_prof_x_brief(
+    latest_run: Option<&WorkLoopRunRecord>,
+    latest_session: Option<&CodingSessionRecord>,
+    recent_events: &[memd::events::AgentEvent],
+) -> String {
+    let mut lines = Vec::new();
+    lines.push("Professor X operator brief".to_string());
+    lines.push(format!(
+        "state {}  {}",
+        cockpit_state(latest_run, None),
+        cockpit_latest_activity(recent_events)
+    ));
+    lines.push(format!("signal {}", work_signal_summary(recent_events)));
+    lines.push(String::new());
+
+    lines.push("Latest run".to_string());
+    match latest_run {
+        Some(run) => {
+            let status = if run.failed_cycles == 0 {
+                "passed"
+            } else {
+                "needs-review"
+            };
+            lines.push(format!(
+                "  {} {}:{} run={} cycles={}/{} passed={} failed={}",
+                status,
+                run.run_kind,
+                run.profile,
+                short_fragment(&run.run_id),
+                run.completed_cycles,
+                run.requested_cycles,
+                run.passed_cycles,
+                run.failed_cycles
+            ));
+            lines.push(format!("  report {}", truncate(&run.report_path, 130)));
+            if let Some(ledger) = run_ledger_path(run) {
+                lines.push(format!("  ledger {}", truncate(&ledger, 130)));
+            }
+            if let Some(last_gate) = run.smoke_records.last() {
+                lines.push(format!(
+                    "  last gate cycle={} {} {} {}",
+                    last_gate.cycle,
+                    last_gate.kind,
+                    if last_gate.passed { "passed" } else { "failed" },
+                    truncate(&last_gate.detail, 90)
+                ));
+                lines.push(format!(
+                    "  proof {}",
+                    truncate(&last_gate.report_path, 130)
+                ));
+                if let Some(transcript) = &last_gate.transcript_path {
+                    lines.push(format!("  transcript {}", truncate(transcript, 130)));
+                }
+            }
+            lines.push(format!(
+                "  commands review=--run-review {} replay=--replay {} publish=--publish-run {}",
+                short_fragment(&run.run_id),
+                short_fragment(&run.run_id),
+                short_fragment(&run.run_id)
+            ));
+        }
+        None => {
+            lines.push("  no run recorded yet".to_string());
+            lines.push("  command /run 4 or cargo run -- --prof-x-run 4".to_string());
+        }
+    }
+
+    lines.push(String::new());
+    lines.push("Latest coding session".to_string());
+    match latest_session {
+        Some(session) => {
+            let commit = coding_session_commit_hint(session)
+                .map(|commit| format!(" commit={commit}"))
+                .unwrap_or_default();
+            lines.push(format!(
+                "  {} session={} exercise={} checks={} artifacts={}{}",
+                session.status,
+                short_fragment(&session.id),
+                session.exercise,
+                session.checks.len(),
+                session.artifacts.len(),
+                commit
+            ));
+            lines.push(format!("  goal {}", truncate(&session.goal, 120)));
+            lines.push(format!(
+                "  report {}",
+                truncate(&session.session_report_path, 130)
+            ));
+            if let Some(smoke_report) = &session.smoke_report_path {
+                lines.push(format!("  smoke {}", truncate(smoke_report, 130)));
+            }
+            if let Some(transcript) = &session.transcript_path {
+                lines.push(format!("  transcript {}", truncate(transcript, 130)));
+            }
+            for artifact in session.artifacts.iter().take(3) {
+                lines.push(format!("  artifact {}", truncate(artifact, 130)));
+            }
+            lines.push("  command --coding-sessions 5".to_string());
+        }
+        None => {
+            lines.push("  no coding session recorded yet".to_string());
+            lines.push("  command /run-commit 5 after safety gates are green".to_string());
+        }
+    }
+
+    lines.push(String::new());
+    lines.push("Recent work".to_string());
+    if recent_events.is_empty() {
+        lines.push("  no recent work events".to_string());
+    } else {
+        for event in recent_events.iter().rev().take(5).rev() {
+            lines.push(format!(
+                "  #{} {} {}",
+                event.id,
+                event.event_type,
+                truncate(&event.summary, 100)
+            ));
+        }
+    }
+    lines.push(String::new());
+    lines.push(
+        "Open: cargo run -- --prof-x-chat | cargo run -- --cockpit | cargo run -- --observe-work"
+            .to_string(),
+    );
+    lines.join("\n")
 }
 
 fn run_ledger_path(run: &WorkLoopRunRecord) -> Option<String> {
@@ -7943,6 +8102,7 @@ mod tests {
         let help = format_interactive_help();
 
         assert!(help.contains("Professor X interactive task mode"));
+        assert!(help.contains("/brief"));
         assert!(help.contains("/cockpit"));
         assert!(help.contains("/work [n]"));
         assert!(help.contains("/sessions [n]"));
@@ -8363,6 +8523,54 @@ mod tests {
         assert!(line.contains("L ledger artifacts/work-loop/ledger/2026-06-01/run-12345678.md"));
         assert!(line.contains("cargo run -- --replay 12345678"));
         assert!(line.contains("cargo run -- --run-review 12345678"));
+    }
+
+    #[test]
+    fn format_prof_x_brief_stitches_run_session_and_events() {
+        let now = chrono::Utc::now();
+        let mut run = work_loop_run("operator", 0, vec![smoke("coding_smoke", true)]);
+        run.run_id = "12345678-aaaa-bbbb-cccc-123456789abc".to_string();
+        run.report_path = "artifacts/work-loop/2026-06-01/loop.json".to_string();
+        let session = CodingSessionRecord {
+            id: "session-12345678-aaaa-bbbb-cccc-123456789abc".to_string(),
+            generated_at: now,
+            goal: "verify and commit a safe harness patch".to_string(),
+            exercise: "repo_patch_apply_commit".to_string(),
+            status: "passed".to_string(),
+            workspace: Some("repo-root verified apply commit".to_string()),
+            smoke_id: None,
+            smoke_report_path: None,
+            session_report_path: "artifacts/coding-sessions/session.json".to_string(),
+            transcript_path: Some("artifacts/transcripts/session.json".to_string()),
+            artifacts: vec!["artifacts/evolution/patch.json".to_string()],
+            checks: vec!["cargo_check".to_string(), "git_commit".to_string()],
+            plan_steps: Vec::new(),
+            step_outcomes: vec!["commit abcdef1234567890".to_string()],
+            failure_reason: None,
+            recorded_at: now,
+        };
+        let event = memd::events::AgentEvent {
+            id: 9,
+            timestamp: now,
+            session_id: None,
+            task_id: None,
+            event_type: "work_loop.completed".to_string(),
+            summary: "operator run completed".to_string(),
+            payload: serde_json::json!({}),
+        };
+
+        let brief = format_prof_x_brief(Some(&run), Some(&session), &[event]);
+
+        assert!(brief.contains("Professor X operator brief"));
+        assert!(brief.contains("Latest run"));
+        assert!(brief.contains("operator:core run=12345678"));
+        assert!(brief.contains("commands review=--run-review 12345678"));
+        assert!(brief.contains("Latest coding session"));
+        assert!(brief.contains("passed session=session-"));
+        assert!(brief.contains("commit=abcdef12"));
+        assert!(brief.contains("artifact artifacts/evolution/patch.json"));
+        assert!(brief.contains("Recent work"));
+        assert!(brief.contains("Open: cargo run -- --prof-x-chat"));
     }
 
     #[test]
