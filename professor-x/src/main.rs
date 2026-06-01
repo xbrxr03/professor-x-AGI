@@ -123,6 +123,8 @@ struct CliArgs {
     coding_session_live: bool,
     /// Requested goal for --coding-session. Routed only to safe local fixtures for now.
     coding_session_goal: Option<String>,
+    /// Verify a repo patch as a coding-agent session without applying it.
+    repo_patch_path: Option<PathBuf>,
     /// Print the last N coding-agent sessions and exit.
     coding_sessions_limit: Option<usize>,
     /// Run N bounded local supervised work-loop cycles and exit.
@@ -238,6 +240,7 @@ fn parse_args() -> CliArgs {
         coding_session: false,
         coding_session_live: false,
         coding_session_goal: None,
+        repo_patch_path: None,
         coding_sessions_limit: None,
         supervised_loop_cycles: None,
         supervised_loop_profile: WorkLoopProfile::Basic,
@@ -454,6 +457,10 @@ fn parse_args() -> CliArgs {
             "--coding-session-goal" if i + 1 < args.len() => {
                 cli.coding_session = true;
                 cli.coding_session_goal = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--repo-patch" | "--prof-x-code-patch" if i + 1 < args.len() => {
+                cli.repo_patch_path = Some(PathBuf::from(&args[i + 1]));
                 i += 2;
             }
             "--coding-sessions" => {
@@ -837,6 +844,16 @@ async fn main() -> Result<()> {
             Arc::clone(&events),
             Arc::clone(&transcripts),
             cli.coding_session_goal.clone(),
+        )
+        .await;
+    }
+
+    if let Some(path) = cli.repo_patch_path {
+        return run_repo_patch_coding_session(
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            path,
         )
         .await;
     }
@@ -4022,6 +4039,202 @@ async fn run_coding_session_live(
             }
         }
     }
+}
+
+async fn run_repo_patch_coding_session(
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    patch_path: PathBuf,
+) -> Result<()> {
+    let session_id = uuid::Uuid::new_v4();
+    let session_key = session_id.to_string();
+    let generated_at = chrono::Utc::now();
+    let patch_raw = std::fs::read_to_string(&patch_path)
+        .map_err(|e| anyhow::anyhow!("cannot read patch '{}': {e}", patch_path.display()))?;
+    let repo_root = default_repo_root();
+    let goal = format!(
+        "repo patch coding session: verify {} before touching main",
+        patch_path.display()
+    );
+    let plan_steps = vec![
+        "Policy-gate the patch through patch.apply before sandbox work".to_string(),
+        "Verify the unified diff in an isolated worktree".to_string(),
+        "Run sandbox cargo check and reward-hacking/material-diff checks".to_string(),
+        "Record a coding-session report that points at the verification artifact".to_string(),
+    ];
+
+    events.append(
+        Some(session_id),
+        None,
+        "coding.session.started",
+        "starting repo patch coding-agent session",
+        serde_json::json!({
+            "session_id": session_key,
+            "goal": goal,
+            "patch_path": patch_path.display().to_string(),
+            "mode": "repo_patch_verify",
+        }),
+    )?;
+    for (index, step) in plan_steps.iter().enumerate() {
+        events.append(
+            Some(session_id),
+            None,
+            "coding.session.plan",
+            format!("plan step {}: {}", index + 1, truncate(step, 100)),
+            serde_json::json!({
+                "session_id": session_key,
+                "plan_step": index + 1,
+                "plan_total": plan_steps.len(),
+                "step": step,
+            }),
+        )?;
+    }
+
+    let scope = PermissionScope::default_autonomous().with_workspace_root(repo_root);
+    let gate_params = serde_json::json!({"mode": "check", "patch": patch_raw});
+    let gate = policy
+        .gate("patch.apply", &gate_params, session_id, &scope)
+        .await;
+    let audit = AuditStore::new(Arc::clone(&memory.db));
+    let _ = audit.append(
+        session_id,
+        None,
+        "patch.apply",
+        &gate_params,
+        gate.risk_score,
+        gate.decision.clone(),
+        &gate.reason,
+        None,
+    );
+    events.append(
+        Some(session_id),
+        None,
+        match gate.decision {
+            Decision::Allow => "policy.allowed",
+            Decision::Deny => "policy.denied",
+            Decision::PendingApproval => "policy.pending",
+        },
+        format!("policy {:?} for repo patch: {}", gate.decision, gate.reason),
+        serde_json::json!({
+            "session_id": session_key,
+            "tool": "patch.apply",
+            "risk_score": gate.risk_score,
+            "reason": gate.reason,
+            "patch_path": patch_path.display().to_string(),
+        }),
+    )?;
+    if gate.decision != Decision::Allow {
+        anyhow::bail!("policy denied repo patch: {}", gate.reason);
+    }
+
+    let (verification, verification_path) =
+        execute_patch_verify(Arc::clone(&events), patch_path.clone()).await?;
+    let passed = verification.accepted;
+    let checks = verification.checks.clone();
+    let step_outcomes = vec![
+        "policy gate allowed patch.apply check".to_string(),
+        format!(
+            "sandbox verification {}",
+            if verification.accepted {
+                "accepted"
+            } else {
+                "rejected"
+            }
+        ),
+        format!("diff bytes {}", verification.diff_bytes),
+        format!("reason {}", truncate(&verification.reason, 160)),
+    ];
+    for (index, outcome) in step_outcomes.iter().enumerate() {
+        events.append(
+            Some(session_id),
+            None,
+            "coding.session.outcome",
+            format!("outcome {}: {}", index + 1, truncate(outcome, 100)),
+            serde_json::json!({
+                "session_id": session_key,
+                "outcome_step": index + 1,
+                "outcome_total": step_outcomes.len(),
+                "outcome": outcome,
+            }),
+        )?;
+    }
+
+    let mut report = CodingSessionReport {
+        id: session_key.clone(),
+        generated_at: generated_at.to_rfc3339(),
+        goal: goal.clone(),
+        requested_goal: goal.clone(),
+        exercise: "repo_patch_verify".to_string(),
+        status: if passed { "passed" } else { "failed" }.to_string(),
+        workspace: Some("repo-root sandbox verification".to_string()),
+        smoke_id: None,
+        smoke_report_path: None,
+        session_report_path: None,
+        transcript_path: None,
+        checks,
+        plan_steps: plan_steps.clone(),
+        step_outcomes: step_outcomes.clone(),
+        artifacts: vec![verification_path.display().to_string()],
+        failure_reason: if passed {
+            None
+        } else {
+            Some(verification.reason.clone())
+        },
+    };
+    let report_path = write_coding_session_report(&report)?;
+    report.session_report_path = Some(report_path.display().to_string());
+    std::fs::write(&report_path, serde_json::to_string_pretty(&report)?)?;
+
+    CodingSessionStore::new(Arc::clone(&memory.db)).insert(&CodingSessionRecord {
+        id: session_key.clone(),
+        generated_at,
+        goal,
+        exercise: "repo_patch_verify".to_string(),
+        status: report.status.clone(),
+        workspace: report.workspace.clone(),
+        smoke_id: None,
+        smoke_report_path: None,
+        session_report_path: report_path.display().to_string(),
+        transcript_path: None,
+        artifacts: report.artifacts.clone(),
+        checks: report.checks.clone(),
+        plan_steps,
+        step_outcomes,
+        failure_reason: report.failure_reason.clone(),
+        recorded_at: chrono::Utc::now(),
+    })?;
+
+    events.append(
+        Some(session_id),
+        None,
+        if passed {
+            "coding.session.passed"
+        } else {
+            "coding.session.failed"
+        },
+        format!(
+            "repo patch coding-session report written to {}",
+            report_path.display()
+        ),
+        serde_json::to_value(&report)?,
+    )?;
+
+    println!(
+        "Repo patch coding session: {}",
+        if passed { "passed" } else { "failed" }
+    );
+    println!("  session: {session_key}");
+    println!("  report: {}", report_path.display());
+    println!("  verification: {}", verification_path.display());
+    println!("  patch: {}", verification.patch_path);
+    println!("  checks: {}", report.checks.join(", "));
+    println!("  reason: {}", verification.reason);
+
+    if !passed {
+        anyhow::bail!("repo patch coding session failed");
+    }
+    Ok(())
 }
 
 fn record_smoke_step(

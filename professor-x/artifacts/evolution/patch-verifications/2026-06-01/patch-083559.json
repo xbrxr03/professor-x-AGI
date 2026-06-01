@@ -1,0 +1,20 @@
+{
+  "generated_at": "2026-06-01T08:35:59.805156854+00:00",
+  "mode": "patch_verify",
+  "patch_path": "/tmp/px-repo-patch-smoke-20260601.diff",
+  "workspace": "repo-root",
+  "harness_commit": "f2c3bdf",
+  "accepted": true,
+  "applied": false,
+  "commit": null,
+  "report_commit": null,
+  "reason": "sandbox patch verification passed",
+  "checks": [
+    "reward_hacking_scan",
+    "sandbox_worktree",
+    "material_diff",
+    "cargo_check"
+  ],
+  "diff_hash": "23bc733146ebbc5b03649a69ab0bba5363aa1aaba4db86a47468ef62ae357017",
+  "diff_bytes": 769
+}
