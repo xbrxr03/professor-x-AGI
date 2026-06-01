@@ -6962,6 +6962,10 @@ fn format_work_cockpit(
         cockpit_state(latest_run, latest_gate),
         cockpit_latest_activity(recent_events)
     ));
+    lines.push(format!(
+        "now   {}",
+        cockpit_now_summary(recent_events, latest_gate, latest_coding_session)
+    ));
     lines.push(String::new());
     lines.push("Current run".to_string());
     match latest_run {
@@ -7158,6 +7162,61 @@ fn cockpit_latest_activity(events: &[memd::events::AgentEvent]) -> String {
             )
         })
         .unwrap_or_else(|| "last_event=none".to_string())
+}
+
+fn cockpit_now_summary(
+    events: &[memd::events::AgentEvent],
+    latest_gate: Option<&WorkLoopGateRecord>,
+    latest_coding_session: Option<&CodingSessionRecord>,
+) -> String {
+    if let Some(gate) = latest_gate.filter(|gate| gate.status == "running") {
+        return format!(
+            "running gate cycle={} job={} detail={}",
+            gate.cycle,
+            gate.kind,
+            truncate(&gate.detail, 96)
+        );
+    }
+
+    if let Some(event) = events
+        .iter()
+        .rev()
+        .find(|event| event.event_type == "tool.started")
+    {
+        let tool = event.payload["tool"].as_str().unwrap_or("tool");
+        let preview = event
+            .payload
+            .get("params_preview")
+            .and_then(|value| value.as_str())
+            .filter(|text| !text.is_empty())
+            .map(|text| format!(" {}", one_line(text, 96)))
+            .unwrap_or_default();
+        return format!("running tool {tool}{preview}");
+    }
+
+    if let Some(session) = latest_coding_session.filter(|session| {
+        !matches!(
+            session.status.as_str(),
+            "passed" | "failed" | "rejected" | "complete"
+        )
+    }) {
+        return format!(
+            "coding session {} {}",
+            short_fragment(&session.id),
+            truncate(&session.goal, 96)
+        );
+    }
+
+    if let Some(event) = events.last() {
+        return format!(
+            "last {} #{} {}",
+            event.event_type,
+            event.id,
+            truncate(&event.summary, 96)
+        );
+    }
+
+    "idle; no work events recorded".to_string()
 }
 
 fn cockpit_progress(completed: u32, requested: u32) -> String {
@@ -8472,6 +8531,7 @@ mod tests {
         assert!(screen.contains("Professor X live work cockpit"));
         assert!(screen.contains("runtime pid=123 profx_peer=1 ollama=up model=qwen3:8b-q4_k_m"));
         assert!(screen.contains("state IDLE"));
+        assert!(screen.contains("now   last work_loop.cycle.passed #10 Prof X operator run cycle 1/2 passed"));
         assert!(screen.contains("progress [######......] 1/2"));
         assert!(screen.contains("operator:core run=12345678"));
         assert!(screen.contains("commands replay=--replay 12345678"));
@@ -8488,6 +8548,52 @@ mod tests {
         assert!(screen.contains("--cockpit"));
         assert!(screen.contains("--prof-x-live-publish 6"));
         assert!(screen.contains("--run-review latest"));
+    }
+
+    #[test]
+    fn cockpit_now_summary_prioritizes_running_work() {
+        let now = chrono::Utc::now();
+        let running_gate = WorkLoopGateRecord {
+            id: Some(1),
+            run_id: "run-1".to_string(),
+            run_kind: "operator".to_string(),
+            profile: "core".to_string(),
+            cycle: 2,
+            kind: "hiro_smoke".to_string(),
+            label: "HIRO smoke".to_string(),
+            reason: "verify measurement".to_string(),
+            status: "running".to_string(),
+            started_at: Some(now),
+            completed_at: None,
+            passed: None,
+            report_path: None,
+            transcript_path: None,
+            workspace: None,
+            detail: "running HIRO inventory smoke".to_string(),
+            recorded_at: now,
+            updated_at: now,
+        };
+        let tool_event = memd::events::AgentEvent {
+            id: 55,
+            timestamp: now,
+            session_id: None,
+            task_id: Some("task-123456789".to_string()),
+            event_type: "tool.started".to_string(),
+            summary: "running tool 'shell.restricted' :: command=cargo test".to_string(),
+            payload: serde_json::json!({
+                "tool": "shell.restricted",
+                "params_preview": "command=cargo test",
+            }),
+        };
+
+        assert_eq!(
+            cockpit_now_summary(&[tool_event.clone()], Some(&running_gate), None),
+            "running gate cycle=2 job=hiro_smoke detail=running HIRO inventory smoke"
+        );
+        assert_eq!(
+            cockpit_now_summary(&[tool_event], None, None),
+            "running tool shell.restricted command=cargo test"
+        );
     }
 
     #[test]
