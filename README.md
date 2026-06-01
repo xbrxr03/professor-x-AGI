@@ -62,6 +62,7 @@ Everything Professor X learns is documented here in real time.
 | [`brain/hypotheses.md`](brain/hypotheses.md) | 13 falsifiable predictions and proposed tests |
 | [`brain/inventions.md`](brain/inventions.md) | MHE + DFA Trifecta (DHE, BF, LCAP) — full specifications |
 | [`brain/paper_outline.md`](brain/paper_outline.md) | The paper being written — section by section |
+| [`docs/research/agent-harness-landscape.md`](docs/research/agent-harness-landscape.md) | Coding-agent harnesses Professor X is being built to match or exceed |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Full system design — read before any code |
 | [`MASTER_BRIEF.md`](MASTER_BRIEF.md) | Project brief — the source of truth |
 
