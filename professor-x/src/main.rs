@@ -1056,7 +1056,7 @@ struct EvolutionSmokeReport {
     cases: Vec<EvolutionSmokeCaseReport>,
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct EvolutionProposalDryRunReport {
     generated_at: String,
     mode: String,
@@ -5390,6 +5390,8 @@ fn print_run_review(memory: Arc<MemoryManager>, run_ref: &str) -> Result<()> {
         }
         if smoke.kind == "patch_apply_commit" {
             print_patch_apply_review(&repo_root, &artifact_path)?;
+        } else if smoke.kind == "operator_commit" {
+            print_operator_commit_review(&repo_root, &artifact_path)?;
         }
     }
     if !report.timeline.is_empty() {
@@ -5754,6 +5756,43 @@ fn print_patch_apply_review(repo_root: &std::path::Path, path: &std::path::Path)
         report.commit.as_deref().unwrap_or("none"),
         report.report_commit.as_deref().unwrap_or("none")
     );
+    println!("    checks: {}", report.checks.join(", "));
+    println!(
+        "    diff: {} bytes hash={}",
+        report.diff_bytes,
+        report.diff_hash.as_deref().unwrap_or("none")
+    );
+    println!("    reason: {}", truncate(&report.reason, 140));
+    if let Some(commit) = &report.commit {
+        let output = std::process::Command::new("git")
+            .args(["show", "--stat", "--oneline", "--no-renames", commit])
+            .current_dir(repo_root)
+            .output();
+        if let Ok(output) = output {
+            if output.status.success() {
+                let text = String::from_utf8_lossy(&output.stdout);
+                for line in text.lines().take(8) {
+                    println!("    git: {}", truncate(line, 140));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn print_operator_commit_review(repo_root: &std::path::Path, path: &std::path::Path) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let raw = std::fs::read_to_string(path)?;
+    let report: EvolutionProposalDryRunReport = serde_json::from_str(&raw)?;
+    println!(
+        "    operator: accepted={} applied={} commit={}",
+        report.accepted,
+        report.applied,
+        report.commit.as_deref().unwrap_or("none")
+    );
+    println!("    target: {}", report.target_component);
     println!("    checks: {}", report.checks.join(", "));
     println!(
         "    diff: {} bytes hash={}",
