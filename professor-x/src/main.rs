@@ -36,7 +36,8 @@ use memd::events::EventStore;
 use memd::task_runs::{TaskRun, TaskRunStore};
 use memd::transcripts::{TranscriptStore, TranscriptSummary};
 use memd::work_loops::{
-    WorkLoopGateStore, WorkLoopPlannedJob, WorkLoopRunRecord, WorkLoopRunStore, WorkLoopSmokeRecord,
+    WorkLoopGateRecord, WorkLoopGateStore, WorkLoopPlannedJob, WorkLoopRunRecord, WorkLoopRunStore,
+    WorkLoopSmokeRecord,
 };
 use policyd::{AuditStore, Decision, PermissionScope, PolicyEngine};
 use toolbridge::executor::{Action, Observation};
@@ -83,6 +84,8 @@ struct CliArgs {
     watch: bool,
     /// Follow work/task/tool events until interrupted.
     watch_work: bool,
+    /// Refresh a coding-agent-style terminal cockpit for current Prof X work.
+    observe_work_limit: Option<usize>,
     /// Open the full-screen terminal observer.
     observe: bool,
     /// Start the daemon and open the full-screen observer in one process.
@@ -203,6 +206,7 @@ fn parse_args() -> CliArgs {
         task_review: None,
         watch: false,
         watch_work: false,
+        observe_work_limit: None,
         observe: false,
         lab: false,
         evolution_smoke: false,
@@ -327,6 +331,14 @@ fn parse_args() -> CliArgs {
             "--watch-work" => {
                 cli.watch_work = true;
                 i += 1;
+            }
+            "--observe-work" | "--work-cockpit" => {
+                let limit = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .and_then(|next| next.parse::<usize>().ok());
+                cli.observe_work_limit = Some(limit.unwrap_or(12));
+                i += if limit.is_some() { 2 } else { 1 };
             }
             "--observe" => {
                 cli.observe = true;
@@ -484,6 +496,7 @@ async fn main() -> Result<()> {
         || cli.task_review.is_some()
         || cli.watch
         || cli.watch_work
+        || cli.observe_work_limit.is_some()
         || cli.observe
         || cli.lab
         || cli.chat;
@@ -572,6 +585,10 @@ async fn main() -> Result<()> {
 
     if cli.watch_work {
         return watch_work_feed(Arc::clone(&events)).await;
+    }
+
+    if let Some(limit) = cli.observe_work_limit {
+        return observe_work_cockpit(Arc::clone(&memory), Arc::clone(&events), limit).await;
     }
 
     if cli.observe {
@@ -5039,6 +5056,209 @@ async fn watch_work_feed(events: Arc<EventStore>) -> Result<()> {
     Ok(())
 }
 
+async fn observe_work_cockpit(
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    limit: usize,
+) -> Result<()> {
+    println!("Opening Professor X work cockpit. Press Ctrl+C to stop.");
+    loop {
+        let screen = render_work_cockpit(Arc::clone(&memory), Arc::clone(&events), limit)?;
+        print!("\x1B[2J\x1B[H{screen}");
+        io::stdout().flush()?;
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => break,
+            _ = tokio::time::sleep(tokio::time::Duration::from_millis(1000)) => {}
+        }
+    }
+    Ok(())
+}
+
+fn render_work_cockpit(
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    limit: usize,
+) -> Result<String> {
+    let repo_root = default_repo_root();
+    let recent_events = events.work_tail(limit)?;
+    let latest_run = WorkLoopRunStore::new(Arc::clone(&memory.db)).latest()?;
+    let gate_store = WorkLoopGateStore::new(Arc::clone(&memory.db));
+    let latest_gate = gate_store.latest()?;
+    let recent_gates = latest_run
+        .as_ref()
+        .map(|run| gate_store.recent_for_run(&run.run_id, 8))
+        .transpose()?
+        .unwrap_or_default();
+
+    Ok(format_work_cockpit(
+        &repo_root,
+        &recent_events,
+        latest_run.as_ref(),
+        latest_gate.as_ref(),
+        &recent_gates,
+    ))
+}
+
+fn format_work_cockpit(
+    repo_root: &std::path::Path,
+    recent_events: &[memd::events::AgentEvent],
+    latest_run: Option<&WorkLoopRunRecord>,
+    latest_gate: Option<&WorkLoopGateRecord>,
+    recent_gates: &[WorkLoopGateRecord],
+) -> String {
+    let mut lines = Vec::new();
+    lines.push("Professor X live work cockpit".to_string());
+    lines.push(format!("repo  {}", cockpit_git_line(repo_root)));
+    lines.push(format!(
+        "clock {}  source ~/.professor-x/state.db + professor-x/artifacts/events/*.jsonl",
+        chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+    ));
+    lines.push(String::new());
+    lines.push("Current run".to_string());
+    match latest_run {
+        Some(run) => {
+            lines.push(format!(
+                "  {}:{} run={} cycles={}/{} passed={} failed={} report={}",
+                run.run_kind,
+                run.profile,
+                short_fragment(&run.run_id),
+                run.completed_cycles,
+                run.requested_cycles,
+                run.passed_cycles,
+                run.failed_cycles,
+                truncate(&run.report_path, 120),
+            ));
+            for job in run.planned_jobs.iter().take(4) {
+                lines.push(format!(
+                    "  plan {:>2}: {:<18} {}",
+                    job.cycle,
+                    job.kind,
+                    truncate(&job.reason, 92)
+                ));
+            }
+        }
+        None => lines.push("  waiting for --operator-run, --operator-run-commit, or --lab".to_string()),
+    }
+
+    lines.push(String::new());
+    lines.push("Active gate".to_string());
+    match latest_gate {
+        Some(gate) => {
+            lines.push(format!(
+                "  cycle={} profile={} job={} status={} passed={} updated={} {}",
+                gate.cycle,
+                gate.profile,
+                gate.kind,
+                gate.status,
+                gate.passed
+                    .map(|passed| passed.to_string())
+                    .unwrap_or_else(|| "pending".to_string()),
+                gate.updated_at.format("%H:%M:%S"),
+                truncate(&gate.detail, 90),
+            ));
+            if let Some(report) = &gate.report_path {
+                lines.push(format!("  proof report {}", truncate(report, 130)));
+            }
+            if let Some(transcript) = &gate.transcript_path {
+                lines.push(format!("  proof transcript {}", truncate(transcript, 130)));
+            }
+            if let Some(workspace) = &gate.workspace {
+                lines.push(format!("  workspace {}", truncate(workspace, 130)));
+            }
+        }
+        None => lines.push("  no gates recorded yet".to_string()),
+    }
+
+    if !recent_gates.is_empty() {
+        lines.push(String::new());
+        lines.push("Gate ledger".to_string());
+        for gate in recent_gates.iter().take(6) {
+            lines.push(format!(
+                "  {:>2}. {:<20} {:<8} {}",
+                gate.cycle,
+                gate.kind,
+                gate.status,
+                truncate(&gate.detail, 90)
+            ));
+        }
+    }
+
+    lines.push(String::new());
+    lines.push(format!("Recent signal {}", work_signal_summary(recent_events)));
+    lines.push(String::new());
+    lines.push("Live trace".to_string());
+    if recent_events.is_empty() {
+        lines.push("  no work events recorded yet".to_string());
+    } else {
+        for event in recent_events {
+            lines.push(format_work_event(event));
+        }
+    }
+    lines.push(String::new());
+    lines.push("Commands: --operator-run 1 | --operator-run-commit 1 | --watch-work | --run-review latest".to_string());
+    lines.join("\n")
+}
+
+fn work_signal_summary(events: &[memd::events::AgentEvent]) -> String {
+    let mut task = 0;
+    let mut tool = 0;
+    let mut policy = 0;
+    let mut evolution = 0;
+    let mut loop_events = 0;
+    let mut transcripts = 0;
+    for event in events {
+        let event_type = event.event_type.as_str();
+        if event_type.starts_with("task.") {
+            task += 1;
+        } else if event_type.starts_with("tool.") {
+            tool += 1;
+        } else if event_type.starts_with("policy.") {
+            policy += 1;
+        } else if event_type.starts_with("evolution.") {
+            evolution += 1;
+        } else if event_type.starts_with("work_loop.") {
+            loop_events += 1;
+        } else if event_type == "transcript.written" {
+            transcripts += 1;
+        }
+    }
+    format!(
+        "events={} task={} tool={} policy={} evolution={} loop={} transcript={}",
+        events.len(),
+        task,
+        tool,
+        policy,
+        evolution,
+        loop_events,
+        transcripts
+    )
+}
+
+fn cockpit_git_line(repo_root: &std::path::Path) -> String {
+    let branch = command_stdout(repo_root, "git", &["branch", "--show-current"])
+        .filter(|text| !text.is_empty())
+        .unwrap_or_else(|| "unknown".to_string());
+    let commit = command_stdout(repo_root, "git", &["rev-parse", "--short", "HEAD"])
+        .filter(|text| !text.is_empty())
+        .unwrap_or_else(|| "unknown".to_string());
+    let status = command_stdout(repo_root, "git", &["status", "--short"])
+        .map(|text| if text.is_empty() { "clean" } else { "dirty" })
+        .unwrap_or("unknown");
+    format!("{branch} @ {commit} {status}")
+}
+
+fn command_stdout(repo_root: &std::path::Path, command: &str, args: &[&str]) -> Option<String> {
+    let output = std::process::Command::new(command)
+        .args(args)
+        .current_dir(repo_root)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 fn format_event(event: &memd::events::AgentEvent) -> String {
     let task = event
         .task_id
@@ -5696,6 +5916,86 @@ mod tests {
         assert!(line.contains("transcript professor-x/artifacts/transcripts/t.json"));
         assert!(line.contains("commit abcdef12"));
         assert!(line.contains("5 checks"));
+    }
+
+    #[test]
+    fn format_work_cockpit_surfaces_run_gate_and_trace() {
+        let now = chrono::Utc::now();
+        let run = WorkLoopRunRecord {
+            id: Some(7),
+            run_id: "12345678-aaaa-bbbb-cccc-123456789abc".to_string(),
+            run_kind: "operator".to_string(),
+            profile: "core".to_string(),
+            started_at: now,
+            completed_at: now,
+            requested_cycles: 2,
+            completed_cycles: 1,
+            passed_cycles: 1,
+            failed_cycles: 0,
+            report_path: "artifacts/work-loop/2026-05-31/loop.json".to_string(),
+            planned_jobs: vec![WorkLoopPlannedJob {
+                cycle: 1,
+                kind: "coding_smoke".to_string(),
+                label: "coding smoke".to_string(),
+                reason: "prove local coding-agent edit and verification".to_string(),
+            }],
+            smoke_records: Vec::new(),
+            recorded_at: now,
+        };
+        let gate = WorkLoopGateRecord {
+            id: Some(9),
+            run_id: run.run_id.clone(),
+            run_kind: "operator".to_string(),
+            profile: "core".to_string(),
+            cycle: 1,
+            kind: "coding_smoke".to_string(),
+            label: "coding smoke".to_string(),
+            reason: "prove local coding-agent edit and verification".to_string(),
+            status: "passed".to_string(),
+            started_at: Some(now),
+            completed_at: Some(now),
+            passed: Some(true),
+            report_path: Some("artifacts/coding-smoke/report.json".to_string()),
+            transcript_path: Some("artifacts/transcripts/task.json".to_string()),
+            workspace: Some("/tmp/professor-x-work".to_string()),
+            detail: "deterministic coding smoke".to_string(),
+            recorded_at: now,
+            updated_at: now,
+        };
+        let event = memd::events::AgentEvent {
+            id: 10,
+            timestamp: now,
+            session_id: None,
+            task_id: None,
+            event_type: "work_loop.cycle.passed".to_string(),
+            summary: "Prof X operator run cycle 1/2 passed".to_string(),
+            payload: serde_json::json!({
+                "run_id": run.run_id.clone(),
+                "cycle": 1,
+                "cycles": 2,
+                "job": "coding_smoke",
+                "passed": true,
+                "report_path": "artifacts/coding-smoke/report.json",
+                "transcript_path": "artifacts/transcripts/task.json",
+                "detail": "deterministic coding smoke",
+            }),
+        };
+
+        let screen = format_work_cockpit(
+            std::path::Path::new("."),
+            &[event],
+            Some(&run),
+            Some(&gate),
+            std::slice::from_ref(&gate),
+        );
+
+        assert!(screen.contains("Professor X live work cockpit"));
+        assert!(screen.contains("operator:core run=12345678"));
+        assert!(screen.contains("proof report artifacts/coding-smoke/report.json"));
+        assert!(screen.contains("proof transcript artifacts/transcripts/task.json"));
+        assert!(screen.contains("Recent signal events=1"));
+        assert!(screen.contains("Passed gate"));
+        assert!(screen.contains("--run-review latest"));
     }
 
     #[test]
