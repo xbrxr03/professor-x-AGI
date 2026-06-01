@@ -936,23 +936,25 @@ async fn main() -> Result<()> {
     }
 
     if let Some(goal) = cli.skill_patch_live_goal {
-        let patch_path = write_operator_skill_patch(&goal)?;
-        return run_repo_patch_coding_session_live(
+        let patch = write_operator_skill_patch(&goal)?;
+        return run_repo_patch_coding_session_live_with_goal(
             Arc::clone(&policy),
             Arc::clone(&memory),
             Arc::clone(&events),
-            patch_path,
+            patch.patch_path.clone(),
+            Some(operator_skill_session_goal(&patch, false)),
         )
         .await;
     }
 
     if let Some(goal) = cli.skill_patch_commit_live_goal {
-        let patch_path = write_operator_skill_patch(&goal)?;
-        return run_repo_patch_commit_coding_session_live(
+        let patch = write_operator_skill_patch(&goal)?;
+        return run_repo_patch_commit_coding_session_live_with_goal(
             Arc::clone(&policy),
             Arc::clone(&memory),
             Arc::clone(&events),
-            patch_path,
+            patch.patch_path.clone(),
+            Some(operator_skill_session_goal(&patch, true)),
         )
         .await;
     }
@@ -1900,7 +1902,15 @@ fn write_autonomous_patch_apply_smoke_patch() -> Result<PathBuf> {
     Ok(patch_path)
 }
 
-fn write_operator_skill_patch(goal: &str) -> Result<PathBuf> {
+#[derive(Debug, Clone)]
+struct OperatorSkillPatch {
+    patch_path: PathBuf,
+    skill_name: String,
+    skill_path: PathBuf,
+    goal: String,
+}
+
+fn write_operator_skill_patch(goal: &str) -> Result<OperatorSkillPatch> {
     let goal = normalize_operator_goal(goal);
     let slug = skill_goal_slug(&goal);
     let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
@@ -1913,7 +1923,23 @@ fn write_operator_skill_patch(goal: &str) -> Result<PathBuf> {
     let diff = unified_new_file_diff(&path, &body);
     let patch_path = std::env::temp_dir().join(format!("{skill_name}.diff"));
     std::fs::write(&patch_path, diff)?;
-    Ok(patch_path)
+    Ok(OperatorSkillPatch {
+        patch_path,
+        skill_name,
+        skill_path: path,
+        goal,
+    })
+}
+
+fn operator_skill_session_goal(patch: &OperatorSkillPatch, commit: bool) -> String {
+    format!(
+        "operator goal skill session: {} goal='{}' skill={} path={} patch={}",
+        if commit { "verify, apply, and commit" } else { "verify" },
+        patch.goal,
+        patch.skill_name,
+        patch.skill_path.display(),
+        patch.patch_path.display()
+    )
 }
 
 fn normalize_operator_goal(goal: &str) -> String {
@@ -4212,16 +4238,27 @@ async fn run_repo_patch_coding_session(
     events: Arc<EventStore>,
     patch_path: PathBuf,
 ) -> Result<()> {
+    run_repo_patch_coding_session_with_goal(policy, memory, events, patch_path, None).await
+}
+
+async fn run_repo_patch_coding_session_with_goal(
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    patch_path: PathBuf,
+    session_goal: Option<String>,
+) -> Result<()> {
     let session_id = uuid::Uuid::new_v4();
     let session_key = session_id.to_string();
     let generated_at = chrono::Utc::now();
     let patch_raw = std::fs::read_to_string(&patch_path)
         .map_err(|e| anyhow::anyhow!("cannot read patch '{}': {e}", patch_path.display()))?;
     let repo_root = default_repo_root();
-    let goal = format!(
+    let default_goal = format!(
         "repo patch coding session: verify {} before touching main",
         patch_path.display()
     );
+    let goal = session_goal.unwrap_or(default_goal);
     let plan_steps = vec![
         "Policy-gate the patch through patch.apply before sandbox work".to_string(),
         "Verify the unified diff in an isolated worktree".to_string(),
@@ -4408,6 +4445,16 @@ async fn run_repo_patch_coding_session_live(
     events: Arc<EventStore>,
     patch_path: PathBuf,
 ) -> Result<()> {
+    run_repo_patch_coding_session_live_with_goal(policy, memory, events, patch_path, None).await
+}
+
+async fn run_repo_patch_coding_session_live_with_goal(
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    patch_path: PathBuf,
+    session_goal: Option<String>,
+) -> Result<()> {
     let mut last_id = events.tail(1)?.last().map(|event| event.id).unwrap_or(0);
     println!("Professor X live repo patch coding session");
     println!("Streaming policy, sandbox verification, and coding-session evidence. No changes will be applied.");
@@ -4415,7 +4462,14 @@ async fn run_repo_patch_coding_session_live(
 
     let run_events = Arc::clone(&events);
     let mut handle = tokio::spawn(async move {
-        run_repo_patch_coding_session(policy, memory, run_events, patch_path).await
+        run_repo_patch_coding_session_with_goal(
+            policy,
+            memory,
+            run_events,
+            patch_path,
+            session_goal,
+        )
+        .await
     });
 
     loop {
@@ -4449,16 +4503,27 @@ async fn run_repo_patch_commit_coding_session(
     events: Arc<EventStore>,
     patch_path: PathBuf,
 ) -> Result<()> {
+    run_repo_patch_commit_coding_session_with_goal(policy, memory, events, patch_path, None).await
+}
+
+async fn run_repo_patch_commit_coding_session_with_goal(
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    patch_path: PathBuf,
+    session_goal: Option<String>,
+) -> Result<()> {
     let session_id = uuid::Uuid::new_v4();
     let session_key = session_id.to_string();
     let generated_at = chrono::Utc::now();
     let patch_raw = std::fs::read_to_string(&patch_path)
         .map_err(|e| anyhow::anyhow!("cannot read patch '{}': {e}", patch_path.display()))?;
     let repo_root = default_repo_root();
-    let goal = format!(
+    let default_goal = format!(
         "repo patch coding session: verify, apply, and commit {}",
         patch_path.display()
     );
+    let goal = session_goal.unwrap_or(default_goal);
     let plan_steps = vec![
         "Policy-gate the patch through patch.apply before sandbox work".to_string(),
         "Verify the unified diff in an isolated worktree".to_string(),
@@ -4663,6 +4728,17 @@ async fn run_repo_patch_commit_coding_session_live(
     events: Arc<EventStore>,
     patch_path: PathBuf,
 ) -> Result<()> {
+    run_repo_patch_commit_coding_session_live_with_goal(policy, memory, events, patch_path, None)
+        .await
+}
+
+async fn run_repo_patch_commit_coding_session_live_with_goal(
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    patch_path: PathBuf,
+    session_goal: Option<String>,
+) -> Result<()> {
     let mut last_id = events.tail(1)?.last().map(|event| event.id).unwrap_or(0);
     println!("Professor X live repo patch commit session");
     println!("Streaming policy, sandbox verification, main apply, cargo check, commit, and coding-session evidence.");
@@ -4670,7 +4746,14 @@ async fn run_repo_patch_commit_coding_session_live(
 
     let run_events = Arc::clone(&events);
     let mut handle = tokio::spawn(async move {
-        run_repo_patch_commit_coding_session(policy, memory, run_events, patch_path).await
+        run_repo_patch_commit_coding_session_with_goal(
+            policy,
+            memory,
+            run_events,
+            patch_path,
+            session_goal,
+        )
+        .await
     });
 
     loop {
@@ -7607,11 +7690,21 @@ mod tests {
             "px-operator-goal-test",
             &normalize_operator_goal(" capture next harness gap \n with evidence "),
         );
+        let patch = OperatorSkillPatch {
+            patch_path: PathBuf::from("/tmp/px-operator-goal-test.diff"),
+            skill_name: "px-operator-goal-test".to_string(),
+            skill_path: PathBuf::from("professor-x/skills/conductor/px-operator-goal-test.md"),
+            goal: "capture next harness gap with evidence".to_string(),
+        };
+        let session_goal = operator_skill_session_goal(&patch, true);
 
         assert!(body.contains("Operator goal: capture next harness gap with evidence"));
         assert!(body.contains("workspace-bound"));
         assert_eq!(skill_goal_slug("Capture next harness gap!!"), "capture-next-harness-gap");
         assert_eq!(skill_goal_slug("!!!"), "operator-goal");
+        assert!(session_goal.contains("goal='capture next harness gap with evidence'"));
+        assert!(session_goal.contains("skill=px-operator-goal-test"));
+        assert!(session_goal.contains("professor-x/skills/conductor/px-operator-goal-test.md"));
     }
 
     #[test]
