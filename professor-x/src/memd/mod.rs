@@ -1,4 +1,5 @@
 pub mod affect;
+pub mod autonomy_queue;
 pub mod coding_sessions;
 pub mod coding_smoke;
 pub mod events;
@@ -193,6 +194,25 @@ CREATE TABLE IF NOT EXISTS task_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_task_runs_updated ON task_runs(updated_at);
 CREATE INDEX IF NOT EXISTS idx_task_runs_status ON task_runs(status);
+
+CREATE TABLE IF NOT EXISTS autonomy_queue (
+    id TEXT PRIMARY KEY,
+    goal TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    profile TEXT NOT NULL,
+    cycles INTEGER NOT NULL DEFAULT 1,
+    priority INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL,
+    result_run_id TEXT,
+    result_report_path TEXT,
+    failure_reason TEXT,
+    queued_at TEXT NOT NULL,
+    started_at TEXT,
+    completed_at TEXT,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_autonomy_queue_status ON autonomy_queue(status, priority, queued_at);
+CREATE INDEX IF NOT EXISTS idx_autonomy_queue_updated ON autonomy_queue(updated_at);
 
 CREATE TABLE IF NOT EXISTS coding_smokes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

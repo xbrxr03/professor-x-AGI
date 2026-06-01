@@ -1,0 +1,271 @@
+{
+  "id": "b2040ce2-6365-4d8d-90ea-462f867a763d",
+  "task_id": "6b502e2b-a557-4640-8a24-f6ad06997f24",
+  "session_ids": [
+    "7d172724-9aed-422a-828f-5a6e97390eac"
+  ],
+  "task_description": "deterministic coding smoke: fix a failing Rust addition test and verify it passes",
+  "task_type": "UserRequest",
+  "status": "succeeded",
+  "started_at": "2026-06-01T19:11:14.554246365Z",
+  "completed_at": "2026-06-01T19:11:14.825293729Z",
+  "attempt_count": 1,
+  "max_attempts": 1,
+  "step_count": 3,
+  "summary": "deterministic coding smoke fixed the test and verified it",
+  "review": {
+    "tool_artifacts": [
+      "/tmp/px-coding-smoke-c1e32b65-c44f-4581-9600-ecf9327729ff/artifacts/commands/2026-06-01/41606b70-c6e6-478e-98d7-fd440d3bc162.json",
+      "/tmp/px-coding-smoke-c1e32b65-c44f-4581-9600-ecf9327729ff/artifacts/replacements/2026-06-01/cc6e292f-781a-4583-858d-d6c5c16b57f1.diff"
+    ],
+    "changed_files": [
+      "professor-x/artifacts/events/2026-06-01.jsonl",
+      "professor-x/src/main.rs",
+      "professor-x/src/memd/events.rs",
+      "professor-x/src/memd/mod.rs"
+    ],
+    "git_status": [
+      " M professor-x/artifacts/events/2026-06-01.jsonl",
+      " M professor-x/src/main.rs",
+      " M professor-x/src/memd/events.rs",
+      " M professor-x/src/memd/mod.rs",
+      "?? professor-x/src/memd/autonomy_queue.rs"
+    ],
+    "git_diff": "diff --git a/professor-x/artifacts/events/2026-06-01.jsonl b/professor-x/artifacts/events/2026-06-01.jsonl\nindex 47f02c1..67484d4 100644\n--- a/professor-x/artifacts/events/2026-06-01.jsonl\n+++ b/professor-x/artifacts/events/2026-06-01.jsonl\n@@ -333,3 +333,23 @@\n {\"event_type\":\"coding.session.outcome\",\"id\":400,\"payload\":{\"exercise\":\"add_i32\",\"outcome\":\"source replacement observed: applied\",\"outcome_step\":2,\"outcome_total\":3,\"session_id\":\"4d206eaf-0634-40bb-90b6-83c430f2f580\"},\"session_id\":null,\"summary\":\"outcome 2: source replacement observed: applied\",\"task_id\":null,\"timestamp\":\"2026-06-01T19:04:49.392093769+00:00\"}\n {\"event_type\":\"coding.session.outcome\",\"id\":401,\"payload\":{\"exercise\":\"add_i32\",\"outcome\":\"verification test observed: passed\",\"outcome_step\":3,\"outcome_total\":3,\"session_id\":\"4d206eaf-0634-40bb-90b6-83c430f2f580\"},\"session_id\":null,\"summary\":\"outcome 3: verification test observed: passed\",\"task_id\":null,\"timestamp\":\"2026-06-01T19:04:49.392333404+00:00\"}\n {\"event_type\":\"coding.session.passed\",\"id\":402,\"payload\":{\"artifacts\":[\"/tmp/px-coding-smoke-5ad2208e-6855-45c3-b9bf-0ba9d36f6516/artifacts/replacements/2026-06-01/21049a10-f002-40dd-826d-abe9523f9a52.diff\",\"/tmp/px-coding-smoke-5ad2208e-6855-45c3-b9bf-0ba9d36f6516/artifacts/commands/2026-06-01/9e58f89f-170d-4f8e-b485-7a2e160eaf11.json\"],\"checks\":[\"initial cargo test failed as expected\",\"patch applied\",\"final cargo test passed\"],\"exercise\":\"add_i32\",\"failure_reason\":null,\"generated_at\":\"2026-06-01T19:04:49.102505652+00:00\",\"goal\":\"deterministic coding smoke: fix a failing Rust addition test and verify it passes\",\"id\":\"4d206eaf-0634-40bb-90b6-83c430f2f580\",\"plan_steps\":[\"Create isolated Rust workspace for add_i32\",\"Run cargo test before editing to capture the failing baseline\",\"Apply the smallest exact source replacement through fs.replace\",\"Run cargo test again and keep command artifacts plus transcript\"],\"requested_goal\":\"bounded local coding session: diagnose, patch, and verify a failing Rust test\",\"session_report_path\":\"artifacts/coding-sessions/2026-06-01/session-190449-4d206eaf.json\",\"smoke_id\":6,\"smoke_report_path\":\"artifacts/coding-smoke/2026-06-01/smoke-190449.json\",\"status\":\"passed\",\"step_outcomes\":[\"baseline test observed: failed\",\"source replacement observed: applied\",\"verification test observed: passed\"],\"transcript_path\":\"artifacts/transcripts/2026-06-01/775ef462-9d10-44af-b3af-de7100c6a0c4.json\",\"workspace\":\"/tmp/px-coding-smoke-5ad2208e-6855-45c3-b9bf-0ba9d36f6516\"},\"session_id\":null,\"summary\":\"coding session report written to artifacts/coding-sessions/2026-06-01/session-190449-4d206eaf.json\",\"task_id\":null,\"timestamp\":\"2026-06-01T19:04:49.392990666+00:00\"}\n+{\"event_type\":\"skills.loaded\",\"id\":403,\"payload\":{\"skills\":[\"px-autonomous-patch-20260531-195910\",\"px-autonomous-patch-20260601-081614\",\"px-autonomous-patch-20260601-082507\",\"px-daily-cycle\",\"px-daily-update\",\"px-experiment-runner\",\"px-gap-analysis\",\"px-know-consumer-hw\",\"px-know-existing-systems\",\"px-know-harness\",\"px-know-scientific-method\",\"px-know-self-evolving\",\"px-know-writing-standards\",\"px-literature-search\",\"px-operator-autocommit-20260527-034639\",\"px-operator-autocommit-20260527-035402\",\"px-operator-autocommit-20260601-082530\",\"px-operator-goal-20260601-134503-make-goals-verified\",\"px-operator-goal-20260601-135027-preserve-goal-provenance\",\"px-repo-patch-commit-evidence-20260601\",\"px-repo-patch-commit-smoke-20260601\",\"px-repo-patch-live-commit-smoke-20260601\",\"px-self-review\",\"px-synthesize\",\"px-teach\",\"px-verify-patch\",\"px-write-section\"]},\"session_id\":null,\"summary\":\"loaded 27 skill(s)\",\"task_id\":null,\"timestamp\":\"2026-06-01T19:11:14.528127600+00:00\"}\n+{\"event_type\":\"daemon.started\",\"id\":404,\"payload\":{\"cwd\":\"/home/abrar/professor-x-AGI/professor-x\",\"data_dir\":\"/home/abrar/.professor-x\"},\"session_id\":null,\"summary\":\"Professor X process started\",\"task_id\":null,\"timestamp\":\"2026-06-01T19:11:14.528980871+00:00\"}\n+{\"event_type\":\"autonomy.queue.seeded\",\"id\":405,\"payload\":{\"cycles\":1,\"goal\":\"bootstrap autonomous harness work: run a bounded coding-agent smoke and record reviewable evidence\",\"kind\":\"operator_run\",\"priority\":50,\"profile\":\"core\",\"queue_id\":\"6f6dc4a5-c68d-4c47-ac89-9650dee1cd79\"},\"session_id\":null,\"summary\":\"seeded autonomous queue item 6f6dc4a5\",\"task_id\":null,\"timestamp\":\"2026-06-01T19:11:14.551531346+00:00\"}\n+{\"event_type\":\"autonomy.queue.started\",\"id\":406,\"payload\":{\"cycles\":1,\"goal\":\"bootstrap autonomous harness work: run a bounded coding-agent smoke and record reviewable evidence\",\"kind\":\"operator_run\",\"priority\":50,\"profile\":\"core\",\"queue_id\":\"6f6dc4a5-c68d-4c47-ac89-9650dee1cd79\",\"step\":1,\"steps\":1},\"session_id\":null,\"summary\":\"started autonomous queue item 6f6dc4a5: bootstrap autonomous harness work: run a bounded coding-agent smoke and record reviewable evidence\",\"task_id\":null,\"timestamp\":\"2026-06-01T19:11:14.551985541+00:00\"}\n+{\"event_type\":\"work_loop.started\",\"id\":407,\"payload\":{\"cycles\":1,\"planned_jobs\":[{\"cycle\":1,\"kind\":\"coding_smoke\",\"label\":\"coding-agent smoke\",\"reason\":\"core profile verifies local coding-agent edit/test capability before higher-risk gates\"}],\"profile\":\"core\",\"run_id\":\"94c4e3f9-e8ab-4008-8c92-91ff1233ee5c\",\"run_kind\":\"operator\"},\"session_id\":null,\"summary\":\"starting Prof X operator run with core profile and 1 cycle(s)\",\"task_id\":null,\"timestamp\":\"2026-06-01T19:11:14.552852358+00:00\"}\n+{\"event_type\":\"work_loop.job.planned\",\"id\":408,\"payload\":{\"cycle\":1,\"job\":\"coding_smoke\",\"profile\":\"core\",\"reason\":\"core profile verifies local coding-agent edit/test capability before higher-risk gates\",\"run_id\":\"94c4e3f9-e8ab-4008-8c92-91ff1233ee5c\",\"run_kind\":\"operator\"},\"session_id\":null,\"summary\":\"Prof X operator run cycle 1/1 planned: coding-agent smoke\",\"task_id\":null,\"timestamp\":\"2026-06-01T19:11:14.553341353+00:00\"}\n+{\"event_type\":\"work_loop.cycle.started\",\"id\":409,\"payload\":{\"cycle\":1,\"cycles\":1,\"job\":\"coding_smoke\",\"profile\":\"core\",\"reason\":\"core profile verifies local coding-agent edit/test capability before higher-risk gates\",\"run_id\":\"94c4e3f9-e8ab-4008-8c92-91ff1233ee5c\",\"run_kind\":\"operator\"},\"session_id\":null,\"summary\":\"Prof X operator run cycle 1/1 started: coding-agent smoke\",\"task_id\":null,\"timestamp\":\"2026-06-01T19:11:14.553779342+00:00\"}\n+{\"event_type\":\"task.queued\",\"id\":410,\"payload\":{\"max_attempts\":1,\"priority\":100,\"task_type\":\"UserRequest\",\"workspace\":\"/tmp/px-coding-smoke-c1e32b65-c44f-4581-9600-ecf9327729ff\"},\"session_id\":null,\"summary\":\"queued task: deterministic coding smoke: fix a failing Rust addition test and verify it passes\",\"task_id\":\"6b502e2b-a557-4640-8a24-f6ad06997f24\",\"timestamp\":\"2026-06-01T19:11:14.554564557+00:00\"}\n+{\"event_type\":\"task.started\",\"id\":411,\"payload\":{\"max_attempts\":1,\"priority\":100,\"task_type\":\"UserRequest\",\"workspace\":\"/tmp/px-coding-smoke-c1e32b65-c44f-4581-9600-ecf9327729ff\"},\"session_id\":null,\"summary\":\"started task: deterministic coding smoke: fix a failing Rust addition test and verify it passes\",\"task_id\":\"6b502e2b-a557-4640-8a24-f6ad06997f24\",\"timestamp\":\"2026-06-01T19:11:14.554830296+00:00\"}\n+{\"event_type\":\"task.attempt.started\",\"id\":412,\"payload\":{\"attempt\":1},\"session_id\":\"7d172724-9aed-422a-828f-5a6e97390eac\",\"summary\":\"attempt 1/1 started\",\"task_id\":\"6b502e2b-a557-4640-8a24-f6ad06997f24\",\"timestamp\":\"2026-06-01T19:11:14.555060718+00:00\"}\n+{\"event_type\":\"coding.smoke.started\",\"id\":413,\"payload\":{\"exercise\":\"add_i32\",\"workspace\":\"/tmp/px-coding-smoke-c1e32b65-c44f-4581-9600-ecf9327729ff\"},\"session_id\":null,\"summary\":\"starting deterministic coding-agent smoke\",\"task_id\":\"6b502e2b-a557-4640-8a24-f6ad06997f24\",\"timestamp\":\"2026-06-01T19:11:14.555237711+00:00\"}\n+{\"event_type\":\"policy.allowed\",\"id\":414,\"payload\":{\"params_preview\":\"command=cargo test\",\"reason\":\"policy pass\",\"risk_score\":60,\"step\":1,\"tool\":\"shell.restricted\"},\"session_id\":\"7d172724-9aed-422a-828f-5a6e97390eac\",\"summary\":\"policy Allow for 'shell.restricted': policy pass\",\"task_id\":\"6b502e2b-a557-4640-8a24-f6ad06997f24\",\"timestamp\":\"2026-06-01T19:11:14.556381556+00:00\"}\n+{\"event_type\":\"tool.started\",\"id\":415,\"payload\":{\"params_preview\":\"command=cargo test\",\"step\":1,\"tool\":\"shell.restricted\"},\"session_id\":\"7d172724-9aed-422a-828f-5a6e97390eac\",\"summary\":\"running tool 'shell.restricted' :: command=cargo test\",\"task_id\":\"6b502e2b-a557-4640-8a24-f6ad06997f24\",\"timestamp\":\"2026-06-01T19:11:14.556641810+00:00\"}\n+{\"event_type\":\"tool.failed\",\"id\":416,\"payload\":{\"artifacts\":[],\"error\":\"exit 101:    Compiling px-coding-smoke v0.1.0 (/tmp/px-coding-smoke-c1e32b65-c44f-4581-9600-ecf9327729ff)\\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s\\n     Running unittests src/lib.rs (target/debug/deps/px_coding_smoke-dc3dddb89fd8a772)\\nerror: test failed, to rerun pass `--lib`\\n; artifact=/tmp/px-coding-smoke-c1e32b65-c44f-4581-9600-ecf9327729ff/artifacts/commands/2026-06-01/28924160-67a4-45fb-b2b3-069980b31a50.json\",\"execution_ms\":146,\"output_preview\":\"\",\"step\":1,\"success\":false,\"tool\":\"shell.restricted\"},\"session_id\":\"7d172724-9aed-422a-828f-5a6e97390eac\",\"summary\":\"tool 'shell.restricted' failed in 146ms\",\"task_id\":\"6b502e2b-a557-4640-8a24-f6ad06997f24\",\"timestamp\":\"2026-06-01T19:11:14.705276641+00:00\"}\n+{\"event_type\":\"policy.allowed\",\"id\":417,\"payload\":{\"params_preview\":\"path=src/lib.rs mode=apply\",\"reason\":\"policy pass\",\"risk_score\":42,\"step\":2,\"tool\":\"fs.replace\"},\"session_id\":\"7d172724-9aed-422a-828f-5a6e97390eac\",\"summary\":\"policy Allow for 'fs.replace': policy pass\",\"task_id\":\"6b502e2b-a557-4640-8a24-f6ad06997f24\",\"timestamp\":\"2026-06-01T19:11:14.707270991+00:00\"}\n+{\"event_type\":\"tool.started\",\"id\":418,\"payload\":{\"params_preview\":\"path=src/lib.rs mode=apply\",\"step\":2,\"tool\":\"fs.replace\"},\"session_id\":\"7d172724-9aed-422a-828f-5a6e97390eac\",\"summary\":\"running tool 'fs.replace' :: path=src/lib.rs mode=apply\",\"task_id\":\"6b502e2b-a557-4640-8a24-f6ad06997f24\",\"timestamp\":\"2026-06-01T19:11:14.707679958+00:00\"}\n+{\"event_type\":\"tool.succeeded\",\"id\":419,\"payload\":{\"artifacts\":[\"/tmp/px-coding-smoke-c1e32b65-c44f-4581-9600-ecf9327729ff/artifacts/replacements/2026-06-01/cc6e292f-781a-4583-858d-d6c5c16b57f1.diff\"],\"error\":null,\"execution_ms\":0,\"output_preview\":\"replace apply succeeded for src/lib.rs; old_bytes=16 new_bytes=16; artifact=/tmp/px-coding-smoke-c1e32b65-c44f-4581-9600-ecf9327729ff/artifacts/replacements/2026-06-01/cc6e292f-781a-4583-858d-d6c5c16b57f1.diff\",\"step\":2,\"success\":true,\"tool\":\"fs.replace\"},\"session_id\":\"7d172724-9aed-422a-828f-5a6e97390eac\",\"summary\":\"tool 'fs.replace' succeeded in 0ms\",\"task_id\":\"6b502e2b-a557-4640-8a24-f6ad06997f24\",\"timestamp\":\"2026-06-01T19:11:14.709885904+00:00\"}\n+{\"event_type\":\"policy.allowed\",\"id\":420,\"payload\":{\"params_preview\":\"command=cargo test\",\"reason\":\"policy pass\",\"risk_score\":60,\"step\":3,\"tool\":\"shell.restricted\"},\"session_id\":\"7d172724-9aed-422a-828f-5a6e97390eac\",\"summary\":\"policy Allow for 'shell.restricted': policy pass\",\"task_id\":\"6b502e2b-a557-4640-8a24-f6ad06997f24\",\"timestamp\":\"2026-06-01T19:11:14.711877913+00:00\"}\n+{\"event_type\":\"tool.started\",\"id\":421,\"payload\":{\"params_preview\":\"command=cargo test\",\"step\":3,\"tool\":\"shell.restricted\"},\"session_id\":\"7d172724-9aed-422a-828f-5a6e97390eac\",\"summary\":\"running tool 'shell.restricted' :: command=cargo test\",\"task_id\":\"6b502e2b-a557-4640-8a24-f6ad06997f24\",\"timestamp\":\"2026-06-01T19:11:14.712206655+00:00\"}\n+{\"event_type\":\"tool.succeeded\",\"id\":422,\"payload\":{\"artifacts\":[\"/tmp/px-coding-smoke-c1e32b65-c44f-4581-9600-ecf9327729ff/artifacts/commands/2026-06-01/41606b70-c6e6-478e-98d7-fd440d3bc162.json\"],\"error\":null,\"execution_ms\":111,\"output_preview\":\"\\nrunning 1 test\\ntest tests::adds_numbers ... ok\\n\\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\\n\\n\\nrunning 0 tests\\n\\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\\n\\n\\nstderr:    Compiling px-coding-smoke v0.1....\",\"step\":3,\"success\":true,\"tool\":\"shell.restricted\"},\"session_id\":\"7d172724-9aed-422a-828f-5a6e97390eac\",\"summary\":\"tool 'shell.restricted' succeeded in 111ms\",\"task_id\":\"6b502e2b-a557-4640-8a24-f6ad06997f24\",\"timestamp\":\"2026-06-01T19:11:14.824955117+00:00\"}\ndiff --git a/professor-x/src/main.rs b/professor-x/src/main.rs\nindex e217aed..1dfb5da 100644\n--- a/professor-x/src/main.rs\n+++ b/professor-x/src/main.rs\n@@ -31,6 +31,7 @@ use evolved::verify_diff_in_sandbox;\n use evolved::verify_node_in_sandbox;\n use evolved::{EvolvedLoop, HiroRunner};\n use memd::MemoryManager;\n+use memd::autonomy_queue::{AutonomyQueueItem, AutonomyQueueStore};\n use memd::coding_sessions::{CodingSessionRecord, CodingSessionStore};\n use memd::coding_smoke::{CodingSmokeRecord, CodingSmokeStore};\n use memd::events::EventStore;\n@@ -157,6 +158,10 @@ struct CliArgs {\n     autonomous_run_cycles: Option<u32>,\n     /// Run N bounded autonomous Prof X cycles including one commit-capable gate and exit.\n     autonomous_run_commit_cycles: Option<u32>,\n+    /// Print the last N persisted autonomous queue items and exit.\n+    autonomy_queue_limit: Option<usize>,\n+    /// Run N persisted autonomous queue items, seeding one default item if empty.\n+    autonomy_step_count: Option<u32>,\n     /// Run one sandbox-verified autonomous commit smoke and exit.\n     operator_commit_smoke: bool,\n     /// Run one seeded autonomous evolution cycle and exit.\n@@ -271,6 +276,8 @@ fn parse_args() -> CliArgs {\n         publish_after_run: false,\n         autonomous_run_cycles: None,\n         autonomous_run_commit_cycles: None,\n+        autonomy_queue_limit: None,\n+        autonomy_step_count: None,\n         operator_commit_smoke: false,\n         evolution_cycle: false,\n         validate_artifacts: false,\n@@ -520,6 +527,22 @@ fn parse_args() -> CliArgs {\n                 cli.coding_sessions_limit = Some(limit.unwrap_or(10));\n                 i += if limit.is_some() { 2 } else { 1 };\n             }\n+            \"--autonomy-queue\" | \"--prof-x-queue\" => {\n+                let limit = args\n+                    .get(i + 1)\n+                    .filter(|next| !next.starts_with(\"--\"))\n+                    .and_then(|next| next.parse::<usize>().ok());\n+                cli.autonomy_queue_limit = Some(limit.unwrap_or(10));\n+                i += if limit.is_some() { 2 } else { 1 };\n+            }\n+            \"--autonomy-step\" | \"--prof-x-step\" => {\n+                let count = args\n+                    .get(i + 1)\n+                    .filter(|next| !next.starts_with(\"--\"))\n+                    .and_then(|next| next.parse::<u32>().ok());\n+                cli.autonomy_step_count = Some(count.unwrap_or(1));\n+                i += if count.is_some() { 2 } else { 1 };\n+            }\n             \"--supervised-loop\" => {\n                 let cycles = args\n                     .get(i + 1)\n@@ -646,6 +669,7 @@ async fn main() -> Result<()> {\n         || cli.transcripts_limit.is_some()\n         || cli.task_runs_limit.is_some()\n         || cli.coding_sessions_limit.is_some()\n+        || cli.autonomy_queue_limit.is_some()\n         || cli.work_loops_limit.is_some()\n         || cli.run_log_limit.is_some()\n         || cli.brief\n@@ -726,6 +750,10 @@ async fn main() -> Result<()> {\n         return print_coding_sessions(Arc::clone(&memory), limit);\n     }\n \n+    if let Some(limit) = cli.autonomy_queue_limit {\n+        return print_autonomy_queue(Arc::clone(&memory), limit);\n+    }\n+\n     if let Some(limit) = cli.work_loops_limit {\n         return print_work_loops(Arc::clone(&memory), limit);\n     }\n@@ -1031,6 +1059,19 @@ async fn main() -> Result<()> {\n         .await;\n     }\n \n+    if let Some(count) = cli.autonomy_step_count {\n+        return run_autonomy_queue_steps(\n+            Arc::clone(&registry),\n+            Arc::clone(&policy),\n+            Arc::clone(&memory),\n+            Arc::clone(&events),\n+            Arc::clone(&transcripts),\n+            count,\n+            cli.publish_after_run,\n+        )\n+        .await;\n+    }\n+\n     if let Some(cycles) = cli.autonomous_run_cycles {\n         return run_autonomous_operator_run(\n             Arc::clone(&registry),\n@@ -3046,6 +3087,144 @@ async fn run_autonomous_operator_run(\n     .await\n }\n \n+async fn run_autonomy_queue_steps(\n+    registry: Arc<std::sync::RwLock<ToolRegistry>>,\n+    policy: Arc<PolicyEngine>,\n+    memory: Arc<MemoryManager>,\n+    events: Arc<EventStore>,\n+    transcripts: Arc<TranscriptStore>,\n+    count: u32,\n+    publish_after_run: bool,\n+) -> Result<()> {\n+    let count = count.clamp(1, 10);\n+    let store = AutonomyQueueStore::new(Arc::clone(&memory.db));\n+    if store.count_pending()? == 0 {\n+        let seeded = store.enqueue(\n+            \"bootstrap autonomous harness work: run a bounded coding-agent smoke and record reviewable evidence\",\n+            \"operator_run\",\n+            \"core\",\n+            1,\n+            50,\n+        )?;\n+        events.append(\n+            None,\n+            None,\n+            \"autonomy.queue.seeded\",\n+            format!(\"seeded autonomous queue item {}\", short_fragment(&seeded.id)),\n+            serde_json::json!({\n+                \"queue_id\": seeded.id,\n+                \"goal\": seeded.goal,\n+                \"kind\": seeded.kind,\n+                \"profile\": seeded.profile,\n+                \"cycles\": seeded.cycles,\n+                \"priority\": seeded.priority,\n+            }),\n+        )?;\n+    }\n+\n+    println!(\"Professor X autonomy queue step\");\n+    println!(\"  requested items: {count}\");\n+    println!(\"  queue: cargo run -- --autonomy-queue 10\");\n+    println!(\"  watch: cargo run -- --observe-work\");\n+\n+    for index in 1..=count {\n+        let Some(item) = store.next_pending()? else {\n+            println!(\"  no pending queue item at step {index}\");\n+            break;\n+        };\n+        let profile = WorkLoopProfile::parse(&item.profile).unwrap_or(WorkLoopProfile::Core);\n+        store.mark_running(&item.id)?;\n+        events.append(\n+            None,\n+            None,\n+            \"autonomy.queue.started\",\n+            format!(\n+                \"started autonomous queue item {}: {}\",\n+                short_fragment(&item.id),\n+                truncate(&item.goal, 100)\n+            ),\n+            serde_json::json!({\n+                \"queue_id\": item.id,\n+                \"goal\": item.goal,\n+                \"kind\": item.kind,\n+                \"profile\": profile.as_str(),\n+                \"cycles\": item.cycles,\n+                \"priority\": item.priority,\n+                \"step\": index,\n+                \"steps\": count,\n+            }),\n+        )?;\n+\n+        let before_run = WorkLoopRunStore::new(Arc::clone(&memory.db))\n+            .latest()?\n+            .map(|run| run.run_id);\n+        let result = run_supervised_loop(\n+            WorkLoopRunKind::Operator,\n+            Arc::clone(&registry),\n+            Arc::clone(&policy),\n+            Arc::clone(&memory),\n+            Arc::clone(&events),\n+            Arc::clone(&transcripts),\n+            item.cycles,\n+            profile,\n+            publish_after_run,\n+        )\n+        .await;\n+        let latest_run = WorkLoopRunStore::new(Arc::clone(&memory.db)).latest()?;\n+        let new_run = latest_run\n+            .filter(|run| Some(run.run_id.clone()) != before_run);\n+        match result {\n+            Ok(()) => {\n+                store.mark_finished(\n+                    &item.id,\n+                    \"done\",\n+                    new_run.as_ref().map(|run| run.run_id.as_str()),\n+                    new_run.as_ref().map(|run| run.report_path.as_str()),\n+                    None,\n+                )?;\n+                events.append(\n+                    None,\n+                    None,\n+                    \"autonomy.queue.completed\",\n+                    format!(\"completed autonomous queue item {}\", short_fragment(&item.id)),\n+                    serde_json::json!({\n+                        \"queue_id\": item.id,\n+                        \"result_run_id\": new_run.as_ref().map(|run| run.run_id.clone()),\n+                        \"result_report_path\": new_run.as_ref().map(|run| run.report_path.clone()),\n+                        \"passed\": true,\n+                    }),\n+                )?;\n+            }\n+            Err(err) => {\n+                let reason = err.to_string();\n+                store.mark_finished(\n+                    &item.id,\n+                    \"failed\",\n+                    new_run.as_ref().map(|run| run.run_id.as_str()),\n+                    new_run.as_ref().map(|run| run.report_path.as_str()),\n+                    Some(&reason),\n+                )?;\n+                events.append(\n+                    None,\n+                    None,\n+                    \"autonomy.queue.failed\",\n+                    format!(\"failed autonomous queue item {}: {}\", short_fragment(&item.id), truncate(&reason, 100)),\n+                    serde_json::json!({\n+                        \"queue_id\": item.id,\n+                        \"result_run_id\": new_run.as_ref().map(|run| run.run_id.clone()),\n+                        \"result_report_path\": new_run.as_ref().map(|run| run.report_path.clone()),\n+                        \"passed\": false,\n+                        \"error\": reason,\n+                    }),\n+                )?;\n+                return Err(err);\n+            }\n+        }\n+    }\n+\n+    print_autonomy_queue(memory, 10)\n+}\n+\n async fn run_supervised_loop_live(\n     run_kind: WorkLoopRunKind,\n     registry: Arc<std::sync::RwLock<ToolRegistry>>,\n@@ -5696,6 +5875,12 @@ async fn run_interactive_tasks(\n             print_coding_sessions(Arc::clone(&memory), limit)?;\n             continue;\n         }\n+        if let Some(rest) = input.strip_prefix(\"/queue\") {\n+            let limit = rest.trim().parse::<usize>().unwrap_or(10);\n+            record_console_command(&events, \"queue\", Some(limit.to_string()))?;\n+            print_autonomy_queue(Arc::clone(&memory), limit)?;\n+            continue;\n+        }\n         if let Some(rest) = input.strip_prefix(\"/runs\") {\n             let limit = rest.trim().parse::<usize>().unwrap_or(5);\n             record_console_command(&events, \"runs\", Some(limit.to_string()))?;\n@@ -5726,6 +5911,21 @@ async fn run_interactive_tasks(\n             print_task_review(Arc::clone(&transcripts), task_ref)?;\n             continue;\n         }\n+        if let Some(rest) = input.strip_prefix(\"/step\") {\n+            let count = rest.trim().parse::<u32>().unwrap_or(1);\n+            record_console_command(&events, \"step\", Some(count.to_string()))?;\n+            run_autonomy_queue_steps(\n+                Arc::clone(&registry),\n+                Arc::clone(&policy),\n+                Arc::clone(&memory),\n+                Arc::clone(&events),\n+                Arc::clone(&transcripts),\n+                count,\n+                false,\n+            )\n+            .await?;\n+            continue;\n+        }\n         if let Some(rest) = input.strip_prefix(\"/run-commit\") {\n             let cycles = rest.trim().parse::<u32>().unwrap_or(5);\n             record_console_command(&events, \"run-commit\", Some(cycles.to_string()))?;\n@@ -5816,11 +6016,13 @@ fn format_interactive_help() -> String {\n         \"  /cockpit        show live state, current run, latest coding session, and trace\",\n         \"  /work [n]       show recent work/tool/task events\",\n         \"  /sessions [n]   show recent coding-agent sessions and evidence paths\",\n+        \"  /queue [n]      show persistent autonomous work queue\",\n         \"  /runs [n]       show recent operator/autonomous run ledger entries\",\n         \"  /review [run]   review latest or selected run evidence\",\n         \"  /replay [run]   replay latest or selected run timeline\",\n         \"  /publish [run]  commit selected run report/ledger artifacts\",\n         \"  /task-review [task] review latest or selected task transcript\",\n+        \"  /step [n]       run n queued autonomous work items, seeding one if empty\",\n         \"  /run [n]        start a bounded core Prof X run\",\n         \"  /run-commit [n] start a commit-capable verified Prof X run\",\n         \"  /events [n]     show raw recent events\",\n@@ -6105,6 +6307,8 @@ fn format_operator_help() -> String {\n         \"\",\n         \"Watch him work\",\n         \"  cargo run -- --prof-x-live 5\",\n+        \"  cargo run -- --prof-x-step 1\",\n+        \"  cargo run -- --prof-x-queue 10\",\n         \"  cargo run -- --observe-work\",\n         \"  cargo run -- --cockpit\",\n         \"  cargo run -- --watch-work\",\n@@ -6260,6 +6464,42 @@ fn coding_session_commit_hint(session: &CodingSessionRecord) -> Option<String> {\n         .map(|commit| commit[..commit.len().min(8)].to_string())\n }\n \n+fn print_autonomy_queue(memory: Arc<MemoryManager>, limit: usize) -> Result<()> {\n+    let items = AutonomyQueueStore::new(Arc::clone(&memory.db)).recent(limit)?;\n+    if items.is_empty() {\n+        println!(\"No autonomous queue items recorded yet.\");\n+        return Ok(());\n+    }\n+    println!(\"Recent autonomous queue items\");\n+    for item in items {\n+        println!(\"{}\", format_autonomy_queue_item(&item));\n+        if let Some(report) = &item.result_report_path {\n+            println!(\"  report: {report}\");\n+        }\n+        if let Some(run_id) = &item.result_run_id {\n+            println!(\"  run: {}\", short_fragment(run_id));\n+        }\n+        if let Some(reason) = &item.failure_reason {\n+            println!(\"  failure: {}\", truncate(reason, 140));\n+        }\n+    }\n+    Ok(())\n+}\n+\n+fn format_autonomy_queue_item(item: &AutonomyQueueItem) -> String {\n+    format!(\n+        \"{} {} queue={} priority={} {}:{} cycles={} {}\",\n+        item.updated_at.format(\"%Y-%m-%d %H:%M:%S\"),\n+        item.status,\n+        short_fragment(&item.id),\n+        item.priority,\n+        item.kind,\n+        item.profile,\n+        item.cycles,\n+        truncate(&item.goal, 96),\n+    )\n+}\n+\n fn print_work_loops(memory: Arc<MemoryManager>, limit: usize) -> Result<()> {\n     let runs = WorkLoopRunStore::new(Arc::clone(&memory.db)).recent(limit)?;\n     if runs.is_empty() {\n@@ -7599,6 +7839,7 @@ fn work_signal_summary(events: &[memd::events::AgentEvent]) -> String {\n     let mut coding = 0;\n     let mut evolution = 0;\n     let mut loop_events = 0;\n+    let mut autonomy = 0;\n     let mut transcripts = 0;\n     let mut console = 0;\n     for event in events {\n@@ -7615,6 +7856,8 @@ fn work_signal_summary(events: &[memd::events::AgentEvent]) -> String {\n             evolution += 1;\n         } else if event_type.starts_with(\"work_loop.\") {\n             loop_events += 1;\n+        } else if event_type.starts_with(\"autonomy.queue.\") || event_type.starts_with(\"autonomous_run.\") {\n+            autonomy += 1;\n         } else if event_type == \"transcript.written\" {\n             transcripts += 1;\n         } else if event_type.starts_with(\"console.\") {\n@@ -7622,7 +7865,7 @@ fn work_signal_summary(events: &[memd::events::AgentEvent]) -> String {\n         }\n     }\n     format!(\n-        \"events={} task={} tool={} policy={} coding={} evolution={} loop={} transcript={} console={}\",\n+        \"events={} task={} tool={} policy={} coding={} evolution={} loop={} autonomy={} transcript={} console={}\",\n         events.len(),\n         task,\n         tool,\n@@ -7630,6 +7873,7 @@ fn work_signal_summary(events: &[memd::events::AgentEvent]) -> String {\n         coding,\n         evolution,\n         loop_events,\n+        autonomy,\n         transcripts,\n         console\n     )\n@@ -7762,6 +8006,9 @@ fn format_work_event(event: &memd::events::AgentEvent) -> String {\n     if let Some(session) = event.payload[\"session_id\"].as_str() {\n         meta.push(format!(\"session={}\", short_fragment(session)));\n     }\n+    if let Some(queue) = event.payload[\"queue_id\"].as_str() {\n+        meta.push(format!(\"queue={}\", short_fragment(queue)));\n+    }\n     if let Some(cycle) = event.payload[\"cycle\"].as_i64() {\n         let total = event.payload[\"cycles\"]\n             .as_i64()\n@@ -7888,6 +8135,10 @@ fn event_action(event: &memd::events::AgentEvent) -> &'static str {\n         \"coding.smoke.failed\" => \"Failed coding smoke\",\n         \"transcript.written\" => \"Wrote transcript\",\n         \"console.command\" => \"Operator command\",\n+        \"autonomy.queue.seeded\" => \"Seeded queue\",\n+        \"autonomy.queue.started\" => \"Started queued work\",\n+        \"autonomy.queue.completed\" => \"Completed queued work\",\n+        \"autonomy.queue.failed\" => \"Failed queued work\",\n         \"evolution.patch_apply.committed\" => \"Committed verified patch\",\n         \"evolution.operator_commit.committed\" => \"Committed operator proposal\",\n         \"evolution.patch_apply.rejected\" | \"evolution.proposal_dry_run.rejected\" => {\n@@ -7895,7 +8146,7 @@ fn event_action(event: &memd::events::AgentEvent) -> &'static str {\n         }\n         event_type if event_type.starts_with(\"evolution.\") => \"Evolution event\",\n         event_type if event_type.starts_with(\"policy.\") => \"Policy gate\",\n-        event_type if event_type.starts_with(\"autonomous_run.\") => \"Autonomous run\",\n+        event_type if event_type.starts_with(\"autonomous_run.\") || event_type.starts_with(\"autonomy.queue.\") => \"Autonomous run\",\n         _ => \"Observed\",\n     }\n }\n@@ -7925,6 +8176,8 @@ fn work_event_label(event_type: &str) -> &'static str {\n         \"EVOLVE\"\n     } else if event_type.starts_with(\"autonomous_run.\") {\n         \"AUTON\"\n+    } else if event_type.starts_with(\"autonomy.queue.\") {\n+        \"QUEUE\"\n     } else if event_type.starts_with(\"work_loop.\") {\n         \"LOOP\"\n     } else if event_type == \"transcript.written\" {\n@@ -8234,6 +8487,8 @@ mod tests {\n \n         assert!(help.contains(\"Professor X operator commands\"));\n         assert!(help.contains(\"--prof-x-live 5\"));\n+        assert!(help.contains(\"--prof-x-step 1\"));\n+        assert!(help.contains(\"--prof-x-queue 10\"));\n         assert!(help.contains(\"--observe-work\"));\n         assert!(help.contains(\"--prof-x-code-live\"));\n         assert!(help.contains(\"--prof-x-skill-live\"));\n@@ -8254,11 +8509,13 @@ mod tests {\n         assert!(help.contains(\"/cockpit\"));\n         assert!(help.contains(\"/work [n]\"));\n         assert!(help.contains(\"/sessions [n]\"));\n+        assert!(help.contains(\"/queue [n]\"));\n         assert!(help.contains(\"/runs [n]\"));\n         assert!(help.contains(\"/review [run]\"));\n         assert!(help.contains(\"/replay [run]\"));\n         assert!(help.contains(\"/publish [run]\"));\n         assert!(help.contains(\"/task-review [task]\"));\n+        assert!(help.contains(\"/step [n]\"));\n         assert!(help.contains(\"/run [n]\"));\n         assert!(help.contains(\"/run-commit [n]\"));\n         assert!(help.contains(\"/events [n]\"));\n@@ -8333,6 +8590,31 @@ mod tests {\n         assert!(work_signal_summary(&[event]).contains(\"coding=1\"));\n     }\n \n+    #[test]\n+    fn format_work_event_surfaces_autonomy_queue_identity() {\n+        let event = memd::events::AgentEvent {\n+            id: 43,\n+            timestamp: chrono::Utc::now(),\n+            session_id: None,\n+            task_id: None,\n+            event_type: \"autonomy.queue.started\".to_string(),\n+            summary: \"started autonomous queue item 12345678\".to_string(),\n+            payload: serde_json::json!({\n+                \"queue_id\": \"12345678-aaaa-bbbb-cccc-123456789abc\",\n+                \"goal\": \"run the next harness gate\",\n+                \"profile\": \"core\",\n+                \"cycles\": 1,\n+            }),\n+        };\n+\n+        let line = format_work_event(&event);\n+\n+        assert!(line.contains(\"QUEUE\"));\n+        assert!(line.contains(\"Started queued work\"));\n+        assert!(line.contains(\"queue=12345678\"));\n+        assert!(work_signal_summary(&[event]).contains(\"autonomy=1\"));\n+    }\n+\n     #[test]\n     fn operator_skill_patch_sanitizes_goal_and_paths() {\n         let body = operator_goal_skill_body(\ndiff --git a/professor-x/src/memd/events.rs b/professor-x/src/memd/events.rs\nindex 768f1d0..3f86ea1 100644\n--- a/professor-x/src/memd/events.rs\n+++ b/professor-x/src/memd/events.rs\n@@ -204,6 +204,7 @@ fn work_event_where_clause() -> &'static str {\n       OR event_type LIKE 'console.%'\n       OR event_type LIKE 'evolution.%'\n       OR event_type \n[... git diff truncated in transcript]",
+    "git_diff_truncated": true
+  },
+  "events": [
+    {
+      "id": 410,
+      "timestamp": "2026-06-01T19:11:14.554564557Z",
+      "session_id": null,
+      "event_type": "task.queued",
+      "summary": "queued task: deterministic coding smoke: fix a failing Rust addition test and verify it passes",
+      "payload": {
+        "max_attempts": 1,
+        "priority": 100,
+        "task_type": "UserRequest",
+        "workspace": "/tmp/px-coding-smoke-c1e32b65-c44f-4581-9600-ecf9327729ff"
+      }
+    },
+    {
+      "id": 411,
+      "timestamp": "2026-06-01T19:11:14.554830296Z",
+      "session_id": null,
+      "event_type": "task.started",
+      "summary": "started task: deterministic coding smoke: fix a failing Rust addition test and verify it passes",
+      "payload": {
+        "max_attempts": 1,
+        "priority": 100,
+        "task_type": "UserRequest",
+        "workspace": "/tmp/px-coding-smoke-c1e32b65-c44f-4581-9600-ecf9327729ff"
+      }
+    },
+    {
+      "id": 412,
+      "timestamp": "2026-06-01T19:11:14.555060718Z",
+      "session_id": "7d172724-9aed-422a-828f-5a6e97390eac",
+      "event_type": "task.attempt.started",
+      "summary": "attempt 1/1 started",
+      "payload": {
+        "attempt": 1
+      }
+    },
+    {
+      "id": 413,
+      "timestamp": "2026-06-01T19:11:14.555237711Z",
+      "session_id": null,
+      "event_type": "coding.smoke.started",
+      "summary": "starting deterministic coding-agent smoke",
+      "payload": {
+        "exercise": "add_i32",
+        "workspace": "/tmp/px-coding-smoke-c1e32b65-c44f-4581-9600-ecf9327729ff"
+      }
+    },
+    {
+      "id": 414,
+      "timestamp": "2026-06-01T19:11:14.556381556Z",
+      "session_id": "7d172724-9aed-422a-828f-5a6e97390eac",
+      "event_type": "policy.allowed",
+      "summary": "policy Allow for 'shell.restricted': policy pass",
+      "payload": {
+        "params_preview": "command=cargo test",
+        "reason": "policy pass",
+        "risk_score": 60,
+        "step": 1,
+        "tool": "shell.restricted"
+      }
+    },
+    {
+      "id": 415,
+      "timestamp": "2026-06-01T19:11:14.556641810Z",
+      "session_id": "7d172724-9aed-422a-828f-5a6e97390eac",
+      "event_type": "tool.started",
+      "summary": "running tool 'shell.restricted' :: command=cargo test",
+      "payload": {
+        "params_preview": "command=cargo test",
+        "step": 1,
+        "tool": "shell.restricted"
+      }
+    },
+    {
+      "id": 416,
+      "timestamp": "2026-06-01T19:11:14.705276641Z",
+      "session_id": "7d172724-9aed-422a-828f-5a6e97390eac",
+      "event_type": "tool.failed",
+      "summary": "tool 'shell.restricted' failed in 146ms",
+      "payload": {
+        "artifacts": [],
+        "error": "exit 101:    Compiling px-coding-smoke v0.1.0 (/tmp/px-coding-smoke-c1e32b65-c44f-4581-9600-ecf9327729ff)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s\n     Running unittests src/lib.rs (target/debug/deps/px_coding_smoke-dc3dddb89fd8a772)\nerror: test failed, to rerun pass `--lib`\n; artifact=/tmp/px-coding-smoke-c1e32b65-c44f-4581-9600-ecf9327729ff/artifacts/commands/2026-06-01/28924160-67a4-45fb-b2b3-069980b31a50.json",
+        "execution_ms": 146,
+        "output_preview": "",
+        "step": 1,
+        "success": false,
+        "tool": "shell.restricted"
+      }
+    },
+    {
+      "id": 417,
+      "timestamp": "2026-06-01T19:11:14.707270991Z",
+      "session_id": "7d172724-9aed-422a-828f-5a6e97390eac",
+      "event_type": "policy.allowed",
+      "summary": "policy Allow for 'fs.replace': policy pass",
+      "payload": {
+        "params_preview": "path=src/lib.rs mode=apply",
+        "reason": "policy pass",
+        "risk_score": 42,
+        "step": 2,
+        "tool": "fs.replace"
+      }
+    },
+    {
+      "id": 418,
+      "timestamp": "2026-06-01T19:11:14.707679958Z",
+      "session_id": "7d172724-9aed-422a-828f-5a6e97390eac",
+      "event_type": "tool.started",
+      "summary": "running tool 'fs.replace' :: path=src/lib.rs mode=apply",
+      "payload": {
+        "params_preview": "path=src/lib.rs mode=apply",
+        "step": 2,
+        "tool": "fs.replace"
+      }
+    },
+    {
+      "id": 419,
+      "timestamp": "2026-06-01T19:11:14.709885904Z",
+      "session_id": "7d172724-9aed-422a-828f-5a6e97390eac",
+      "event_type": "tool.succeeded",
+      "summary": "tool 'fs.replace' succeeded in 0ms",
+      "payload": {
+        "artifacts": [
+          "/tmp/px-coding-smoke-c1e32b65-c44f-4581-9600-ecf9327729ff/artifacts/replacements/2026-06-01/cc6e292f-781a-4583-858d-d6c5c16b57f1.diff"
+        ],
+        "error": null,
+        "execution_ms": 0,
+        "output_preview": "replace apply succeeded for src/lib.rs; old_bytes=16 new_bytes=16; artifact=/tmp/px-coding-smoke-c1e32b65-c44f-4581-9600-ecf9327729ff/artifacts/replacements/2026-06-01/cc6e292f-781a-4583-858d-d6c5c16b57f1.diff",
+        "step": 2,
+        "success": true,
+        "tool": "fs.replace"
+      }
+    },
+    {
+      "id": 420,
+      "timestamp": "2026-06-01T19:11:14.711877913Z",
+      "session_id": "7d172724-9aed-422a-828f-5a6e97390eac",
+      "event_type": "policy.allowed",
+      "summary": "policy Allow for 'shell.restricted': policy pass",
+      "payload": {
+        "params_preview": "command=cargo test",
+        "reason": "policy pass",
+        "risk_score": 60,
+        "step": 3,
+        "tool": "shell.restricted"
+      }
+    },
+    {
+      "id": 421,
+      "timestamp": "2026-06-01T19:11:14.712206655Z",
+      "session_id": "7d172724-9aed-422a-828f-5a6e97390eac",
+      "event_type": "tool.started",
+      "summary": "running tool 'shell.restricted' :: command=cargo test",
+      "payload": {
+        "params_preview": "command=cargo test",
+        "step": 3,
+        "tool": "shell.restricted"
+      }
+    },
+    {
+      "id": 422,
+      "timestamp": "2026-06-01T19:11:14.824955117Z",
+      "session_id": "7d172724-9aed-422a-828f-5a6e97390eac",
+      "event_type": "tool.succeeded",
+      "summary": "tool 'shell.restricted' succeeded in 111ms",
+      "payload": {
+        "artifacts": [
+          "/tmp/px-coding-smoke-c1e32b65-c44f-4581-9600-ecf9327729ff/artifacts/commands/2026-06-01/41606b70-c6e6-478e-98d7-fd440d3bc162.json"
+        ],
+        "error": null,
+        "execution_ms": 111,
+        "output_preview": "\nrunning 1 test\ntest tests::adds_numbers ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nstderr:    Compiling px-coding-smoke v0.1....",
+        "step": 3,
+        "success": true,
+        "tool": "shell.restricted"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "index": 1,
+      "thought": "run the failing test before editing",
+      "tool_name": "shell.restricted",
+      "params": {
+        "command": "cargo test"
+      },
+      "risk_score": 60,
+      "observation_success": false,
+      "observation_output": "",
+      "observation_error": "exit 101:    Compiling px-coding-smoke v0.1.0 (/tmp/px-coding-smoke-c1e32b65-c44f-4581-9600-ecf9327729ff)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s\n     Running unittests src/lib.rs (target/debug/deps/px_coding_smoke-dc3dddb89fd8a772)\nerror: test failed, to rerun pass `--lib`\n; artifact=/tmp/px-coding-smoke-c1e32b65-c44f-4581-9600-ecf9327729ff/artifacts/commands/2026-06-01/28924160-67a4-45fb-b2b3-069980b31a50.json",
+      "observation_artifacts": [],
+      "execution_ms": 146,
+      "timestamp": "2026-06-01T19:11:14.705144012Z"
+    },
+    {
+      "index": 2,
+      "thought": "apply the minimal exact replacement",
+      "tool_name": "fs.replace",
+      "params": {
+        "mode": "apply",
+        "new": "    left + right",
+        "old": "    left - right",
+        "path": "src/lib.rs"
+      },
+      "risk_score": 42,
+      "observation_success": true,
+      "observation_output": "replace apply succeeded for src/lib.rs; old_bytes=16 new_bytes=16; artifact=/tmp/px-coding-smoke-c1e32b65-c44f-4581-9600-ecf9327729ff/artifacts/replacements/2026-06-01/cc6e292f-781a-4583-858d-d6c5c16b57f1.diff",
+      "observation_error": null,
+      "observation_artifacts": [
+        "/tmp/px-coding-smoke-c1e32b65-c44f-4581-9600-ecf9327729ff/artifacts/replacements/2026-06-01/cc6e292f-781a-4583-858d-d6c5c16b57f1.diff"
+      ],
+      "execution_ms": 0,
+      "timestamp": "2026-06-01T19:11:14.709747186Z"
+    },
+    {
+      "index": 3,
+      "thought": "rerun tests after the fix",
+      "tool_name": "shell.restricted",
+      "params": {
+        "command": "cargo test"
+      },
+      "risk_score": 60,
+      "observation_success": true,
+      "observation_output": "\nrunning 1 test\ntest tests::adds_numbers ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nstderr:    Compiling px-coding-smoke v0.1.0 (/tmp/px-coding-smoke-c1e32b65-c44f-4581-9600-ecf9327729ff)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s\n     Running unittests src/lib.rs (target/debug/deps/px_coding_smoke-dc3dddb89fd8a772)\n   Doc-tests px_coding_smoke\n\n[full output: /tmp/px-coding-smoke-c1e32b65-c44f-4581-9600-ecf9327729ff/artifacts/commands/2026-06-01/41606b70-c6e6-478e-98d7-fd440d3bc162.json]",
+      "observation_error": null,
+      "observation_artifacts": [
+        "/tmp/px-coding-smoke-c1e32b65-c44f-4581-9600-ecf9327729ff/artifacts/commands/2026-06-01/41606b70-c6e6-478e-98d7-fd440d3bc162.json"
+      ],
+      "execution_ms": 111,
+      "timestamp": "2026-06-01T19:11:14.824820632Z"
+    }
+  ],
+  "recorded_at": "2026-06-01T19:11:14.825534851Z"
+}

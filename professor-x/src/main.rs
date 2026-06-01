@@ -31,6 +31,7 @@ use evolved::verify_diff_in_sandbox;
 use evolved::verify_node_in_sandbox;
 use evolved::{EvolvedLoop, HiroRunner};
 use memd::MemoryManager;
+use memd::autonomy_queue::{AutonomyQueueItem, AutonomyQueueStore};
 use memd::coding_sessions::{CodingSessionRecord, CodingSessionStore};
 use memd::coding_smoke::{CodingSmokeRecord, CodingSmokeStore};
 use memd::events::EventStore;
@@ -157,6 +158,10 @@ struct CliArgs {
     autonomous_run_cycles: Option<u32>,
     /// Run N bounded autonomous Prof X cycles including one commit-capable gate and exit.
     autonomous_run_commit_cycles: Option<u32>,
+    /// Print the last N persisted autonomous queue items and exit.
+    autonomy_queue_limit: Option<usize>,
+    /// Run N persisted autonomous queue items, seeding one default item if empty.
+    autonomy_step_count: Option<u32>,
     /// Run one sandbox-verified autonomous commit smoke and exit.
     operator_commit_smoke: bool,
     /// Run one seeded autonomous evolution cycle and exit.
@@ -271,6 +276,8 @@ fn parse_args() -> CliArgs {
         publish_after_run: false,
         autonomous_run_cycles: None,
         autonomous_run_commit_cycles: None,
+        autonomy_queue_limit: None,
+        autonomy_step_count: None,
         operator_commit_smoke: false,
         evolution_cycle: false,
         validate_artifacts: false,
@@ -520,6 +527,22 @@ fn parse_args() -> CliArgs {
                 cli.coding_sessions_limit = Some(limit.unwrap_or(10));
                 i += if limit.is_some() { 2 } else { 1 };
             }
+            "--autonomy-queue" | "--prof-x-queue" => {
+                let limit = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .and_then(|next| next.parse::<usize>().ok());
+                cli.autonomy_queue_limit = Some(limit.unwrap_or(10));
+                i += if limit.is_some() { 2 } else { 1 };
+            }
+            "--autonomy-step" | "--prof-x-step" => {
+                let count = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .and_then(|next| next.parse::<u32>().ok());
+                cli.autonomy_step_count = Some(count.unwrap_or(1));
+                i += if count.is_some() { 2 } else { 1 };
+            }
             "--supervised-loop" => {
                 let cycles = args
                     .get(i + 1)
@@ -646,6 +669,7 @@ async fn main() -> Result<()> {
         || cli.transcripts_limit.is_some()
         || cli.task_runs_limit.is_some()
         || cli.coding_sessions_limit.is_some()
+        || cli.autonomy_queue_limit.is_some()
         || cli.work_loops_limit.is_some()
         || cli.run_log_limit.is_some()
         || cli.brief
@@ -724,6 +748,10 @@ async fn main() -> Result<()> {
 
     if let Some(limit) = cli.coding_sessions_limit {
         return print_coding_sessions(Arc::clone(&memory), limit);
+    }
+
+    if let Some(limit) = cli.autonomy_queue_limit {
+        return print_autonomy_queue(Arc::clone(&memory), limit);
     }
 
     if let Some(limit) = cli.work_loops_limit {
@@ -1026,6 +1054,19 @@ async fn main() -> Result<()> {
             Arc::clone(&transcripts),
             cycles,
             WorkLoopProfile::Commit,
+            cli.publish_after_run,
+        )
+        .await;
+    }
+
+    if let Some(count) = cli.autonomy_step_count {
+        return run_autonomy_queue_steps(
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            Arc::clone(&transcripts),
+            count,
             cli.publish_after_run,
         )
         .await;
@@ -3044,6 +3085,144 @@ async fn run_autonomous_operator_run(
         publish_after_run,
     )
     .await
+}
+
+async fn run_autonomy_queue_steps(
+    registry: Arc<std::sync::RwLock<ToolRegistry>>,
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    transcripts: Arc<TranscriptStore>,
+    count: u32,
+    publish_after_run: bool,
+) -> Result<()> {
+    let count = count.clamp(1, 10);
+    let store = AutonomyQueueStore::new(Arc::clone(&memory.db));
+    if store.count_pending()? == 0 {
+        let seeded = store.enqueue(
+            "bootstrap autonomous harness work: run a bounded coding-agent smoke and record reviewable evidence",
+            "operator_run",
+            "core",
+            1,
+            50,
+        )?;
+        events.append(
+            None,
+            None,
+            "autonomy.queue.seeded",
+            format!("seeded autonomous queue item {}", short_fragment(&seeded.id)),
+            serde_json::json!({
+                "queue_id": seeded.id,
+                "goal": seeded.goal,
+                "kind": seeded.kind,
+                "profile": seeded.profile,
+                "cycles": seeded.cycles,
+                "priority": seeded.priority,
+            }),
+        )?;
+    }
+
+    println!("Professor X autonomy queue step");
+    println!("  requested items: {count}");
+    println!("  queue: cargo run -- --autonomy-queue 10");
+    println!("  watch: cargo run -- --observe-work");
+
+    for index in 1..=count {
+        let Some(item) = store.next_pending()? else {
+            println!("  no pending queue item at step {index}");
+            break;
+        };
+        let profile = WorkLoopProfile::parse(&item.profile).unwrap_or(WorkLoopProfile::Core);
+        store.mark_running(&item.id)?;
+        events.append(
+            None,
+            None,
+            "autonomy.queue.started",
+            format!(
+                "started autonomous queue item {}: {}",
+                short_fragment(&item.id),
+                truncate(&item.goal, 100)
+            ),
+            serde_json::json!({
+                "queue_id": item.id,
+                "goal": item.goal,
+                "kind": item.kind,
+                "profile": profile.as_str(),
+                "cycles": item.cycles,
+                "priority": item.priority,
+                "step": index,
+                "steps": count,
+            }),
+        )?;
+
+        let before_run = WorkLoopRunStore::new(Arc::clone(&memory.db))
+            .latest()?
+            .map(|run| run.run_id);
+        let result = run_supervised_loop(
+            WorkLoopRunKind::Operator,
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            Arc::clone(&transcripts),
+            item.cycles,
+            profile,
+            publish_after_run,
+        )
+        .await;
+        let latest_run = WorkLoopRunStore::new(Arc::clone(&memory.db)).latest()?;
+        let new_run = latest_run
+            .filter(|run| Some(run.run_id.clone()) != before_run);
+        match result {
+            Ok(()) => {
+                store.mark_finished(
+                    &item.id,
+                    "done",
+                    new_run.as_ref().map(|run| run.run_id.as_str()),
+                    new_run.as_ref().map(|run| run.report_path.as_str()),
+                    None,
+                )?;
+                events.append(
+                    None,
+                    None,
+                    "autonomy.queue.completed",
+                    format!("completed autonomous queue item {}", short_fragment(&item.id)),
+                    serde_json::json!({
+                        "queue_id": item.id,
+                        "result_run_id": new_run.as_ref().map(|run| run.run_id.clone()),
+                        "result_report_path": new_run.as_ref().map(|run| run.report_path.clone()),
+                        "passed": true,
+                    }),
+                )?;
+            }
+            Err(err) => {
+                let reason = err.to_string();
+                store.mark_finished(
+                    &item.id,
+                    "failed",
+                    new_run.as_ref().map(|run| run.run_id.as_str()),
+                    new_run.as_ref().map(|run| run.report_path.as_str()),
+                    Some(&reason),
+                )?;
+                events.append(
+                    None,
+                    None,
+                    "autonomy.queue.failed",
+                    format!("failed autonomous queue item {}: {}", short_fragment(&item.id), truncate(&reason, 100)),
+                    serde_json::json!({
+                        "queue_id": item.id,
+                        "result_run_id": new_run.as_ref().map(|run| run.run_id.clone()),
+                        "result_report_path": new_run.as_ref().map(|run| run.report_path.clone()),
+                        "passed": false,
+                        "error": reason,
+                    }),
+                )?;
+                return Err(err);
+            }
+        }
+    }
+
+    print_autonomy_queue(memory, 10)
 }
 
 async fn run_supervised_loop_live(
@@ -5696,6 +5875,12 @@ async fn run_interactive_tasks(
             print_coding_sessions(Arc::clone(&memory), limit)?;
             continue;
         }
+        if let Some(rest) = input.strip_prefix("/queue") {
+            let limit = rest.trim().parse::<usize>().unwrap_or(10);
+            record_console_command(&events, "queue", Some(limit.to_string()))?;
+            print_autonomy_queue(Arc::clone(&memory), limit)?;
+            continue;
+        }
         if let Some(rest) = input.strip_prefix("/runs") {
             let limit = rest.trim().parse::<usize>().unwrap_or(5);
             record_console_command(&events, "runs", Some(limit.to_string()))?;
@@ -5724,6 +5909,21 @@ async fn run_interactive_tasks(
             let task_ref = nonempty_or_latest(rest);
             record_console_command(&events, "task-review", Some(task_ref.to_string()))?;
             print_task_review(Arc::clone(&transcripts), task_ref)?;
+            continue;
+        }
+        if let Some(rest) = input.strip_prefix("/step") {
+            let count = rest.trim().parse::<u32>().unwrap_or(1);
+            record_console_command(&events, "step", Some(count.to_string()))?;
+            run_autonomy_queue_steps(
+                Arc::clone(&registry),
+                Arc::clone(&policy),
+                Arc::clone(&memory),
+                Arc::clone(&events),
+                Arc::clone(&transcripts),
+                count,
+                false,
+            )
+            .await?;
             continue;
         }
         if let Some(rest) = input.strip_prefix("/run-commit") {
@@ -5816,11 +6016,13 @@ fn format_interactive_help() -> String {
         "  /cockpit        show live state, current run, latest coding session, and trace",
         "  /work [n]       show recent work/tool/task events",
         "  /sessions [n]   show recent coding-agent sessions and evidence paths",
+        "  /queue [n]      show persistent autonomous work queue",
         "  /runs [n]       show recent operator/autonomous run ledger entries",
         "  /review [run]   review latest or selected run evidence",
         "  /replay [run]   replay latest or selected run timeline",
         "  /publish [run]  commit selected run report/ledger artifacts",
         "  /task-review [task] review latest or selected task transcript",
+        "  /step [n]       run n queued autonomous work items, seeding one if empty",
         "  /run [n]        start a bounded core Prof X run",
         "  /run-commit [n] start a commit-capable verified Prof X run",
         "  /events [n]     show raw recent events",
@@ -6105,6 +6307,8 @@ fn format_operator_help() -> String {
         "",
         "Watch him work",
         "  cargo run -- --prof-x-live 5",
+        "  cargo run -- --prof-x-step 1",
+        "  cargo run -- --prof-x-queue 10",
         "  cargo run -- --observe-work",
         "  cargo run -- --cockpit",
         "  cargo run -- --watch-work",
@@ -6258,6 +6462,42 @@ fn coding_session_commit_hint(session: &CodingSessionRecord) -> Option<String> {
         .map(str::trim)
         .filter(|commit| !commit.is_empty() && *commit != "none")
         .map(|commit| commit[..commit.len().min(8)].to_string())
+}
+
+fn print_autonomy_queue(memory: Arc<MemoryManager>, limit: usize) -> Result<()> {
+    let items = AutonomyQueueStore::new(Arc::clone(&memory.db)).recent(limit)?;
+    if items.is_empty() {
+        println!("No autonomous queue items recorded yet.");
+        return Ok(());
+    }
+    println!("Recent autonomous queue items");
+    for item in items {
+        println!("{}", format_autonomy_queue_item(&item));
+        if let Some(report) = &item.result_report_path {
+            println!("  report: {report}");
+        }
+        if let Some(run_id) = &item.result_run_id {
+            println!("  run: {}", short_fragment(run_id));
+        }
+        if let Some(reason) = &item.failure_reason {
+            println!("  failure: {}", truncate(reason, 140));
+        }
+    }
+    Ok(())
+}
+
+fn format_autonomy_queue_item(item: &AutonomyQueueItem) -> String {
+    format!(
+        "{} {} queue={} priority={} {}:{} cycles={} {}",
+        item.updated_at.format("%Y-%m-%d %H:%M:%S"),
+        item.status,
+        short_fragment(&item.id),
+        item.priority,
+        item.kind,
+        item.profile,
+        item.cycles,
+        truncate(&item.goal, 96),
+    )
 }
 
 fn print_work_loops(memory: Arc<MemoryManager>, limit: usize) -> Result<()> {
@@ -7599,6 +7839,7 @@ fn work_signal_summary(events: &[memd::events::AgentEvent]) -> String {
     let mut coding = 0;
     let mut evolution = 0;
     let mut loop_events = 0;
+    let mut autonomy = 0;
     let mut transcripts = 0;
     let mut console = 0;
     for event in events {
@@ -7615,6 +7856,8 @@ fn work_signal_summary(events: &[memd::events::AgentEvent]) -> String {
             evolution += 1;
         } else if event_type.starts_with("work_loop.") {
             loop_events += 1;
+        } else if event_type.starts_with("autonomy.queue.") || event_type.starts_with("autonomous_run.") {
+            autonomy += 1;
         } else if event_type == "transcript.written" {
             transcripts += 1;
         } else if event_type.starts_with("console.") {
@@ -7622,7 +7865,7 @@ fn work_signal_summary(events: &[memd::events::AgentEvent]) -> String {
         }
     }
     format!(
-        "events={} task={} tool={} policy={} coding={} evolution={} loop={} transcript={} console={}",
+        "events={} task={} tool={} policy={} coding={} evolution={} loop={} autonomy={} transcript={} console={}",
         events.len(),
         task,
         tool,
@@ -7630,6 +7873,7 @@ fn work_signal_summary(events: &[memd::events::AgentEvent]) -> String {
         coding,
         evolution,
         loop_events,
+        autonomy,
         transcripts,
         console
     )
@@ -7762,6 +8006,9 @@ fn format_work_event(event: &memd::events::AgentEvent) -> String {
     if let Some(session) = event.payload["session_id"].as_str() {
         meta.push(format!("session={}", short_fragment(session)));
     }
+    if let Some(queue) = event.payload["queue_id"].as_str() {
+        meta.push(format!("queue={}", short_fragment(queue)));
+    }
     if let Some(cycle) = event.payload["cycle"].as_i64() {
         let total = event.payload["cycles"]
             .as_i64()
@@ -7888,6 +8135,10 @@ fn event_action(event: &memd::events::AgentEvent) -> &'static str {
         "coding.smoke.failed" => "Failed coding smoke",
         "transcript.written" => "Wrote transcript",
         "console.command" => "Operator command",
+        "autonomy.queue.seeded" => "Seeded queue",
+        "autonomy.queue.started" => "Started queued work",
+        "autonomy.queue.completed" => "Completed queued work",
+        "autonomy.queue.failed" => "Failed queued work",
         "evolution.patch_apply.committed" => "Committed verified patch",
         "evolution.operator_commit.committed" => "Committed operator proposal",
         "evolution.patch_apply.rejected" | "evolution.proposal_dry_run.rejected" => {
@@ -7895,7 +8146,7 @@ fn event_action(event: &memd::events::AgentEvent) -> &'static str {
         }
         event_type if event_type.starts_with("evolution.") => "Evolution event",
         event_type if event_type.starts_with("policy.") => "Policy gate",
-        event_type if event_type.starts_with("autonomous_run.") => "Autonomous run",
+        event_type if event_type.starts_with("autonomous_run.") || event_type.starts_with("autonomy.queue.") => "Autonomous run",
         _ => "Observed",
     }
 }
@@ -7925,6 +8176,8 @@ fn work_event_label(event_type: &str) -> &'static str {
         "EVOLVE"
     } else if event_type.starts_with("autonomous_run.") {
         "AUTON"
+    } else if event_type.starts_with("autonomy.queue.") {
+        "QUEUE"
     } else if event_type.starts_with("work_loop.") {
         "LOOP"
     } else if event_type == "transcript.written" {
@@ -8234,6 +8487,8 @@ mod tests {
 
         assert!(help.contains("Professor X operator commands"));
         assert!(help.contains("--prof-x-live 5"));
+        assert!(help.contains("--prof-x-step 1"));
+        assert!(help.contains("--prof-x-queue 10"));
         assert!(help.contains("--observe-work"));
         assert!(help.contains("--prof-x-code-live"));
         assert!(help.contains("--prof-x-skill-live"));
@@ -8254,11 +8509,13 @@ mod tests {
         assert!(help.contains("/cockpit"));
         assert!(help.contains("/work [n]"));
         assert!(help.contains("/sessions [n]"));
+        assert!(help.contains("/queue [n]"));
         assert!(help.contains("/runs [n]"));
         assert!(help.contains("/review [run]"));
         assert!(help.contains("/replay [run]"));
         assert!(help.contains("/publish [run]"));
         assert!(help.contains("/task-review [task]"));
+        assert!(help.contains("/step [n]"));
         assert!(help.contains("/run [n]"));
         assert!(help.contains("/run-commit [n]"));
         assert!(help.contains("/events [n]"));
@@ -8331,6 +8588,31 @@ mod tests {
         assert!(line.contains("session=12345678"));
         assert!(line.contains("exercise=repo_patch_apply_commit"));
         assert!(work_signal_summary(&[event]).contains("coding=1"));
+    }
+
+    #[test]
+    fn format_work_event_surfaces_autonomy_queue_identity() {
+        let event = memd::events::AgentEvent {
+            id: 43,
+            timestamp: chrono::Utc::now(),
+            session_id: None,
+            task_id: None,
+            event_type: "autonomy.queue.started".to_string(),
+            summary: "started autonomous queue item 12345678".to_string(),
+            payload: serde_json::json!({
+                "queue_id": "12345678-aaaa-bbbb-cccc-123456789abc",
+                "goal": "run the next harness gate",
+                "profile": "core",
+                "cycles": 1,
+            }),
+        };
+
+        let line = format_work_event(&event);
+
+        assert!(line.contains("QUEUE"));
+        assert!(line.contains("Started queued work"));
+        assert!(line.contains("queue=12345678"));
+        assert!(work_signal_summary(&[event]).contains("autonomy=1"));
     }
 
     #[test]
