@@ -7289,6 +7289,16 @@ fn format_work_event(event: &memd::events::AgentEvent) -> String {
     lines.push(format!("  L {}", meta.join(" ")));
 
     push_payload_line(&mut lines, "report", event.payload["report_path"].as_str());
+    push_payload_line(
+        &mut lines,
+        "session-report",
+        event.payload["session_report_path"].as_str(),
+    );
+    push_payload_line(
+        &mut lines,
+        "smoke-report",
+        event.payload["smoke_report_path"].as_str(),
+    );
     push_payload_line(&mut lines, "transcript", event.payload["transcript_path"].as_str());
     push_payload_line(&mut lines, "patch", event.payload["patch_path"].as_str());
     push_payload_line(&mut lines, "target", event.payload["target_component"].as_str());
@@ -8206,6 +8216,29 @@ mod tests {
         assert!(line.contains("tool=shell.restricted"));
         assert!(line.contains("step=2"));
         assert!(line.contains("detail command=cargo test"));
+    }
+
+    #[test]
+    fn format_work_event_surfaces_coding_session_report() {
+        let event = memd::events::AgentEvent {
+            id: 45,
+            timestamp: chrono::Utc::now(),
+            session_id: Some("session-123456789".to_string()),
+            task_id: None,
+            event_type: "coding.session.passed".to_string(),
+            summary: "repo patch commit coding-session report written".to_string(),
+            payload: serde_json::json!({
+                "exercise": "repo_patch_apply_commit",
+                "checks": ["cargo_check", "git_commit"],
+                "session_report_path": "artifacts/coding-sessions/2026-06-01/session-135052-0aeff8ac.json",
+                "artifacts": ["artifacts/evolution/patch-verifications/2026-06-01/patch-135049.json"],
+            }),
+        };
+
+        let line = format_work_event(&event);
+
+        assert!(line.contains("session-report artifacts/coding-sessions/2026-06-01/session-135052-0aeff8ac.json"));
+        assert!(line.contains("artifact artifacts/evolution/patch-verifications/2026-06-01/patch-135049.json"));
     }
 
     #[test]
