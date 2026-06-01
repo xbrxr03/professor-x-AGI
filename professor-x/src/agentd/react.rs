@@ -493,6 +493,23 @@ impl ReactLoop {
                                 params: parsed.params.clone(),
                                 risk_score: gate.risk_score,
                             };
+                            self.emit_event(
+                                Some(session_id),
+                                Some(task.id),
+                                "tool.started",
+                                format!(
+                                    "running tool '{}'{}",
+                                    parsed.tool_name,
+                                    tool_params_preview(&parsed.params)
+                                        .map(|preview| format!(" :: {preview}"))
+                                        .unwrap_or_default()
+                                ),
+                                json!({
+                                    "step": step_idx + 1,
+                                    "tool": parsed.tool_name,
+                                    "params_preview": tool_params_preview(&parsed.params),
+                                }),
+                            );
                             let obs = executor.execute(&action).await;
                             let exec_reason = if obs.success {
                                 consecutive_failures = 0;
@@ -934,6 +951,24 @@ fn truncate(text: &str, max_chars: usize) -> String {
         out.push_str("...");
     }
     out
+}
+
+fn tool_params_preview(params: &Value) -> Option<String> {
+    if let Some(command) = params.get("command").and_then(|value| value.as_str()) {
+        return Some(format!("command={}", truncate(command, 120)));
+    }
+    if let Some(path) = params.get("path").and_then(|value| value.as_str()) {
+        let mode = params
+            .get("mode")
+            .and_then(|value| value.as_str())
+            .map(|mode| format!(" mode={mode}"))
+            .unwrap_or_default();
+        return Some(format!("path={}{}", truncate(path, 120), mode));
+    }
+    if params.is_object() {
+        return Some(truncate(&params.to_string(), 160));
+    }
+    None
 }
 
 /// Map a num_ctx token ceiling back to the nearest BudgetArm for LCAP reward tracking.

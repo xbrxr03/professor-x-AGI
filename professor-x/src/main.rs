@@ -3169,9 +3169,11 @@ async fn run_coding_smoke_exercise(
         &executor,
         Arc::clone(&policy),
         Arc::clone(&memory),
+        &events,
         &scope,
         session_id,
         task.id,
+        1,
         initial_action.clone(),
     )
     .await?;
@@ -3201,9 +3203,11 @@ async fn run_coding_smoke_exercise(
         &executor,
         Arc::clone(&policy),
         Arc::clone(&memory),
+        &events,
         &scope,
         session_id,
         task.id,
+        2,
         edit_action.clone(),
     )
     .await?;
@@ -3227,9 +3231,11 @@ async fn run_coding_smoke_exercise(
         &executor,
         Arc::clone(&policy),
         Arc::clone(&memory),
+        &events,
         &scope,
         session_id,
         task.id,
+        3,
         final_action.clone(),
     )
     .await?;
@@ -3714,9 +3720,11 @@ async fn run_smoke_tool(
     executor: &ToolExecutor,
     policy: Arc<PolicyEngine>,
     memory: Arc<MemoryManager>,
+    events: &EventStore,
     scope: &PermissionScope,
     session_id: uuid::Uuid,
     task_id: uuid::Uuid,
+    step: u32,
     action: Action,
 ) -> Result<Observation> {
     let gate = policy
@@ -3733,10 +3741,49 @@ async fn run_smoke_tool(
         &gate.reason,
         None,
     );
+    events.append(
+        Some(session_id),
+        Some(task_id),
+        match gate.decision {
+            Decision::Allow => "policy.allowed",
+            Decision::Deny => "policy.denied",
+            Decision::PendingApproval => "policy.pending",
+        },
+        format!(
+            "policy {:?} for '{}': {}",
+            gate.decision,
+            action.tool_name,
+            truncate(&gate.reason, 140)
+        ),
+        serde_json::json!({
+            "step": step,
+            "tool": action.tool_name,
+            "risk_score": gate.risk_score,
+            "reason": gate.reason,
+            "params_preview": tool_params_preview(&action.params),
+        }),
+    )?;
     if gate.decision != Decision::Allow {
         anyhow::bail!("policy denied {}: {}", action.tool_name, gate.reason);
     }
 
+    events.append(
+        Some(session_id),
+        Some(task_id),
+        "tool.started",
+        format!(
+            "running tool '{}'{}",
+            action.tool_name,
+            tool_params_preview(&action.params)
+                .map(|preview| format!(" :: {preview}"))
+                .unwrap_or_default()
+        ),
+        serde_json::json!({
+            "step": step,
+            "tool": action.tool_name,
+            "params_preview": tool_params_preview(&action.params),
+        }),
+    )?;
     let obs = executor.execute(&action).await;
     let _ = audit.append(
         session_id,
@@ -4400,6 +4447,21 @@ fn format_live_task_event(event: &memd::events::AgentEvent) -> Option<String> {
             .get("tool")
             .and_then(|tool| tool.as_str())
             .map(|tool| format!("  tool {tool}: requested")),
+        "tool.started" => {
+            let tool = event
+                .payload
+                .get("tool")
+                .and_then(|value| value.as_str())
+                .unwrap_or("tool");
+            let preview = event
+                .payload
+                .get("params_preview")
+                .and_then(|value| value.as_str())
+                .filter(|text| !text.is_empty())
+                .map(|text| format!(" - {}", one_line(text, 180)))
+                .unwrap_or_default();
+            Some(format!("  tool {tool}: running{preview}"))
+        }
         "policy.allowed" | "policy.denied" | "policy.pending" => {
             Some(format!("  {}", event.summary))
         }
@@ -4448,6 +4510,24 @@ fn format_live_task_event(event: &memd::events::AgentEvent) -> Option<String> {
 fn one_line(text: &str, max_chars: usize) -> String {
     let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
     truncate(&compact, max_chars)
+}
+
+fn tool_params_preview(params: &serde_json::Value) -> Option<String> {
+    if let Some(command) = params.get("command").and_then(|value| value.as_str()) {
+        return Some(format!("command={}", truncate(command, 120)));
+    }
+    if let Some(path) = params.get("path").and_then(|value| value.as_str()) {
+        let mode = params
+            .get("mode")
+            .and_then(|value| value.as_str())
+            .map(|mode| format!(" mode={mode}"))
+            .unwrap_or_default();
+        return Some(format!("path={}{}", truncate(path, 120), mode));
+    }
+    if params.is_object() {
+        return Some(truncate(&params.to_string(), 160));
+    }
+    None
 }
 
 // ── HIRO benchmark mode ───────────────────────────────────────────────────────
@@ -5370,6 +5450,7 @@ fn format_work_event(event: &memd::events::AgentEvent) -> String {
         .as_str()
         .filter(|text| !text.is_empty())
         .or_else(|| event.payload["output_preview"].as_str())
+        .or_else(|| event.payload["params_preview"].as_str())
         .or_else(|| event.payload["detail"].as_str())
     {
         lines.push(format!("  L detail {}", one_line(detail, 180)));
@@ -5393,6 +5474,7 @@ fn event_action(event: &memd::events::AgentEvent) -> &'static str {
         "work_loop.completed" => "Completed loop",
         "work_loop.completed_with_failures" => "Completed loop with failures",
         "tool.requested" => "Requested",
+        "tool.started" => "Running",
         "tool.succeeded" => "Ran",
         "tool.failed" => "Failed",
         "task.queued" => "Queued task",
@@ -5916,6 +5998,51 @@ mod tests {
         assert!(line.contains("transcript professor-x/artifacts/transcripts/t.json"));
         assert!(line.contains("commit abcdef12"));
         assert!(line.contains("5 checks"));
+    }
+
+    #[test]
+    fn format_work_event_surfaces_running_tool_preview() {
+        let event = memd::events::AgentEvent {
+            id: 43,
+            timestamp: chrono::Utc::now(),
+            session_id: None,
+            task_id: Some("task-123456789".to_string()),
+            event_type: "tool.started".to_string(),
+            summary: "running tool 'shell.restricted' :: command=cargo test".to_string(),
+            payload: serde_json::json!({
+                "step": 2,
+                "tool": "shell.restricted",
+                "params_preview": "command=cargo test",
+            }),
+        };
+
+        let line = format_work_event(&event);
+
+        assert!(line.contains("Running"));
+        assert!(line.contains("tool=shell.restricted"));
+        assert!(line.contains("step=2"));
+        assert!(line.contains("detail command=cargo test"));
+    }
+
+    #[test]
+    fn format_live_task_event_surfaces_running_tool_preview() {
+        let event = memd::events::AgentEvent {
+            id: 44,
+            timestamp: chrono::Utc::now(),
+            session_id: None,
+            task_id: Some("task-123456789".to_string()),
+            event_type: "tool.started".to_string(),
+            summary: "running tool 'fs.replace' :: path=src/lib.rs mode=apply".to_string(),
+            payload: serde_json::json!({
+                "step": 3,
+                "tool": "fs.replace",
+                "params_preview": "path=src/lib.rs mode=apply",
+            }),
+        };
+
+        let line = format_live_task_event(&event).unwrap();
+
+        assert_eq!(line, "  tool fs.replace: running - path=src/lib.rs mode=apply");
     }
 
     #[test]
