@@ -5636,7 +5636,7 @@ fn print_coding_sessions(memory: Arc<MemoryManager>, limit: usize) -> Result<()>
     println!("Recent coding sessions");
     for session in sessions {
         println!(
-            "{} {} session={} exercise={} smoke={} checks={} artifacts={} {}",
+            "{} {} session={} exercise={} smoke={} checks={} artifacts={}{} {}",
             session.generated_at.format("%Y-%m-%d %H:%M:%S"),
             session.status,
             &session.id[..8.min(session.id.len())],
@@ -5647,14 +5647,23 @@ fn print_coding_sessions(memory: Arc<MemoryManager>, limit: usize) -> Result<()>
                 .unwrap_or_else(|| "none".to_string()),
             session.checks.len(),
             session.artifacts.len(),
+            coding_session_commit_hint(&session)
+                .map(|commit| format!(" commit={commit}"))
+                .unwrap_or_default(),
             truncate(&session.goal, 90),
         );
         println!("  report: {}", session.session_report_path);
+        if !session.checks.is_empty() {
+            println!("  checks: {}", session.checks.join(", "));
+        }
         for (index, step) in session.plan_steps.iter().take(4).enumerate() {
             println!("  plan {}: {}", index + 1, truncate(step, 120));
         }
-        for (index, outcome) in session.step_outcomes.iter().take(4).enumerate() {
+        for (index, outcome) in session.step_outcomes.iter().take(8).enumerate() {
             println!("  outcome {}: {}", index + 1, truncate(outcome, 120));
+        }
+        for artifact in session.artifacts.iter().take(3) {
+            println!("  artifact: {artifact}");
         }
         if let Some(path) = &session.transcript_path {
             println!("  transcript: {path}");
@@ -5664,6 +5673,16 @@ fn print_coding_sessions(memory: Arc<MemoryManager>, limit: usize) -> Result<()>
         }
     }
     Ok(())
+}
+
+fn coding_session_commit_hint(session: &CodingSessionRecord) -> Option<String> {
+    session
+        .step_outcomes
+        .iter()
+        .find_map(|outcome| outcome.strip_prefix("commit "))
+        .map(str::trim)
+        .filter(|commit| !commit.is_empty() && *commit != "none")
+        .map(|commit| commit[..commit.len().min(8)].to_string())
 }
 
 fn print_work_loops(memory: Arc<MemoryManager>, limit: usize) -> Result<()> {
@@ -7920,6 +7939,34 @@ mod tests {
         };
         assert_eq!(cockpit_state(Some(&run), Some(&gate)), "RUNNING");
         assert_eq!(cockpit_progress(3, 6), "[######......] 3/6");
+    }
+
+    #[test]
+    fn coding_session_commit_hint_reads_commit_outcome() {
+        let now = chrono::Utc::now();
+        let session = CodingSessionRecord {
+            id: "session-1".to_string(),
+            generated_at: now,
+            goal: "verify and commit patch".to_string(),
+            exercise: "repo_patch_apply_commit".to_string(),
+            status: "passed".to_string(),
+            workspace: Some("repo-root".to_string()),
+            smoke_id: None,
+            smoke_report_path: None,
+            session_report_path: "artifacts/coding-sessions/session.json".to_string(),
+            transcript_path: None,
+            artifacts: vec!["artifacts/evolution/patch.json".to_string()],
+            checks: vec!["git_commit".to_string()],
+            plan_steps: Vec::new(),
+            step_outcomes: vec![
+                "main apply committed".to_string(),
+                "commit eedcd3e123456789".to_string(),
+            ],
+            failure_reason: None,
+            recorded_at: now,
+        };
+
+        assert_eq!(coding_session_commit_hint(&session).as_deref(), Some("eedcd3e1"));
     }
 
     #[test]

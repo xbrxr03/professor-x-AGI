@@ -1339,11 +1339,12 @@ fn latest_coding_session_line(session: &Option<CodingSessionRecord>) -> Line<'st
             Span::styled("code    ", label()),
             Span::styled(format!("{:<8}", session.status), status_style(&session.status)),
             Span::raw(format!(
-                "{}  {}  {}p/{}o  {}",
+                "{}  {}  {}p/{}o{}  {}",
                 &session.id[..8.min(session.id.len())],
                 session.exercise,
                 session.plan_steps.len(),
                 session.step_outcomes.len(),
+                coding_session_commit_suffix(session),
                 truncate(&session.session_report_path, 56),
             )),
         ]),
@@ -1353,6 +1354,17 @@ fn latest_coding_session_line(session: &Option<CodingSessionRecord>) -> Line<'st
             Span::raw("  launch with --coding-session"),
         ]),
     }
+}
+
+fn coding_session_commit_suffix(session: &CodingSessionRecord) -> String {
+    session
+        .step_outcomes
+        .iter()
+        .find_map(|outcome| outcome.strip_prefix("commit "))
+        .map(str::trim)
+        .filter(|commit| !commit.is_empty() && *commit != "none")
+        .map(|commit| format!("  commit={}", &commit[..commit.len().min(8)]))
+        .unwrap_or_default()
 }
 
 fn latest_transcript_line(transcript: &Option<TranscriptSummary>) -> Line<'static> {
