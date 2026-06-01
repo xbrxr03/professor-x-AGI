@@ -6110,7 +6110,10 @@ fn format_work_cockpit(
         }
     }
     lines.push(String::new());
-    lines.push("Commands: --operator-run 1 | --operator-run-commit 1 | --watch-work | --run-review latest".to_string());
+    lines.push(
+        "Commands: --prof-x-live-publish 1 | --observe-work | --replay latest | --run-review latest"
+            .to_string(),
+    );
     lines.join("\n")
 }
 
