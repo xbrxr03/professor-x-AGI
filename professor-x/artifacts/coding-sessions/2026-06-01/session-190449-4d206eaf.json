@@ -1,0 +1,34 @@
+{
+  "id": "4d206eaf-0634-40bb-90b6-83c430f2f580",
+  "generated_at": "2026-06-01T19:04:49.102505652+00:00",
+  "goal": "deterministic coding smoke: fix a failing Rust addition test and verify it passes",
+  "requested_goal": "bounded local coding session: diagnose, patch, and verify a failing Rust test",
+  "exercise": "add_i32",
+  "status": "passed",
+  "workspace": "/tmp/px-coding-smoke-5ad2208e-6855-45c3-b9bf-0ba9d36f6516",
+  "smoke_id": 6,
+  "smoke_report_path": "artifacts/coding-smoke/2026-06-01/smoke-190449.json",
+  "session_report_path": "artifacts/coding-sessions/2026-06-01/session-190449-4d206eaf.json",
+  "transcript_path": "artifacts/transcripts/2026-06-01/775ef462-9d10-44af-b3af-de7100c6a0c4.json",
+  "checks": [
+    "initial cargo test failed as expected",
+    "patch applied",
+    "final cargo test passed"
+  ],
+  "plan_steps": [
+    "Create isolated Rust workspace for add_i32",
+    "Run cargo test before editing to capture the failing baseline",
+    "Apply the smallest exact source replacement through fs.replace",
+    "Run cargo test again and keep command artifacts plus transcript"
+  ],
+  "step_outcomes": [
+    "baseline test observed: failed",
+    "source replacement observed: applied",
+    "verification test observed: passed"
+  ],
+  "artifacts": [
+    "/tmp/px-coding-smoke-5ad2208e-6855-45c3-b9bf-0ba9d36f6516/artifacts/replacements/2026-06-01/21049a10-f002-40dd-826d-abe9523f9a52.diff",
+    "/tmp/px-coding-smoke-5ad2208e-6855-45c3-b9bf-0ba9d36f6516/artifacts/commands/2026-06-01/9e58f89f-170d-4f8e-b485-7a2e160eaf11.json"
+  ],
+  "failure_reason": null
+}

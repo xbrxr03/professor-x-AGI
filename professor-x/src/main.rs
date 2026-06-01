@@ -3998,6 +3998,24 @@ async fn run_coding_session_inner(
     let plan_steps = coding_session_plan(exercise);
     let smoke_store = CodingSmokeStore::new(Arc::clone(&memory.db));
     let before_smoke_id = smoke_store.latest()?.and_then(|record| record.id);
+    CodingSessionStore::new(Arc::clone(&memory.db)).insert(&CodingSessionRecord {
+        id: session_id.clone(),
+        generated_at,
+        goal: requested_goal.clone(),
+        exercise: exercise.name.to_string(),
+        status: "running".to_string(),
+        workspace: None,
+        smoke_id: None,
+        smoke_report_path: None,
+        session_report_path: "pending".to_string(),
+        transcript_path: None,
+        artifacts: Vec::new(),
+        checks: Vec::new(),
+        plan_steps: plan_steps.clone(),
+        step_outcomes: Vec::new(),
+        failure_reason: None,
+        recorded_at: chrono::Utc::now(),
+    })?;
     events.append(
         None,
         None,
@@ -4283,6 +4301,24 @@ async fn run_repo_patch_coding_session_with_goal(
         "Run sandbox cargo check and reward-hacking/material-diff checks".to_string(),
         "Record a coding-session report that points at the verification artifact".to_string(),
     ];
+    CodingSessionStore::new(Arc::clone(&memory.db)).insert(&CodingSessionRecord {
+        id: session_key.clone(),
+        generated_at,
+        goal: goal.clone(),
+        exercise: "repo_patch_verify".to_string(),
+        status: "running".to_string(),
+        workspace: Some("repo-root sandbox verification".to_string()),
+        smoke_id: None,
+        smoke_report_path: None,
+        session_report_path: "pending".to_string(),
+        transcript_path: None,
+        artifacts: vec![patch_path.display().to_string()],
+        checks: Vec::new(),
+        plan_steps: plan_steps.clone(),
+        step_outcomes: Vec::new(),
+        failure_reason: None,
+        recorded_at: chrono::Utc::now(),
+    })?;
 
     events.append(
         Some(session_id),
@@ -4549,6 +4585,24 @@ async fn run_repo_patch_commit_coding_session_with_goal(
         "Run main cargo check and create git commit evidence".to_string(),
         "Record a coding-session report that points at the apply artifact".to_string(),
     ];
+    CodingSessionStore::new(Arc::clone(&memory.db)).insert(&CodingSessionRecord {
+        id: session_key.clone(),
+        generated_at,
+        goal: goal.clone(),
+        exercise: "repo_patch_apply_commit".to_string(),
+        status: "running".to_string(),
+        workspace: Some("repo-root verified apply commit".to_string()),
+        smoke_id: None,
+        smoke_report_path: None,
+        session_report_path: "pending".to_string(),
+        transcript_path: None,
+        artifacts: vec![patch_path.display().to_string()],
+        checks: Vec::new(),
+        plan_steps: plan_steps.clone(),
+        step_outcomes: Vec::new(),
+        failure_reason: None,
+        recorded_at: chrono::Utc::now(),
+    })?;
 
     events.append(
         Some(session_id),
@@ -7542,6 +7596,7 @@ fn work_signal_summary(events: &[memd::events::AgentEvent]) -> String {
     let mut task = 0;
     let mut tool = 0;
     let mut policy = 0;
+    let mut coding = 0;
     let mut evolution = 0;
     let mut loop_events = 0;
     let mut transcripts = 0;
@@ -7554,6 +7609,8 @@ fn work_signal_summary(events: &[memd::events::AgentEvent]) -> String {
             tool += 1;
         } else if event_type.starts_with("policy.") {
             policy += 1;
+        } else if event_type.starts_with("coding.") {
+            coding += 1;
         } else if event_type.starts_with("evolution.") {
             evolution += 1;
         } else if event_type.starts_with("work_loop.") {
@@ -7565,11 +7622,12 @@ fn work_signal_summary(events: &[memd::events::AgentEvent]) -> String {
         }
     }
     format!(
-        "events={} task={} tool={} policy={} evolution={} loop={} transcript={} console={}",
+        "events={} task={} tool={} policy={} coding={} evolution={} loop={} transcript={} console={}",
         events.len(),
         task,
         tool,
         policy,
+        coding,
         evolution,
         loop_events,
         transcripts,
@@ -7701,6 +7759,9 @@ fn format_work_event(event: &memd::events::AgentEvent) -> String {
     if let Some(run) = event.payload["run_id"].as_str() {
         meta.push(format!("run={}", short_fragment(run)));
     }
+    if let Some(session) = event.payload["session_id"].as_str() {
+        meta.push(format!("session={}", short_fragment(session)));
+    }
     if let Some(cycle) = event.payload["cycle"].as_i64() {
         let total = event.payload["cycles"]
             .as_i64()
@@ -7817,6 +7878,11 @@ fn event_action(event: &memd::events::AgentEvent) -> &'static str {
         "task.attempt.started" => "Started attempt",
         "task.succeeded" => "Completed task",
         "task.failed" => "Failed task",
+        "coding.session.started" => "Started coding session",
+        "coding.session.plan" => "Planned coding step",
+        "coding.session.outcome" => "Recorded coding outcome",
+        "coding.session.passed" => "Passed coding session",
+        "coding.session.failed" => "Failed coding session",
         "coding.smoke.started" => "Started coding smoke",
         "coding.smoke.passed" => "Passed coding smoke",
         "coding.smoke.failed" => "Failed coding smoke",
@@ -8239,6 +8305,32 @@ mod tests {
         assert!(line.contains("command=/review"));
         assert!(line.contains("arg=latest"));
         assert!(work_signal_summary(&rows).contains("console=1"));
+    }
+
+    #[test]
+    fn format_work_event_surfaces_coding_session_identity() {
+        let event = memd::events::AgentEvent {
+            id: 42,
+            timestamp: chrono::Utc::now(),
+            session_id: Some("12345678-aaaa-bbbb-cccc-123456789abc".to_string()),
+            task_id: None,
+            event_type: "coding.session.started".to_string(),
+            summary: "starting repo patch coding-agent session".to_string(),
+            payload: serde_json::json!({
+                "session_id": "12345678-aaaa-bbbb-cccc-123456789abc",
+                "exercise": "repo_patch_apply_commit",
+                "mode": "repo_patch_apply_commit",
+                "plan_steps": ["policy gate", "sandbox verify"],
+            }),
+        };
+
+        let line = format_work_event(&event);
+
+        assert!(line.contains("CODE"));
+        assert!(line.contains("Started coding session"));
+        assert!(line.contains("session=12345678"));
+        assert!(line.contains("exercise=repo_patch_apply_commit"));
+        assert!(work_signal_summary(&[event]).contains("coding=1"));
     }
 
     #[test]
