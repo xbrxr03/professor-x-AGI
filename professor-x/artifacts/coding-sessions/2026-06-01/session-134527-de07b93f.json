@@ -1,0 +1,42 @@
+{
+  "id": "de07b93f-da49-44ae-b26f-5fc017144a77",
+  "generated_at": "2026-06-01T13:45:03.951135399+00:00",
+  "goal": "repo patch coding session: verify, apply, and commit /tmp/px-operator-goal-20260601-134503-make-operator-goals-into-verified-reusab.diff",
+  "requested_goal": "repo patch coding session: verify, apply, and commit /tmp/px-operator-goal-20260601-134503-make-operator-goals-into-verified-reusab.diff",
+  "exercise": "repo_patch_apply_commit",
+  "status": "passed",
+  "workspace": "repo-root verified apply commit",
+  "smoke_id": null,
+  "smoke_report_path": null,
+  "session_report_path": "artifacts/coding-sessions/2026-06-01/session-134527-de07b93f.json",
+  "transcript_path": null,
+  "checks": [
+    "main_worktree_clean",
+    "reward_hacking_scan",
+    "sandbox_worktree",
+    "material_diff",
+    "cargo_check",
+    "main_apply_check",
+    "main_cargo_check",
+    "git_commit"
+  ],
+  "plan_steps": [
+    "Policy-gate the patch through patch.apply before sandbox work",
+    "Verify the unified diff in an isolated worktree",
+    "Apply the verified diff to main only if sandbox checks pass",
+    "Run main cargo check and create git commit evidence",
+    "Record a coding-session report that points at the apply artifact"
+  ],
+  "step_outcomes": [
+    "policy gate allowed patch.apply apply mode",
+    "sandbox verification accepted",
+    "main apply committed",
+    "diff bytes 488",
+    "commit 288ad44",
+    "reason sandbox verification passed and committed 288ad44"
+  ],
+  "artifacts": [
+    "artifacts/evolution/patch-verifications/2026-06-01/patch-134525.json"
+  ],
+  "failure_reason": null
+}

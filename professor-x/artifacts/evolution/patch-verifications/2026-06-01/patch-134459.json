@@ -1,0 +1,20 @@
+{
+  "generated_at": "2026-06-01T13:44:59.774607619+00:00",
+  "mode": "patch_verify",
+  "patch_path": "/tmp/px-operator-goal-20260601-134438-capture-the-next-harness-gap-with-eviden.diff",
+  "workspace": "repo-root",
+  "harness_commit": "de9d923",
+  "accepted": true,
+  "applied": false,
+  "commit": null,
+  "report_commit": null,
+  "reason": "sandbox patch verification passed",
+  "checks": [
+    "reward_hacking_scan",
+    "sandbox_worktree",
+    "material_diff",
+    "cargo_check"
+  ],
+  "diff_hash": "2babc450680d0cebde3276d7164a487f5af36557b3d9dd97b5497b26bebb301d",
+  "diff_bytes": 488
+}
