@@ -133,6 +133,10 @@ struct CliArgs {
     repo_patch_commit_path: Option<PathBuf>,
     /// Verify, apply, and commit a repo patch as a coding-agent session while streaming events.
     repo_patch_commit_live_path: Option<PathBuf>,
+    /// Generate a constrained skill patch from a short operator goal and verify it live.
+    skill_patch_live_goal: Option<String>,
+    /// Generate a constrained skill patch from a short operator goal, verify it, and commit it live.
+    skill_patch_commit_live_goal: Option<String>,
     /// Print the last N coding-agent sessions and exit.
     coding_sessions_limit: Option<usize>,
     /// Run N bounded local supervised work-loop cycles and exit.
@@ -253,6 +257,8 @@ fn parse_args() -> CliArgs {
         repo_patch_live_path: None,
         repo_patch_commit_path: None,
         repo_patch_commit_live_path: None,
+        skill_patch_live_goal: None,
+        skill_patch_commit_live_goal: None,
         coding_sessions_limit: None,
         supervised_loop_cycles: None,
         supervised_loop_profile: WorkLoopProfile::Basic,
@@ -489,6 +495,14 @@ fn parse_args() -> CliArgs {
             }
             "--repo-patch-commit-live" | "--prof-x-code-commit-live" if i + 1 < args.len() => {
                 cli.repo_patch_commit_live_path = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
+            }
+            "--skill-patch-live" | "--prof-x-skill-live" if i + 1 < args.len() => {
+                cli.skill_patch_live_goal = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--skill-patch-commit-live" | "--prof-x-skill-commit-live" if i + 1 < args.len() => {
+                cli.skill_patch_commit_live_goal = Some(args[i + 1].clone());
                 i += 2;
             }
             "--coding-sessions" => {
@@ -917,6 +931,28 @@ async fn main() -> Result<()> {
             Arc::clone(&memory),
             Arc::clone(&events),
             path,
+        )
+        .await;
+    }
+
+    if let Some(goal) = cli.skill_patch_live_goal {
+        let patch_path = write_operator_skill_patch(&goal)?;
+        return run_repo_patch_coding_session_live(
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            patch_path,
+        )
+        .await;
+    }
+
+    if let Some(goal) = cli.skill_patch_commit_live_goal {
+        let patch_path = write_operator_skill_patch(&goal)?;
+        return run_repo_patch_commit_coding_session_live(
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            patch_path,
         )
         .await;
     }
@@ -1862,6 +1898,67 @@ fn write_autonomous_patch_apply_smoke_patch() -> Result<PathBuf> {
     let patch_path = std::env::temp_dir().join(format!("{skill_name}.diff"));
     std::fs::write(&patch_path, diff)?;
     Ok(patch_path)
+}
+
+fn write_operator_skill_patch(goal: &str) -> Result<PathBuf> {
+    let goal = normalize_operator_goal(goal);
+    let slug = skill_goal_slug(&goal);
+    let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+    let skill_name = format!("px-operator-goal-{timestamp}-{slug}");
+    let path = PathBuf::from("professor-x")
+        .join("skills")
+        .join("conductor")
+        .join(format!("{skill_name}.md"));
+    let body = operator_goal_skill_body(&skill_name, &goal);
+    let diff = unified_new_file_diff(&path, &body);
+    let patch_path = std::env::temp_dir().join(format!("{skill_name}.diff"));
+    std::fs::write(&patch_path, diff)?;
+    Ok(patch_path)
+}
+
+fn normalize_operator_goal(goal: &str) -> String {
+    let one_line = goal
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let cleaned = one_line
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .collect::<String>();
+    truncate(cleaned.trim(), 180)
+}
+
+fn skill_goal_slug(goal: &str) -> String {
+    let mut slug = String::new();
+    let mut last_dash = false;
+    for ch in goal.to_ascii_lowercase().chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch);
+            last_dash = false;
+        } else if !last_dash && !slug.is_empty() {
+            slug.push('-');
+            last_dash = true;
+        }
+        if slug.len() >= 40 {
+            break;
+        }
+    }
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+    if slug.is_empty() {
+        "operator-goal".to_string()
+    } else {
+        slug
+    }
+}
+
+fn operator_goal_skill_body(skill_name: &str, goal: &str) -> String {
+    format!(
+        "# {skill_name}\n\nPurpose: capture an operator-requested Professor X harness goal as a verified, reusable conductor skill.\n\nOperator goal: {goal}\n\nProcedure:\n- Restate the goal in concrete harness terms before acting.\n- Inspect current repo evidence, especially docs/research, docs/plans, professor-x/ops/runbooks, and recent artifacts.\n- Prefer workspace-bound, reversible changes that improve observability, safety, measurement, or verified commit flow.\n- Produce or update durable evidence under docs/, brain/, professor-x/artifacts/, or professor-x/skills/ as appropriate.\n- Run the narrowest meaningful verification command before claiming progress.\n\nAcceptance:\n- The work maps directly to the operator goal above.\n- Any changed file is inside the repository workspace.\n- Any claimed improvement names a command, artifact, commit, or report that proves it.\n- Follow-up work is explicit if the goal is not complete.\n"
+    )
 }
 
 fn unified_new_file_diff(path: &std::path::Path, contents: &str) -> String {
@@ -5712,6 +5809,10 @@ fn format_operator_help() -> String {
         "  cargo run -- --prof-x-code-live \"update one safe local fixture\"",
         "  cargo run -- --coding-sessions 5",
         "",
+        "Turn a short operator goal into a verified skill patch",
+        "  cargo run -- --prof-x-skill-live \"capture the next harness gap\"",
+        "  cargo run -- --prof-x-skill-commit-live \"capture the next harness gap\"",
+        "",
         "Verify a repo patch without touching main",
         "  cargo run -- --prof-x-code-patch-live /tmp/change.diff",
         "",
@@ -7491,11 +7592,26 @@ mod tests {
         assert!(help.contains("--prof-x-live 5"));
         assert!(help.contains("--observe-work"));
         assert!(help.contains("--prof-x-code-live"));
+        assert!(help.contains("--prof-x-skill-live"));
+        assert!(help.contains("--prof-x-skill-commit-live"));
         assert!(help.contains("--prof-x-code-patch-live"));
         assert!(help.contains("--prof-x-code-commit-live"));
         assert!(help.contains("--coding-sessions 5"));
         assert!(help.contains("--replay latest"));
         assert!(help.contains("--validate-artifacts"));
+    }
+
+    #[test]
+    fn operator_skill_patch_sanitizes_goal_and_paths() {
+        let body = operator_goal_skill_body(
+            "px-operator-goal-test",
+            &normalize_operator_goal(" capture next harness gap \n with evidence "),
+        );
+
+        assert!(body.contains("Operator goal: capture next harness gap with evidence"));
+        assert!(body.contains("workspace-bound"));
+        assert_eq!(skill_goal_slug("Capture next harness gap!!"), "capture-next-harness-gap");
+        assert_eq!(skill_goal_slug("!!!"), "operator-goal");
     }
 
     #[test]
