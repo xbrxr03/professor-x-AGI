@@ -8,6 +8,7 @@ mod policyd;
 mod toolbridge;
 
 use anyhow::Result;
+use std::collections::BTreeSet;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -3002,29 +3003,24 @@ async fn run_supervised_loop(
         );
     }
     if publish_after_run {
-        let published = publish_run_report_artifacts(&default_repo_root(), &report_path, &report)?;
         events.append(
             None,
             None,
-            "work_loop.published",
+            "work_loop.publish.started",
             format!(
-                "{} run {} published as {}",
+                "{} run {} publishing ledger and evidence",
                 run_kind.label(),
-                short_fragment(&report.run_id),
-                short_fragment(&published.commit)
+                short_fragment(&report.run_id)
             ),
             serde_json::json!({
-                "run_id": report.run_id,
-                "run_kind": report.run_kind,
-                "profile": report.profile,
-                "commit": published.commit.clone(),
-                "paths": published
-                    .paths
-                    .iter()
-                    .map(|path| path.display().to_string())
-                    .collect::<Vec<_>>(),
+                "run_id": report.run_id.clone(),
+                "run_kind": report.run_kind.clone(),
+                "profile": report.profile.clone(),
+                "report_path": report_path.display().to_string(),
+                "ledger_path": ledger_path.display().to_string(),
             }),
         )?;
+        let published = publish_run_report_artifacts(&default_repo_root(), &report_path, &report)?;
         println!("  published: {}", published.commit);
         for path in published.paths {
             println!("  artifact: {}", path.display());
@@ -5356,6 +5352,7 @@ fn publishable_run_artifact_paths(
             }
         }
     }
+    paths.extend(publishable_event_log_paths(repo_root, report)?);
     paths.sort();
     paths.dedup();
     for path in &paths {
@@ -5367,6 +5364,43 @@ fn publishable_run_artifact_paths(
         }
     }
     Ok(paths)
+}
+
+fn publishable_event_log_paths(
+    repo_root: &std::path::Path,
+    report: &SupervisedLoopReport,
+) -> Result<Vec<PathBuf>> {
+    let mut dates = BTreeSet::new();
+    collect_event_log_date(&mut dates, &report.started_at);
+    collect_event_log_date(&mut dates, &report.completed_at);
+    for entry in &report.timeline {
+        collect_event_log_date(&mut dates, &entry.timestamp);
+    }
+    let mut paths = Vec::new();
+    for date in dates {
+        for candidate in [
+            repo_root
+                .join("professor-x")
+                .join("artifacts")
+                .join("events")
+                .join(format!("{date}.jsonl")),
+            repo_root
+                .join("artifacts")
+                .join("events")
+                .join(format!("{date}.jsonl")),
+        ] {
+            if let Some(path) = optional_publishable_run_artifact_path(repo_root, candidate.display().to_string())? {
+                paths.push(path);
+            }
+        }
+    }
+    Ok(paths)
+}
+
+fn collect_event_log_date(dates: &mut BTreeSet<String>, timestamp: &str) {
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(timestamp) {
+        dates.insert(dt.date_naive().to_string());
+    }
 }
 
 fn optional_publishable_run_artifact_path(
@@ -5396,12 +5430,14 @@ fn publishable_run_artifact_path(path: &std::path::Path) -> bool {
         || text.starts_with("professor-x/artifacts/coding-smoke/")
         || text.starts_with("professor-x/artifacts/coding-sessions/")
         || text.starts_with("professor-x/artifacts/transcripts/")
+        || text.starts_with("professor-x/artifacts/events/")
         || text.starts_with("professor-x/artifacts/evolution/")
         || text.starts_with("professor-x/artifacts/hiro/")
         || text.starts_with("artifacts/work-loop/")
         || text.starts_with("artifacts/coding-smoke/")
         || text.starts_with("artifacts/coding-sessions/")
         || text.starts_with("artifacts/transcripts/")
+        || text.starts_with("artifacts/events/")
         || text.starts_with("artifacts/evolution/")
         || text.starts_with("artifacts/hiro/")
 }
@@ -6884,12 +6920,19 @@ mod tests {
             .join("coding-smoke")
             .join("2026-06-01")
             .join("smoke-010000.json");
+        let event_path = root
+            .join("professor-x")
+            .join("artifacts")
+            .join("events")
+            .join("2026-06-01.jsonl");
         std::fs::create_dir_all(report_path.parent().unwrap()).unwrap();
         std::fs::create_dir_all(ledger_path.parent().unwrap()).unwrap();
         std::fs::create_dir_all(smoke_path.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(event_path.parent().unwrap()).unwrap();
         std::fs::write(&report_path, "{}").unwrap();
         std::fs::write(&ledger_path, "# run\n").unwrap();
         std::fs::write(&smoke_path, "{}").unwrap();
+        std::fs::write(&event_path, "{}\n").unwrap();
         let report = SupervisedLoopReport {
             run_id: "12345678-aaaa-bbbb-cccc-123456789abc".to_string(),
             run_kind: "operator".to_string(),
@@ -6917,15 +6960,19 @@ mod tests {
 
         let paths = publishable_run_artifact_paths(&root, &report_path, &report).unwrap();
 
-        assert_eq!(paths.len(), 3);
+        assert_eq!(paths.len(), 4);
         assert!(paths.iter().any(|path| path.ends_with("loop-010000.json")));
         assert!(paths.iter().any(|path| path.ends_with("run-12345678.md")));
         assert!(paths.iter().any(|path| path.ends_with("smoke-010000.json")));
+        assert!(paths.iter().any(|path| path.ends_with("2026-06-01.jsonl")));
         assert!(publishable_run_artifact_path(std::path::Path::new(
             "professor-x/artifacts/work-loop/2026-06-01/loop-010000.json"
         )));
         assert!(publishable_run_artifact_path(std::path::Path::new(
             "professor-x/artifacts/transcripts/2026-06-01/task.json"
+        )));
+        assert!(publishable_run_artifact_path(std::path::Path::new(
+            "professor-x/artifacts/events/2026-06-01.jsonl"
         )));
         assert!(!publishable_run_artifact_path(std::path::Path::new(
             "professor-x/src/main.rs"
