@@ -1,0 +1,35 @@
+{
+  "id": "412f1246-4707-447f-a2a3-13f2ef3cbeb7",
+  "generated_at": "2026-06-01T13:38:46.741826433+00:00",
+  "goal": "repo patch coding session: verify /tmp/px-repo-patch-live-smoke-20260601.diff before touching main",
+  "requested_goal": "repo patch coding session: verify /tmp/px-repo-patch-live-smoke-20260601.diff before touching main",
+  "exercise": "repo_patch_verify",
+  "status": "passed",
+  "workspace": "repo-root sandbox verification",
+  "smoke_id": null,
+  "smoke_report_path": null,
+  "session_report_path": "artifacts/coding-sessions/2026-06-01/session-133908-412f1246.json",
+  "transcript_path": null,
+  "checks": [
+    "reward_hacking_scan",
+    "sandbox_worktree",
+    "material_diff",
+    "cargo_check"
+  ],
+  "plan_steps": [
+    "Policy-gate the patch through patch.apply before sandbox work",
+    "Verify the unified diff in an isolated worktree",
+    "Run sandbox cargo check and reward-hacking/material-diff checks",
+    "Record a coding-session report that points at the verification artifact"
+  ],
+  "step_outcomes": [
+    "policy gate allowed patch.apply check",
+    "sandbox verification accepted",
+    "diff bytes 633",
+    "reason sandbox patch verification passed"
+  ],
+  "artifacts": [
+    "artifacts/evolution/patch-verifications/2026-06-01/patch-133908.json"
+  ],
+  "failure_reason": null
+}
