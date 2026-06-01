@@ -1,0 +1,20 @@
+{
+  "generated_at": "2026-06-01T08:16:14.602634063+00:00",
+  "mode": "dry_run",
+  "workspace": "repo-root",
+  "harness_commit": "2d6bfc8",
+  "target_component": "SkillDefinition(\"px-operator-proposal-dry-run\")",
+  "motivation": "smoke verify operator_proposal proposal",
+  "accepted": true,
+  "applied": false,
+  "commit": null,
+  "reason": "sandbox verification passed",
+  "checks": [
+    "reward_hacking_scan",
+    "sandbox_worktree",
+    "material_diff",
+    "cargo_check"
+  ],
+  "diff_hash": "8c1664744cbdfe18d367d1a381986962e71c9fe549cd0f4ea61c1adbe006301d",
+  "diff_bytes": 730
+}
