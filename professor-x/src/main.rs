@@ -2442,6 +2442,28 @@ struct SupervisedLoopReport {
     profile: String,
     planned_jobs: Vec<WorkLoopPlannedJob>,
     smoke_records: Vec<WorkLoopSmokeRecord>,
+    #[serde(default)]
+    timeline: Vec<WorkTimelineEntry>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct WorkTimelineEntry {
+    event_id: i64,
+    timestamp: String,
+    label: String,
+    action: String,
+    task_id: Option<String>,
+    run_id: Option<String>,
+    cycle: Option<u32>,
+    step: Option<u32>,
+    tool: Option<String>,
+    job: Option<String>,
+    passed: Option<bool>,
+    summary: String,
+    detail: Option<String>,
+    report_path: Option<String>,
+    transcript_path: Option<String>,
+    artifacts: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2672,6 +2694,7 @@ async fn run_supervised_loop(
     let run_id = uuid::Uuid::new_v4().to_string();
     let started_at = chrono::Utc::now();
     let cycles = cycles.clamp(1, 50);
+    let timeline_start_id = events.tail(1)?.last().map(|event| event.id).unwrap_or(0);
     let recent_runs = WorkLoopRunStore::new(Arc::clone(&memory.db)).recent(5)?;
     let planned_jobs = plan_work_loop_jobs(run_kind, profile, cycles, &recent_runs);
     let gate_store = WorkLoopGateStore::new(Arc::clone(&memory.db));
@@ -2825,6 +2848,7 @@ async fn run_supervised_loop(
         profile: profile.as_str().to_string(),
         planned_jobs,
         smoke_records: records,
+        timeline: work_timeline_from_events(&events.work_after_id(timeline_start_id, 1000)?),
     };
     let report_path = write_supervised_loop_report(&report)?;
     WorkLoopRunStore::new(Arc::clone(&memory.db)).insert(&WorkLoopRunRecord {
@@ -3017,6 +3041,53 @@ fn smoke_record_commit(record: &WorkLoopSmokeRecord) -> Option<String> {
         .and_then(|value| value.as_str())
         .filter(|commit| !commit.is_empty())
         .map(|commit| commit.to_string())
+}
+
+fn work_timeline_from_events(events: &[memd::events::AgentEvent]) -> Vec<WorkTimelineEntry> {
+    events.iter().map(work_timeline_entry).collect()
+}
+
+fn work_timeline_entry(event: &memd::events::AgentEvent) -> WorkTimelineEntry {
+    WorkTimelineEntry {
+        event_id: event.id,
+        timestamp: event.timestamp.to_rfc3339(),
+        label: work_event_label(&event.event_type).to_string(),
+        action: event_action(event).to_string(),
+        task_id: event.task_id.as_ref().map(|id| short_fragment(id).to_string()),
+        run_id: event.payload["run_id"]
+            .as_str()
+            .map(|run| short_fragment(run).to_string()),
+        cycle: event.payload["cycle"].as_u64().map(|value| value as u32),
+        step: event.payload["step"].as_u64().map(|value| value as u32),
+        tool: event.payload["tool"].as_str().map(ToString::to_string),
+        job: event.payload["job"].as_str().map(ToString::to_string),
+        passed: event.payload["passed"].as_bool(),
+        summary: event.summary.clone(),
+        detail: event_detail_for_timeline(event),
+        report_path: event.payload["report_path"].as_str().map(ToString::to_string),
+        transcript_path: event.payload["transcript_path"]
+            .as_str()
+            .map(ToString::to_string),
+        artifacts: event.payload["artifacts"]
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(ToString::to_string))
+                    .collect()
+            })
+            .unwrap_or_default(),
+    }
+}
+
+fn event_detail_for_timeline(event: &memd::events::AgentEvent) -> Option<String> {
+    event.payload["error"]
+        .as_str()
+        .filter(|text| !text.is_empty())
+        .or_else(|| event.payload["output_preview"].as_str())
+        .or_else(|| event.payload["params_preview"].as_str())
+        .or_else(|| event.payload["detail"].as_str())
+        .map(|text| one_line(text, 240))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -4868,7 +4939,64 @@ fn print_run_review(memory: Arc<MemoryManager>, run_ref: &str) -> Result<()> {
             print_patch_apply_review(&repo_root, &artifact_path)?;
         }
     }
+    if !report.timeline.is_empty() {
+        println!("Timeline");
+        for entry in report.timeline.iter().take(80) {
+            println!("{}", format_work_timeline_entry(entry));
+        }
+        if report.timeline.len() > 80 {
+            println!("  ... {} more event(s)", report.timeline.len() - 80);
+        }
+    }
     Ok(())
+}
+
+fn format_work_timeline_entry(entry: &WorkTimelineEntry) -> String {
+    let time = chrono::DateTime::parse_from_rfc3339(&entry.timestamp)
+        .map(|dt| dt.format("%H:%M:%S").to_string())
+        .unwrap_or_else(|_| "??:??:??".to_string());
+    let mut meta = Vec::new();
+    if let Some(task) = &entry.task_id {
+        meta.push(format!("task={task}"));
+    }
+    if let Some(run) = &entry.run_id {
+        meta.push(format!("run={run}"));
+    }
+    if let Some(cycle) = entry.cycle {
+        meta.push(format!("cycle={cycle}"));
+    }
+    if let Some(step) = entry.step {
+        meta.push(format!("step={step}"));
+    }
+    if let Some(tool) = &entry.tool {
+        meta.push(format!("tool={tool}"));
+    }
+    if let Some(job) = &entry.job {
+        meta.push(format!("job={job}"));
+    }
+    if let Some(passed) = entry.passed {
+        meta.push(format!("passed={passed}"));
+    }
+    let meta = if meta.is_empty() {
+        String::new()
+    } else {
+        format!(" [{}]", meta.join(" "))
+    };
+    let detail = entry
+        .detail
+        .as_ref()
+        .map(|detail| format!(" :: {}", truncate(detail, 120)))
+        .unwrap_or_default();
+    format!(
+        "  #{:05} {} {:<6} {} {}{}{}",
+        entry.event_id,
+        time,
+        entry.label,
+        entry.action,
+        truncate(&entry.summary, 100),
+        meta,
+        detail
+    )
 }
 
 fn print_patch_apply_review(repo_root: &std::path::Path, path: &std::path::Path) -> Result<()> {
@@ -5998,6 +6126,71 @@ mod tests {
         assert!(line.contains("transcript professor-x/artifacts/transcripts/t.json"));
         assert!(line.contains("commit abcdef12"));
         assert!(line.contains("5 checks"));
+    }
+
+    #[test]
+    fn work_timeline_entry_extracts_reviewable_event_fields() {
+        let event = memd::events::AgentEvent {
+            id: 45,
+            timestamp: chrono::Utc::now(),
+            session_id: None,
+            task_id: Some("task-123456789".to_string()),
+            event_type: "tool.started".to_string(),
+            summary: "running tool 'shell.restricted' :: command=cargo test".to_string(),
+            payload: serde_json::json!({
+                "run_id": "12345678-aaaa-bbbb-cccc-123456789abc",
+                "cycle": 2,
+                "step": 3,
+                "tool": "shell.restricted",
+                "job": "coding_smoke",
+                "params_preview": "command=cargo test",
+            }),
+        };
+
+        let entry = work_timeline_entry(&event);
+
+        assert_eq!(entry.event_id, 45);
+        assert_eq!(entry.label, "TOOL");
+        assert_eq!(entry.action, "Running");
+        assert_eq!(entry.task_id.as_deref(), Some("task-123"));
+        assert_eq!(entry.run_id.as_deref(), Some("12345678"));
+        assert_eq!(entry.cycle, Some(2));
+        assert_eq!(entry.step, Some(3));
+        assert_eq!(entry.tool.as_deref(), Some("shell.restricted"));
+        assert_eq!(entry.job.as_deref(), Some("coding_smoke"));
+        assert_eq!(entry.detail.as_deref(), Some("command=cargo test"));
+    }
+
+    #[test]
+    fn format_work_timeline_entry_is_operator_review_friendly() {
+        let entry = WorkTimelineEntry {
+            event_id: 7,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            label: "TOOL".to_string(),
+            action: "Running".to_string(),
+            task_id: Some("task-123".to_string()),
+            run_id: Some("12345678".to_string()),
+            cycle: Some(1),
+            step: Some(2),
+            tool: Some("fs.replace".to_string()),
+            job: Some("coding_smoke".to_string()),
+            passed: None,
+            summary: "running tool 'fs.replace' :: path=src/lib.rs mode=apply".to_string(),
+            detail: Some("path=src/lib.rs mode=apply".to_string()),
+            report_path: None,
+            transcript_path: None,
+            artifacts: Vec::new(),
+        };
+
+        let line = format_work_timeline_entry(&entry);
+
+        assert!(line.contains("#00007"));
+        assert!(line.contains("TOOL"));
+        assert!(line.contains("Running"));
+        assert!(line.contains("task=task-123"));
+        assert!(line.contains("step=2"));
+        assert!(line.contains("tool=fs.replace"));
+        assert!(line.contains("path=src/lib.rs mode=apply"));
     }
 
     #[test]
