@@ -2458,6 +2458,8 @@ struct SupervisedLoopReport {
     passed_cycles: u32,
     failed_cycles: u32,
     profile: String,
+    #[serde(default)]
+    ledger_path: Option<String>,
     planned_jobs: Vec<WorkLoopPlannedJob>,
     smoke_records: Vec<WorkLoopSmokeRecord>,
     #[serde(default)]
@@ -2854,7 +2856,7 @@ async fn run_supervised_loop(
         )?;
     }
 
-    let report = SupervisedLoopReport {
+    let mut report = SupervisedLoopReport {
         run_id: run_id.clone(),
         run_kind: run_kind.as_str().to_string(),
         started_at: started_at.to_rfc3339(),
@@ -2864,11 +2866,15 @@ async fn run_supervised_loop(
         passed_cycles: records.iter().filter(|record| record.passed).count() as u32,
         failed_cycles,
         profile: profile.as_str().to_string(),
+        ledger_path: None,
         planned_jobs,
         smoke_records: records,
         timeline: work_timeline_from_events(&events.work_after_id(timeline_start_id, 1000)?),
     };
     let report_path = write_supervised_loop_report(&report)?;
+    let ledger_path = write_work_loop_ledger(&report, &report_path)?;
+    report.ledger_path = Some(ledger_path.display().to_string());
+    std::fs::write(&report_path, serde_json::to_string_pretty(&report)?)?;
     WorkLoopRunStore::new(Arc::clone(&memory.db)).insert(&WorkLoopRunRecord {
         id: None,
         run_id: report.run_id.clone(),
@@ -2904,6 +2910,7 @@ async fn run_supervised_loop(
             "run_id": run_id,
             "run_kind": run_kind.as_str(),
             "report_path": report_path,
+            "ledger_path": ledger_path,
             "passed_cycles": report.passed_cycles,
             "failed_cycles": report.failed_cycles,
             "planned_jobs": &report.planned_jobs,
@@ -2915,6 +2922,7 @@ async fn run_supervised_loop(
     println!("  passed: {}", report.passed_cycles);
     println!("  failed: {}", report.failed_cycles);
     println!("  report: {}", report_path.display());
+    println!("  ledger: {}", ledger_path.display());
     if report.failed_cycles > 0 {
         anyhow::bail!(
             "{} completed with {} failed cycle(s)",
@@ -3934,6 +3942,109 @@ fn write_supervised_loop_report(report: &SupervisedLoopReport) -> Result<PathBuf
     let path = dir.join(format!("loop-{}.json", chrono::Utc::now().format("%H%M%S")));
     std::fs::write(&path, serde_json::to_string_pretty(report)?)?;
     Ok(path)
+}
+
+fn write_work_loop_ledger(
+    report: &SupervisedLoopReport,
+    report_path: &std::path::Path,
+) -> Result<PathBuf> {
+    let dir = std::env::var("PROFESSOR_X_WORK_LOOP_LEDGER_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            PathBuf::from("artifacts")
+                .join("work-loop")
+                .join("ledger")
+                .join(chrono::Utc::now().format("%Y-%m-%d").to_string())
+        });
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("run-{}.md", short_fragment(&report.run_id)));
+    std::fs::write(&path, format_work_loop_ledger(report, report_path))?;
+    Ok(path)
+}
+
+fn format_work_loop_ledger(
+    report: &SupervisedLoopReport,
+    report_path: &std::path::Path,
+) -> String {
+    let repo_root = default_repo_root();
+    let mut out = Vec::new();
+    out.push(format!("# Professor X Run {}", short_fragment(&report.run_id)));
+    out.push(String::new());
+    out.push(format!("- run_id: `{}`", report.run_id));
+    out.push(format!("- kind: `{}`", report.run_kind));
+    out.push(format!("- profile: `{}`", report.profile));
+    out.push(format!("- started_at: `{}`", report.started_at));
+    out.push(format!("- completed_at: `{}`", report.completed_at));
+    out.push(format!(
+        "- cycles: `{}/{}` completed, `{}` passed, `{}` failed",
+        report.completed_cycles,
+        report.requested_cycles,
+        report.passed_cycles,
+        report.failed_cycles
+    ));
+    out.push(format!(
+        "- report: `{}`",
+        display_repo_path(&repo_root, report_path)
+    ));
+    out.push(String::new());
+    out.push("## Plan".to_string());
+    out.push(String::new());
+    if report.planned_jobs.is_empty() {
+        out.push("- no planned jobs recorded".to_string());
+    } else {
+        for job in &report.planned_jobs {
+            out.push(format!(
+                "- cycle {}: `{}` - {}",
+                job.cycle,
+                job.kind,
+                truncate(&job.reason, 160)
+            ));
+        }
+    }
+    out.push(String::new());
+    out.push("## Outcomes".to_string());
+    out.push(String::new());
+    if report.smoke_records.is_empty() {
+        out.push("- no gate records recorded".to_string());
+    } else {
+        for record in &report.smoke_records {
+            out.push(format!(
+                "- cycle {} `{}`: {} - {}",
+                record.cycle,
+                record.kind,
+                if record.passed { "passed" } else { "failed" },
+                truncate(&record.detail, 180)
+            ));
+            out.push(format!("  - report: `{}`", record.report_path));
+            if let Some(transcript) = &record.transcript_path {
+                out.push(format!("  - transcript: `{transcript}`"));
+            }
+            if let Some(commit) = smoke_record_commit(record) {
+                out.push(format!("  - commit: `{commit}`"));
+            }
+        }
+    }
+    out.push(String::new());
+    out.push("## Timeline".to_string());
+    out.push(String::new());
+    if report.timeline.is_empty() {
+        out.push("- no timeline recorded".to_string());
+    } else {
+        for entry in report.timeline.iter().take(80) {
+            out.push(format!(
+                "- #{:05} `{}` `{}` {}",
+                entry.event_id,
+                entry.label,
+                entry.action,
+                truncate(&entry.summary, 180)
+            ));
+        }
+        if report.timeline.len() > 80 {
+            out.push(format!("- ... {} more event(s)", report.timeline.len() - 80));
+        }
+    }
+    out.push(String::new());
+    out.join("\n")
 }
 
 async fn run_one_evolution_cycle(
@@ -6337,6 +6448,69 @@ mod tests {
         assert!(line.contains("L report artifacts/coding-smoke/report.json"));
         assert!(line.contains("L transcript artifacts/transcripts/task.json"));
         assert!(line.contains("L artifact artifacts/commands/cargo-test.json"));
+    }
+
+    #[test]
+    fn format_work_loop_ledger_links_plan_outcomes_and_timeline() {
+        let report = SupervisedLoopReport {
+            run_id: "12345678-aaaa-bbbb-cccc-123456789abc".to_string(),
+            run_kind: "operator".to_string(),
+            started_at: "2026-06-01T01:00:00Z".to_string(),
+            completed_at: "2026-06-01T01:01:00Z".to_string(),
+            requested_cycles: 1,
+            completed_cycles: 1,
+            passed_cycles: 1,
+            failed_cycles: 0,
+            profile: "core".to_string(),
+            ledger_path: None,
+            planned_jobs: vec![WorkLoopPlannedJob {
+                cycle: 1,
+                kind: "coding_smoke".to_string(),
+                label: "coding smoke".to_string(),
+                reason: "prove local coding-agent edit and verification".to_string(),
+            }],
+            smoke_records: vec![WorkLoopSmokeRecord {
+                cycle: 1,
+                kind: "coding_smoke".to_string(),
+                smoke_id: None,
+                passed: true,
+                report_path: "artifacts/coding-smoke/report.json".to_string(),
+                transcript_path: Some("artifacts/transcripts/task.json".to_string()),
+                workspace: "/tmp/px".to_string(),
+                detail: "deterministic coding smoke".to_string(),
+            }],
+            timeline: vec![WorkTimelineEntry {
+                event_id: 8,
+                timestamp: "2026-06-01T01:00:01Z".to_string(),
+                label: "TOOL".to_string(),
+                action: "Running".to_string(),
+                task_id: Some("abcd1234".to_string()),
+                run_id: Some("12345678".to_string()),
+                cycle: Some(1),
+                step: Some(1),
+                tool: Some("shell.restricted".to_string()),
+                job: Some("coding_smoke".to_string()),
+                passed: None,
+                summary: "running tool 'shell.restricted' :: command=cargo test".to_string(),
+                detail: Some("command=cargo test".to_string()),
+                report_path: None,
+                transcript_path: None,
+                artifacts: Vec::new(),
+            }],
+        };
+
+        let ledger = format_work_loop_ledger(
+            &report,
+            std::path::Path::new("artifacts/work-loop/2026-06-01/loop.json"),
+        );
+
+        assert!(ledger.contains("# Professor X Run 12345678"));
+        assert!(ledger.contains("- kind: `operator`"));
+        assert!(ledger.contains("cycle 1: `coding_smoke`"));
+        assert!(ledger.contains("cycle 1 `coding_smoke`: passed"));
+        assert!(ledger.contains("report: `artifacts/coding-smoke/report.json`"));
+        assert!(ledger.contains("transcript: `artifacts/transcripts/task.json`"));
+        assert!(ledger.contains("#00008 `TOOL` `Running`"));
     }
 
     #[test]

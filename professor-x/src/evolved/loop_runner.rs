@@ -589,8 +589,10 @@ async fn git_worktree_clean_at(repo_root: &Path) -> Result<bool> {
             ".",
             ":!professor-x/artifacts/events",
             ":!professor-x/artifacts/evolution",
+            ":!professor-x/artifacts/work-loop",
             ":!artifacts/events",
             ":!artifacts/evolution",
+            ":!artifacts/work-loop",
         ])
         .current_dir(repo_root)
         .output()
