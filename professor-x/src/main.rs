@@ -131,6 +131,8 @@ struct CliArgs {
     operator_run_cycles: Option<u32>,
     /// Run N bounded Prof X operator cycles including one commit-capable gate and exit.
     operator_run_commit_cycles: Option<u32>,
+    /// Run N commit-capable operator cycles while streaming the work feed.
+    operator_run_live_cycles: Option<u32>,
     /// Publish the just-completed work-loop report, ledger, and evidence as a git commit.
     publish_after_run: bool,
     /// Run N bounded autonomous Prof X cycles using the core safety profile and exit.
@@ -238,6 +240,7 @@ fn parse_args() -> CliArgs {
         supervised_loop_profile: WorkLoopProfile::Basic,
         operator_run_cycles: None,
         operator_run_commit_cycles: None,
+        operator_run_live_cycles: None,
         publish_after_run: false,
         autonomous_run_cycles: None,
         autonomous_run_commit_cycles: None,
@@ -490,6 +493,25 @@ fn parse_args() -> CliArgs {
                     .filter(|next| !next.starts_with("--"))
                     .and_then(|next| next.parse::<u32>().ok());
                 cli.operator_run_commit_cycles = Some(cycles.unwrap_or(5));
+                cli.publish_after_run = true;
+                i += if cycles.is_some() { 2 } else { 1 };
+            }
+            "--operator-run-live" | "--operator-run-commit-live" | "--prof-x-live" => {
+                let cycles = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .and_then(|next| next.parse::<u32>().ok());
+                cli.operator_run_live_cycles = Some(cycles.unwrap_or(5));
+                i += if cycles.is_some() { 2 } else { 1 };
+            }
+            "--operator-run-publish-live"
+            | "--operator-run-commit-publish-live"
+            | "--prof-x-live-publish" => {
+                let cycles = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .and_then(|next| next.parse::<u32>().ok());
+                cli.operator_run_live_cycles = Some(cycles.unwrap_or(5));
                 cli.publish_after_run = true;
                 i += if cycles.is_some() { 2 } else { 1 };
             }
@@ -840,6 +862,21 @@ async fn main() -> Result<()> {
 
     if let Some(cycles) = cli.operator_run_commit_cycles {
         return run_supervised_loop(
+            WorkLoopRunKind::Operator,
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            Arc::clone(&transcripts),
+            cycles,
+            WorkLoopProfile::Commit,
+            cli.publish_after_run,
+        )
+        .await;
+    }
+
+    if let Some(cycles) = cli.operator_run_live_cycles {
+        return run_supervised_loop_live(
             WorkLoopRunKind::Operator,
             Arc::clone(&registry),
             Arc::clone(&policy),
@@ -2770,6 +2807,87 @@ async fn run_autonomous_operator_run(
         publish_after_run,
     )
     .await
+}
+
+async fn run_supervised_loop_live(
+    run_kind: WorkLoopRunKind,
+    registry: Arc<std::sync::RwLock<ToolRegistry>>,
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    transcripts: Arc<TranscriptStore>,
+    cycles: u32,
+    profile: WorkLoopProfile,
+    publish_after_run: bool,
+) -> Result<()> {
+    let mut last_id = events.tail(1)?.last().map(|event| event.id).unwrap_or(0);
+    println!("Professor X live run");
+    println!("  kind/profile: {}:{}", run_kind.as_str(), profile.as_str());
+    println!("  cycles: {}", cycles.clamp(1, 50));
+    println!("  publish-after-run: {publish_after_run}");
+    println!("  observer in another terminal: cargo run -- --observe-work");
+    println!("  streaming work feed below");
+    io::stdout().flush()?;
+
+    let run_memory = Arc::clone(&memory);
+    let run_events = Arc::clone(&events);
+    let mut handle = tokio::spawn(async move {
+        run_supervised_loop(
+            run_kind,
+            registry,
+            policy,
+            run_memory,
+            run_events,
+            transcripts,
+            cycles,
+            profile,
+            publish_after_run,
+        )
+        .await
+    });
+
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                println!("Live Professor X run interrupted.");
+                handle.abort();
+                anyhow::bail!("live Professor X run interrupted");
+            }
+            result = &mut handle => {
+                for event in events.work_after_id(last_id, 200)? {
+                    println!("{}", format_work_event(&event));
+                }
+                io::stdout().flush()?;
+                result??;
+                print_latest_live_run_summary(Arc::clone(&memory))?;
+                return Ok(());
+            }
+            _ = tokio::time::sleep(tokio::time::Duration::from_millis(250)) => {
+                for event in events.work_after_id(last_id, 100)? {
+                    last_id = event.id;
+                    println!("{}", format_work_event(&event));
+                }
+                io::stdout().flush()?;
+            }
+        }
+    }
+}
+
+fn print_latest_live_run_summary(memory: Arc<MemoryManager>) -> Result<()> {
+    let Some(run) = WorkLoopRunStore::new(Arc::clone(&memory.db)).latest()? else {
+        println!("Professor X live run finished, but no run record was found.");
+        return Ok(());
+    };
+    let run_ref = short_fragment(&run.run_id);
+    println!("Professor X live run complete");
+    println!("{}", format_run_log_entry(&run, run_ledger_path(&run).as_deref()));
+    println!("  L watch latest cargo run -- --observe-work");
+    println!("  L replay latest cargo run -- --replay {run_ref}");
+    println!("  L review latest cargo run -- --run-review {run_ref}");
+    if run.failed_cycles == 0 {
+        println!("  L publish latest cargo run -- --publish-run {run_ref}");
+    }
+    Ok(())
 }
 
 async fn run_supervised_loop(
