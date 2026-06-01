@@ -1,4 +1,4 @@
-# PX Repo Patch Live Commit Smoke
+# px-repo-patch-live-commit-smoke-20260601
 
 Purpose: verifies that Professor X can stream a repo patch session through main apply, cargo check, and git commit.
 

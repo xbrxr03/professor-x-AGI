@@ -1910,11 +1910,15 @@ struct OperatorSkillPatch {
     goal: String,
 }
 
+const OPERATOR_SKILL_PREFIX: &str = "px-operator-goal-";
+const OPERATOR_SKILL_TIMESTAMP_LEN: usize = 15; // YYYYMMDD-HHMMSS
+const MAX_SKILL_NAME_LEN: usize = 64;
+
 fn write_operator_skill_patch(goal: &str) -> Result<OperatorSkillPatch> {
     let goal = normalize_operator_goal(goal);
     let slug = skill_goal_slug(&goal);
     let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
-    let skill_name = format!("px-operator-goal-{timestamp}-{slug}");
+    let skill_name = format!("{OPERATOR_SKILL_PREFIX}{timestamp}-{slug}");
     let path = PathBuf::from("professor-x")
         .join("skills")
         .join("conductor")
@@ -1957,6 +1961,8 @@ fn normalize_operator_goal(goal: &str) -> String {
 }
 
 fn skill_goal_slug(goal: &str) -> String {
+    let max_slug_len =
+        MAX_SKILL_NAME_LEN - OPERATOR_SKILL_PREFIX.len() - OPERATOR_SKILL_TIMESTAMP_LEN - 1;
     let mut slug = String::new();
     let mut last_dash = false;
     for ch in goal.to_ascii_lowercase().chars() {
@@ -1967,7 +1973,7 @@ fn skill_goal_slug(goal: &str) -> String {
             slug.push('-');
             last_dash = true;
         }
-        if slug.len() >= 40 {
+        if slug.len() >= max_slug_len {
             break;
         }
     }
@@ -7702,9 +7708,41 @@ mod tests {
         assert!(body.contains("workspace-bound"));
         assert_eq!(skill_goal_slug("Capture next harness gap!!"), "capture-next-harness-gap");
         assert_eq!(skill_goal_slug("!!!"), "operator-goal");
+        assert_eq!(
+            format!(
+                "{OPERATOR_SKILL_PREFIX}20260601-135027-{}",
+                skill_goal_slug(
+                    "preserve operator goal provenance in session evidence with extra words"
+                )
+            )
+            .len(),
+            MAX_SKILL_NAME_LEN
+        );
+        toolbridge::skill_loader::validate_skill_name(&format!(
+            "{OPERATOR_SKILL_PREFIX}20260601-135027-{}",
+            skill_goal_slug("preserve operator goal provenance in session evidence")
+        ))
+        .expect("generated operator skill name must satisfy loader constraints");
         assert!(session_goal.contains("goal='capture next harness gap with evidence'"));
         assert!(session_goal.contains("skill=px-operator-goal-test"));
         assert!(session_goal.contains("professor-x/skills/conductor/px-operator-goal-test.md"));
+    }
+
+    #[test]
+    fn conductor_skills_include_generated_operator_goals() {
+        let skills_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("skills")
+            .join("conductor");
+        let skills = toolbridge::skill_loader::scan_skills_dir(&skills_dir);
+        let names = skills
+            .iter()
+            .map(|(frontmatter, _)| frontmatter.name.as_str())
+            .collect::<BTreeSet<_>>();
+
+        assert!(names.contains("px-operator-goal-20260601-134503-make-goals-verified"));
+        assert!(names.contains("px-operator-goal-20260601-135027-preserve-goal-provenance"));
+        assert!(names.contains("px-repo-patch-live-commit-smoke-20260601"));
+        assert!(names.iter().all(|name| name.len() <= MAX_SKILL_NAME_LEN));
     }
 
     #[test]
