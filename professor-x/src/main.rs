@@ -2945,7 +2945,7 @@ struct WorkTimelineEntry {
     artifacts: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WorkLoopJob {
     CodingSmoke,
     EvolutionSmoke,
@@ -3123,6 +3123,75 @@ fn annotate_planned_jobs_with_context(
     for job in jobs {
         job.reason = format!("queued goal: {goal}; {}", job.reason);
     }
+}
+
+fn prioritize_planned_jobs_for_context(
+    jobs: &mut Vec<WorkLoopPlannedJob>,
+    profile: WorkLoopProfile,
+    context: Option<&WorkLoopRunContext>,
+) {
+    if jobs.is_empty() {
+        return;
+    }
+    if jobs
+        .first()
+        .map(|job| job.reason.contains("latest operator run failed"))
+        .unwrap_or(false)
+    {
+        return;
+    }
+    let Some(goal) = context.and_then(|ctx| ctx.operator_goal.as_deref()) else {
+        return;
+    };
+    let Some(target) = goal_target_job_for_profile(goal, profile) else {
+        return;
+    };
+    let reason = format!(
+        "operator queued goal targets {} gate from goal keywords",
+        target.label()
+    );
+    if let Some(index) = jobs.iter().position(|job| job.kind == target.kind()) {
+        let mut job = jobs.remove(index);
+        job.reason = reason;
+        jobs.insert(0, job);
+    } else {
+        jobs[0] = planned_job(1, target, reason);
+    }
+    for (index, job) in jobs.iter_mut().enumerate() {
+        job.cycle = index as u32 + 1;
+    }
+}
+
+fn goal_target_job_for_profile(goal: &str, profile: WorkLoopProfile) -> Option<WorkLoopJob> {
+    let goal = goal.to_ascii_lowercase();
+    let has_any = |terms: &[&str]| terms.iter().any(|term| goal.contains(term));
+
+    if has_any(&["hiro", "benchmark", "task inventory", "pass@3", "pass at 3"]) {
+        return Some(WorkLoopJob::HiroSmoke);
+    }
+    if has_any(&[
+        "sandbox",
+        "reward",
+        "rollback",
+        "policy",
+        "safety",
+        "evolution smoke",
+    ]) {
+        return Some(WorkLoopJob::EvolutionSmoke);
+    }
+    if has_any(&["proposal", "dry-run", "dry run", "manifest", "provenance"]) {
+        return Some(WorkLoopJob::ProposalDryRun);
+    }
+    if has_any(&["commit", "git", "apply", "patch", "publish"]) {
+        return Some(match profile {
+            WorkLoopProfile::Commit => WorkLoopJob::PatchApplyCommit,
+            _ => WorkLoopJob::ProposalDryRun,
+        });
+    }
+    if has_any(&["code", "coding", "edit", "test", "compile", "cargo"]) {
+        return Some(WorkLoopJob::CodingSmoke);
+    }
+    None
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3619,6 +3688,7 @@ async fn run_supervised_loop(
     let timeline_start_id = events.tail(1)?.last().map(|event| event.id).unwrap_or(0);
     let recent_runs = WorkLoopRunStore::new(Arc::clone(&memory.db)).recent(5)?;
     let mut planned_jobs = plan_work_loop_jobs(run_kind, profile, cycles, &recent_runs);
+    prioritize_planned_jobs_for_context(&mut planned_jobs, profile, context.as_ref());
     annotate_planned_jobs_with_context(&mut planned_jobs, context.as_ref());
     let gate_store = WorkLoopGateStore::new(Arc::clone(&memory.db));
     events.append(
@@ -9228,6 +9298,75 @@ mod tests {
         assert!(jobs[0]
             .reason
             .contains("prove local coding-agent edit and verification"));
+    }
+
+    #[test]
+    fn queued_hiro_goal_targets_hiro_gate_first() {
+        let mut jobs =
+            plan_work_loop_jobs(WorkLoopRunKind::Operator, WorkLoopProfile::Core, 4, &[]);
+        let context = WorkLoopRunContext {
+            queue_id: Some("queue-12345678".to_string()),
+            operator_goal: Some("run HIRO benchmark inventory before the next evolution".to_string()),
+        };
+
+        prioritize_planned_jobs_for_context(&mut jobs, WorkLoopProfile::Core, Some(&context));
+        annotate_planned_jobs_with_context(&mut jobs, Some(&context));
+
+        assert_eq!(jobs[0].kind, "hiro_smoke");
+        assert!(jobs[0].reason.contains("queued goal: run HIRO benchmark"));
+        assert!(jobs[0].reason.contains("targets HIRO inventory smoke gate"));
+        assert_eq!(jobs[0].cycle, 1);
+        assert_eq!(jobs[1].cycle, 2);
+    }
+
+    #[test]
+    fn queued_core_commit_goal_targets_non_committing_proposal_gate() {
+        let mut jobs =
+            plan_work_loop_jobs(WorkLoopRunKind::Operator, WorkLoopProfile::Core, 4, &[]);
+        let context = WorkLoopRunContext {
+            queue_id: Some("queue-12345678".to_string()),
+            operator_goal: Some("prepare git commit evidence for the next patch".to_string()),
+        };
+
+        prioritize_planned_jobs_for_context(&mut jobs, WorkLoopProfile::Core, Some(&context));
+
+        assert_eq!(jobs[0].kind, "proposal_dry_run");
+        assert!(jobs[0].reason.contains("targets evolution proposal dry-run gate"));
+    }
+
+    #[test]
+    fn queued_commit_profile_goal_targets_verified_patch_apply_gate() {
+        let mut jobs =
+            plan_work_loop_jobs(WorkLoopRunKind::Operator, WorkLoopProfile::Commit, 5, &[]);
+        let context = WorkLoopRunContext {
+            queue_id: Some("queue-12345678".to_string()),
+            operator_goal: Some("apply and commit a verified patch with git evidence".to_string()),
+        };
+
+        prioritize_planned_jobs_for_context(&mut jobs, WorkLoopProfile::Commit, Some(&context));
+
+        assert_eq!(jobs[0].kind, "patch_apply_commit");
+        assert!(jobs[0].reason.contains("targets verified patch apply commit gate"));
+    }
+
+    #[test]
+    fn queued_goal_does_not_override_failed_gate_retry() {
+        let recent = vec![work_loop_run(
+            "operator",
+            1,
+            vec![smoke("coding_smoke", true), smoke("evolution_smoke", false)],
+        )];
+        let mut jobs =
+            plan_work_loop_jobs(WorkLoopRunKind::Operator, WorkLoopProfile::Core, 4, &recent);
+        let context = WorkLoopRunContext {
+            queue_id: Some("queue-12345678".to_string()),
+            operator_goal: Some("run HIRO benchmark inventory now".to_string()),
+        };
+
+        prioritize_planned_jobs_for_context(&mut jobs, WorkLoopProfile::Core, Some(&context));
+
+        assert_eq!(jobs[0].kind, "evolution_smoke");
+        assert!(jobs[0].reason.contains("latest operator run failed"));
     }
 
     #[test]
