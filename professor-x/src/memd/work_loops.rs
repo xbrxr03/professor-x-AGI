@@ -18,7 +18,7 @@ pub struct WorkLoopSmokeRecord {
     pub detail: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkLoopPlannedJob {
     pub cycle: u32,
     pub kind: String,

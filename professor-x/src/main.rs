@@ -168,6 +168,8 @@ struct CliArgs {
     autonomy_enqueue_profile: WorkLoopProfile,
     /// Plan and enqueue the next autonomous work item without executing it.
     autonomy_plan: bool,
+    /// Preview the next autonomous queue step without enqueueing or executing it.
+    autonomy_preview: bool,
     /// Run N persisted autonomous queue items, seeding one default item if empty.
     autonomy_step_count: Option<u32>,
     /// Run one sandbox-verified autonomous commit smoke and exit.
@@ -289,6 +291,7 @@ fn parse_args() -> CliArgs {
         autonomy_enqueue_goal: None,
         autonomy_enqueue_profile: WorkLoopProfile::Core,
         autonomy_plan: false,
+        autonomy_preview: false,
         autonomy_step_count: None,
         operator_commit_smoke: false,
         evolution_cycle: false,
@@ -570,6 +573,10 @@ fn parse_args() -> CliArgs {
                 cli.autonomy_plan = true;
                 i += 1;
             }
+            "--autonomy-preview" | "--prof-x-preview-step" | "--prof-x-preview" => {
+                cli.autonomy_preview = true;
+                i += 1;
+            }
             "--autonomy-step" | "--prof-x-step" => {
                 let count = args
                     .get(i + 1)
@@ -807,6 +814,10 @@ async fn main() -> Result<()> {
 
     if cli.autonomy_plan {
         return plan_autonomy_queue_once(Arc::clone(&memory), Arc::clone(&events));
+    }
+
+    if cli.autonomy_preview {
+        return preview_autonomy_step(Arc::clone(&memory), Arc::clone(&events));
     }
 
     if let Some(limit) = cli.work_loops_limit {
@@ -3254,6 +3265,19 @@ struct AutonomyQueuePlan {
     reason: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AutonomyStepPreview {
+    source: String,
+    queue_id: Option<String>,
+    goal: String,
+    kind: String,
+    profile: WorkLoopProfile,
+    cycles: u32,
+    priority: u8,
+    reason: String,
+    planned_jobs: Vec<WorkLoopPlannedJob>,
+}
+
 fn plan_next_autonomy_queue_item(recent_runs: &[WorkLoopRunRecord]) -> AutonomyQueuePlan {
     if let Some(job) = latest_failed_operator_job(recent_runs) {
         let profile = match job {
@@ -3328,6 +3352,127 @@ fn plan_next_autonomy_queue_item(recent_runs: &[WorkLoopRunRecord]) -> AutonomyQ
         priority: 40,
         reason: "core and commit-capable evidence exist; continue maintenance coverage while waiting for HIRO/DHE targeting".to_string(),
     }
+}
+
+fn preview_autonomy_step_from_parts(
+    pending: Option<AutonomyQueueItem>,
+    recent_runs: &[WorkLoopRunRecord],
+) -> AutonomyStepPreview {
+    match pending {
+        Some(item) => {
+            let profile = WorkLoopProfile::parse(&item.profile).unwrap_or(WorkLoopProfile::Core);
+            let context = WorkLoopRunContext::from_queue_item(&item);
+            let mut planned_jobs = plan_work_loop_jobs(
+                WorkLoopRunKind::Operator,
+                profile,
+                item.cycles.clamp(1, 50),
+                recent_runs,
+            );
+            prioritize_planned_jobs_for_context(&mut planned_jobs, profile, Some(&context));
+            annotate_planned_jobs_with_context(&mut planned_jobs, Some(&context));
+            AutonomyStepPreview {
+                source: "pending_queue".to_string(),
+                queue_id: Some(item.id),
+                goal: item.goal,
+                kind: item.kind,
+                profile,
+                cycles: item.cycles.clamp(1, 50),
+                priority: item.priority,
+                reason: "highest-priority pending queue item".to_string(),
+                planned_jobs,
+            }
+        }
+        None => {
+            let plan = plan_next_autonomy_queue_item(recent_runs);
+            let context = WorkLoopRunContext {
+                queue_id: None,
+                operator_goal: Some(plan.goal.clone()),
+            };
+            let mut planned_jobs = plan_work_loop_jobs(
+                WorkLoopRunKind::Operator,
+                plan.profile,
+                plan.cycles.clamp(1, 50),
+                recent_runs,
+            );
+            prioritize_planned_jobs_for_context(&mut planned_jobs, plan.profile, Some(&context));
+            annotate_planned_jobs_with_context(&mut planned_jobs, Some(&context));
+            AutonomyStepPreview {
+                source: "planner_seed".to_string(),
+                queue_id: None,
+                goal: plan.goal,
+                kind: plan.kind,
+                profile: plan.profile,
+                cycles: plan.cycles.clamp(1, 50),
+                priority: plan.priority,
+                reason: plan.reason,
+                planned_jobs,
+            }
+        }
+    }
+}
+
+fn preview_autonomy_step(memory: Arc<MemoryManager>, events: Arc<EventStore>) -> Result<()> {
+    let queue_store = AutonomyQueueStore::new(Arc::clone(&memory.db));
+    let recent_runs = WorkLoopRunStore::new(Arc::clone(&memory.db)).recent(8)?;
+    let preview = preview_autonomy_step_from_parts(queue_store.next_pending()?, &recent_runs);
+    events.append(
+        None,
+        None,
+        "autonomy.queue.previewed",
+        format!(
+            "previewed next autonomous queue step: {}",
+            truncate(&preview.goal, 100)
+        ),
+        serde_json::json!({
+            "source": preview.source,
+            "queue_id": preview.queue_id,
+            "goal": preview.goal,
+            "kind": preview.kind,
+            "profile": preview.profile.as_str(),
+            "cycles": preview.cycles,
+            "priority": preview.priority,
+            "reason": preview.reason,
+            "planned_jobs": preview.planned_jobs,
+            "mutates_queue": false,
+            "next_command": "cargo run -- --prof-x-step 1",
+        }),
+    )?;
+    print_autonomy_step_preview(&preview);
+    Ok(())
+}
+
+fn print_autonomy_step_preview(preview: &AutonomyStepPreview) {
+    println!("Professor X next autonomous step preview");
+    println!("  source: {}", preview.source);
+    println!(
+        "  queue: {}",
+        preview
+            .queue_id
+            .as_deref()
+            .map(short_fragment)
+            .unwrap_or("none; would seed planner item")
+    );
+    println!("  goal: {}", preview.goal);
+    println!(
+        "  run: {}:{} cycles={} priority={}",
+        preview.kind,
+        preview.profile.as_str(),
+        preview.cycles,
+        preview.priority
+    );
+    println!("  reason: {}", preview.reason);
+    println!("  mutates queue: false");
+    println!("  planned gates:");
+    for job in &preview.planned_jobs {
+        println!(
+            "    {:>2}. {:<18} {}",
+            job.cycle,
+            job.kind,
+            truncate(&job.reason, 110)
+        );
+    }
+    println!("  execute: cargo run -- --prof-x-step 1");
+    println!("  watch: cargo run -- --observe-work");
 }
 
 fn enqueue_planned_autonomy_item(
@@ -6306,6 +6451,11 @@ async fn run_interactive_tasks(
             plan_autonomy_queue_once(Arc::clone(&memory), Arc::clone(&events))?;
             continue;
         }
+        if input == "/preview" || input == "/next" {
+            record_console_command(&events, "preview", None)?;
+            preview_autonomy_step(Arc::clone(&memory), Arc::clone(&events))?;
+            continue;
+        }
         if let Some(rest) = input.strip_prefix("/enqueue-commit") {
             let goal = rest.trim();
             record_console_command(&events, "enqueue-commit", Some(goal.to_string()))?;
@@ -6466,6 +6616,7 @@ fn format_interactive_help() -> String {
         "  /session-review [session] review latest or selected coding session",
         "  /queue [n]      show persistent autonomous work queue",
         "  /plan           enqueue the next planner-selected autonomous work item",
+        "  /preview        show the next queued/planned autonomous gates without running them",
         "  /enqueue <goal> enqueue a bounded core autonomous work goal",
         "  /enqueue-commit <goal> enqueue a commit-capable autonomous work goal",
         "  /runs [n]       show recent operator/autonomous run ledger entries",
@@ -6761,6 +6912,7 @@ fn format_operator_help() -> String {
         "  cargo run -- --prof-x-enqueue \"tighten the next harness gap\"",
         "  cargo run -- --prof-x-enqueue-commit \"capture a verified skill improvement\"",
         "  cargo run -- --prof-x-plan",
+        "  cargo run -- --prof-x-preview-step",
         "  cargo run -- --prof-x-step 1",
         "  cargo run -- --prof-x-queue 10",
         "  cargo run -- --observe-work",
@@ -9124,6 +9276,26 @@ mod tests {
         }
     }
 
+    fn queue_item(goal: &str, profile: WorkLoopProfile, cycles: u32) -> AutonomyQueueItem {
+        let now = chrono::Utc::now();
+        AutonomyQueueItem {
+            id: "12345678-aaaa-bbbb-cccc-123456789abc".to_string(),
+            goal: goal.to_string(),
+            kind: "operator_run".to_string(),
+            profile: profile.as_str().to_string(),
+            cycles,
+            priority: 77,
+            status: "pending".to_string(),
+            result_run_id: None,
+            result_report_path: None,
+            failure_reason: None,
+            queued_at: now,
+            started_at: None,
+            completed_at: None,
+            updated_at: now,
+        }
+    }
+
     #[test]
     fn operator_help_surfaces_live_and_commit_commands() {
         let help = format_operator_help();
@@ -9133,6 +9305,7 @@ mod tests {
         assert!(help.contains("--prof-x-enqueue"));
         assert!(help.contains("--prof-x-enqueue-commit"));
         assert!(help.contains("--prof-x-plan"));
+        assert!(help.contains("--prof-x-preview-step"));
         assert!(help.contains("--prof-x-step 1"));
         assert!(help.contains("--prof-x-queue 10"));
         assert!(help.contains("--observe-work"));
@@ -9159,6 +9332,7 @@ mod tests {
         assert!(help.contains("/session-review [session]"));
         assert!(help.contains("/queue [n]"));
         assert!(help.contains("/plan"));
+        assert!(help.contains("/preview"));
         assert!(help.contains("/enqueue <goal>"));
         assert!(help.contains("/enqueue-commit <goal>"));
         assert!(help.contains("/runs [n]"));
@@ -9464,6 +9638,75 @@ mod tests {
 
         assert_eq!(jobs[0].kind, "evolution_smoke");
         assert!(jobs[0].reason.contains("latest operator run failed"));
+    }
+
+    #[test]
+    fn preview_pending_hiro_goal_targets_hiro_gate_without_running() {
+        let preview = preview_autonomy_step_from_parts(
+            Some(queue_item(
+                "run HIRO benchmark inventory before the next evolution",
+                WorkLoopProfile::Core,
+                4,
+            )),
+            &[],
+        );
+
+        assert_eq!(preview.source, "pending_queue");
+        assert_eq!(preview.queue_id.as_deref(), Some("12345678-aaaa-bbbb-cccc-123456789abc"));
+        assert_eq!(preview.profile, WorkLoopProfile::Core);
+        assert_eq!(preview.cycles, 4);
+        assert_eq!(preview.priority, 77);
+        assert_eq!(preview.planned_jobs[0].kind, "hiro_smoke");
+        assert!(preview.planned_jobs[0].reason.contains("queued goal: run HIRO benchmark"));
+    }
+
+    #[test]
+    fn preview_core_commit_goal_stays_on_non_committing_proposal_gate() {
+        let preview = preview_autonomy_step_from_parts(
+            Some(queue_item(
+                "prepare git commit evidence for the next patch",
+                WorkLoopProfile::Core,
+                4,
+            )),
+            &[],
+        );
+
+        assert_eq!(preview.planned_jobs[0].kind, "proposal_dry_run");
+        assert!(preview.planned_jobs[0]
+            .reason
+            .contains("targets evolution proposal dry-run gate"));
+    }
+
+    #[test]
+    fn preview_empty_queue_shows_planner_seed_without_queue_id() {
+        let preview = preview_autonomy_step_from_parts(None, &[]);
+
+        assert_eq!(preview.source, "planner_seed");
+        assert_eq!(preview.queue_id, None);
+        assert_eq!(preview.kind, "operator_run");
+        assert_eq!(preview.profile, WorkLoopProfile::Core);
+        assert_eq!(preview.planned_jobs[0].kind, "coding_smoke");
+        assert!(preview.reason.contains("no operator run exists"));
+    }
+
+    #[test]
+    fn preview_keeps_failed_gate_retry_ahead_of_goal_targeting() {
+        let recent = vec![work_loop_run(
+            "operator",
+            1,
+            vec![smoke("coding_smoke", true), smoke("evolution_smoke", false)],
+        )];
+        let preview = preview_autonomy_step_from_parts(
+            Some(queue_item(
+                "run HIRO benchmark inventory now",
+                WorkLoopProfile::Core,
+                4,
+            )),
+            &recent,
+        );
+
+        assert_eq!(preview.planned_jobs[0].kind, "evolution_smoke");
+        assert!(preview.planned_jobs[0].reason.contains("latest operator run failed"));
     }
 
     #[test]
