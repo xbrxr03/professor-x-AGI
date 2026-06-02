@@ -162,6 +162,12 @@ struct CliArgs {
     autonomous_run_commit_cycles: Option<u32>,
     /// Print the last N persisted autonomous queue items and exit.
     autonomy_queue_limit: Option<usize>,
+    /// Review a persisted autonomous queue item by id prefix, or latest.
+    autonomy_queue_review: Option<String>,
+    /// Replay the run associated with a queue item by id prefix, or latest.
+    autonomy_queue_replay: Option<String>,
+    /// Publish the run artifacts associated with a queue item by id prefix, or latest.
+    autonomy_queue_publish: Option<String>,
     /// Enqueue a bounded operator-run goal for later autonomous execution.
     autonomy_enqueue_goal: Option<String>,
     /// Profile to use for an operator-enqueued autonomous goal.
@@ -290,6 +296,9 @@ fn parse_args() -> CliArgs {
         autonomous_run_cycles: None,
         autonomous_run_commit_cycles: None,
         autonomy_queue_limit: None,
+        autonomy_queue_review: None,
+        autonomy_queue_replay: None,
+        autonomy_queue_publish: None,
         autonomy_enqueue_goal: None,
         autonomy_enqueue_profile: WorkLoopProfile::Core,
         autonomy_plan: false,
@@ -562,6 +571,33 @@ fn parse_args() -> CliArgs {
                 cli.autonomy_queue_limit = Some(limit.unwrap_or(10));
                 i += if limit.is_some() { 2 } else { 1 };
             }
+            "--autonomy-queue-review" | "--prof-x-queue-review" => {
+                let value = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .cloned();
+                let has_value = value.is_some();
+                cli.autonomy_queue_review = Some(value.unwrap_or_else(|| "latest".to_string()));
+                i += if has_value { 2 } else { 1 };
+            }
+            "--autonomy-queue-replay" | "--prof-x-queue-replay" => {
+                let value = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .cloned();
+                let has_value = value.is_some();
+                cli.autonomy_queue_replay = Some(value.unwrap_or_else(|| "latest".to_string()));
+                i += if has_value { 2 } else { 1 };
+            }
+            "--autonomy-queue-publish" | "--prof-x-queue-publish" => {
+                let value = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .cloned();
+                let has_value = value.is_some();
+                cli.autonomy_queue_publish = Some(value.unwrap_or_else(|| "latest".to_string()));
+                i += if has_value { 2 } else { 1 };
+            }
             "--autonomy-enqueue" | "--prof-x-enqueue" if i + 1 < args.len() => {
                 cli.autonomy_enqueue_goal = Some(args[i + 1].clone());
                 cli.autonomy_enqueue_profile = WorkLoopProfile::Core;
@@ -812,6 +848,18 @@ async fn main() -> Result<()> {
 
     if let Some(limit) = cli.autonomy_queue_limit {
         return print_autonomy_queue(Arc::clone(&memory), limit);
+    }
+
+    if let Some(queue_ref) = cli.autonomy_queue_review {
+        return print_autonomy_queue_review(Arc::clone(&memory), &queue_ref);
+    }
+
+    if let Some(queue_ref) = cli.autonomy_queue_replay {
+        return print_autonomy_queue_replay(Arc::clone(&memory), &queue_ref);
+    }
+
+    if let Some(queue_ref) = cli.autonomy_queue_publish {
+        return publish_autonomy_queue_run(Arc::clone(&memory), &queue_ref);
     }
 
     if let Some(goal) = cli.autonomy_enqueue_goal {
@@ -6527,6 +6575,24 @@ async fn run_interactive_tasks(
             print_coding_session_review(Arc::clone(&memory), session_ref)?;
             continue;
         }
+        if let Some(rest) = input.strip_prefix("/queue-review") {
+            let queue_ref = nonempty_or_latest(rest);
+            record_console_command(&events, "queue-review", Some(queue_ref.to_string()))?;
+            print_autonomy_queue_review(Arc::clone(&memory), queue_ref)?;
+            continue;
+        }
+        if let Some(rest) = input.strip_prefix("/queue-replay") {
+            let queue_ref = nonempty_or_latest(rest);
+            record_console_command(&events, "queue-replay", Some(queue_ref.to_string()))?;
+            print_autonomy_queue_replay(Arc::clone(&memory), queue_ref)?;
+            continue;
+        }
+        if let Some(rest) = input.strip_prefix("/queue-publish") {
+            let queue_ref = nonempty_or_latest(rest);
+            record_console_command(&events, "queue-publish", Some(queue_ref.to_string()))?;
+            publish_autonomy_queue_run(Arc::clone(&memory), queue_ref)?;
+            continue;
+        }
         if let Some(rest) = input.strip_prefix("/queue") {
             let limit = rest.trim().parse::<usize>().unwrap_or(10);
             record_console_command(&events, "queue", Some(limit.to_string()))?;
@@ -6717,6 +6783,9 @@ fn format_interactive_help() -> String {
         "  /sessions [n]   show recent coding-agent sessions and evidence paths",
         "  /session-review [session] review latest or selected coding session",
         "  /queue [n]      show persistent autonomous work queue",
+        "  /queue-review [queue] review linked run evidence for a queue item",
+        "  /queue-replay [queue] replay linked run timeline for a queue item",
+        "  /queue-publish [queue] publish linked queue run evidence to git",
         "  /plan           enqueue the next planner-selected autonomous work item",
         "  /preview        show the next queued/planned autonomous gates without running them",
         "  /enqueue <goal> enqueue a bounded core autonomous work goal",
@@ -7019,6 +7088,8 @@ fn format_operator_help() -> String {
         "  cargo run -- --prof-x-step-live 1",
         "  cargo run -- --prof-x-step 1",
         "  cargo run -- --prof-x-queue 10",
+        "  cargo run -- --prof-x-queue-review latest",
+        "  cargo run -- --prof-x-queue-publish latest",
         "  cargo run -- --observe-work",
         "  cargo run -- --cockpit",
         "  cargo run -- --watch-work",
@@ -7351,6 +7422,61 @@ fn print_autonomy_queue(memory: Arc<MemoryManager>, limit: usize) -> Result<()> 
         }
     }
     Ok(())
+}
+
+fn resolve_autonomy_queue_item(
+    memory: Arc<MemoryManager>,
+    queue_ref: &str,
+) -> Result<AutonomyQueueItem> {
+    AutonomyQueueStore::new(Arc::clone(&memory.db))
+        .resolve_ref(queue_ref)?
+        .ok_or_else(|| anyhow::anyhow!("no autonomous queue item found for '{queue_ref}'"))
+}
+
+fn queue_item_run_ref(item: &AutonomyQueueItem) -> Result<&str> {
+    item.result_run_id
+        .as_deref()
+        .or(item.result_report_path.as_deref())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "queue item {} has no result run yet; run it first with --prof-x-step-live 1",
+                short_fragment(&item.id)
+            )
+        })
+}
+
+fn print_autonomy_queue_review(memory: Arc<MemoryManager>, queue_ref: &str) -> Result<()> {
+    let item = resolve_autonomy_queue_item(Arc::clone(&memory), queue_ref)?;
+    println!("Professor X queue item review");
+    println!("{}", format_autonomy_queue_item(&item));
+    if let Some(reason) = &item.failure_reason {
+        println!("  failure: {}", truncate(reason, 180));
+    }
+    let run_ref = queue_item_run_ref(&item)?;
+    println!("  linked run: {}", truncate(run_ref, 160));
+    print_run_review(memory, run_ref)
+}
+
+fn print_autonomy_queue_replay(memory: Arc<MemoryManager>, queue_ref: &str) -> Result<()> {
+    let item = resolve_autonomy_queue_item(Arc::clone(&memory), queue_ref)?;
+    let run_ref = queue_item_run_ref(&item)?;
+    println!(
+        "Professor X queue item replay queue={} run={}",
+        short_fragment(&item.id),
+        truncate(run_ref, 120)
+    );
+    print_run_replay(memory, run_ref)
+}
+
+fn publish_autonomy_queue_run(memory: Arc<MemoryManager>, queue_ref: &str) -> Result<()> {
+    let item = resolve_autonomy_queue_item(Arc::clone(&memory), queue_ref)?;
+    let run_ref = queue_item_run_ref(&item)?;
+    println!(
+        "Publishing Professor X queue item queue={} run={}",
+        short_fragment(&item.id),
+        truncate(run_ref, 120)
+    );
+    publish_run_artifacts(memory, run_ref)
 }
 
 fn format_autonomy_queue_item(item: &AutonomyQueueItem) -> String {
@@ -9413,6 +9539,8 @@ mod tests {
         assert!(help.contains("--prof-x-step-live 1"));
         assert!(help.contains("--prof-x-step 1"));
         assert!(help.contains("--prof-x-queue 10"));
+        assert!(help.contains("--prof-x-queue-review latest"));
+        assert!(help.contains("--prof-x-queue-publish latest"));
         assert!(help.contains("--observe-work"));
         assert!(help.contains("--prof-x-code-live"));
         assert!(help.contains("--prof-x-code-review latest"));
@@ -9436,6 +9564,9 @@ mod tests {
         assert!(help.contains("/sessions [n]"));
         assert!(help.contains("/session-review [session]"));
         assert!(help.contains("/queue [n]"));
+        assert!(help.contains("/queue-review [queue]"));
+        assert!(help.contains("/queue-replay [queue]"));
+        assert!(help.contains("/queue-publish [queue]"));
         assert!(help.contains("/plan"));
         assert!(help.contains("/preview"));
         assert!(help.contains("/enqueue <goal>"));

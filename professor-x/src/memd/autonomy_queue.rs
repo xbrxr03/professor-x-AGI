@@ -163,6 +163,32 @@ impl AutonomyQueueStore {
         }
         Ok(items)
     }
+
+    pub fn resolve_ref(&self, item_ref: &str) -> Result<Option<AutonomyQueueItem>> {
+        let item_ref = item_ref.trim();
+        if item_ref.is_empty() || item_ref == "latest" {
+            return Ok(self.recent(1)?.into_iter().next());
+        }
+        let db = self.db.lock().unwrap();
+        let mut stmt = db.prepare(
+            "SELECT id, goal, kind, profile, cycles, priority, status, result_run_id,
+                    result_report_path, failure_reason, queued_at, started_at, completed_at,
+                    updated_at
+             FROM autonomy_queue
+             WHERE id LIKE ?1
+             ORDER BY updated_at DESC, queued_at DESC
+             LIMIT 2",
+        )?;
+        let rows = stmt.query_map([format!("{item_ref}%")], parse_item)?;
+        let mut matches = Vec::new();
+        for row in rows {
+            matches.push(row?);
+        }
+        if matches.len() > 1 {
+            anyhow::bail!("queue reference '{item_ref}' is ambiguous");
+        }
+        Ok(matches.into_iter().next())
+    }
 }
 
 fn parse_item(row: &rusqlite::Row) -> rusqlite::Result<AutonomyQueueItem> {
@@ -249,5 +275,66 @@ mod tests {
         assert_eq!(recent[0].status, "done");
         assert_eq!(recent[0].result_run_id.as_deref(), Some("run-123"));
         assert_eq!(store.next_pending().unwrap().unwrap().id, low.id);
+        assert_eq!(store.resolve_ref("latest").unwrap().unwrap().id, high.id);
+        assert_eq!(
+            store
+                .resolve_ref(&high.id[..8])
+                .unwrap()
+                .unwrap()
+                .result_run_id
+                .as_deref(),
+            Some("run-123")
+        );
+        assert!(store.resolve_ref("missing").unwrap().is_none());
+    }
+
+    #[test]
+    fn queue_ref_rejects_ambiguous_prefixes() {
+        let db = Arc::new(Mutex::new(Connection::open_in_memory().unwrap()));
+        db.lock()
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE autonomy_queue (
+                    id TEXT PRIMARY KEY,
+                    goal TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    profile TEXT NOT NULL,
+                    cycles INTEGER NOT NULL DEFAULT 1,
+                    priority INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL,
+                    result_run_id TEXT,
+                    result_report_path TEXT,
+                    failure_reason TEXT,
+                    queued_at TEXT NOT NULL,
+                    started_at TEXT,
+                    completed_at TEXT,
+                    updated_at TEXT NOT NULL
+                );",
+            )
+            .unwrap();
+        let store = AutonomyQueueStore::new(db);
+        let now = Utc::now();
+        for id in ["abc11111-aaaa-bbbb-cccc-123456789abc", "abc22222-aaaa-bbbb-cccc-123456789abc"] {
+            store
+                .insert(&AutonomyQueueItem {
+                    id: id.to_string(),
+                    goal: "goal".to_string(),
+                    kind: "operator_run".to_string(),
+                    profile: "core".to_string(),
+                    cycles: 1,
+                    priority: 10,
+                    status: "done".to_string(),
+                    result_run_id: None,
+                    result_report_path: None,
+                    failure_reason: None,
+                    queued_at: now,
+                    started_at: None,
+                    completed_at: None,
+                    updated_at: now,
+                })
+                .unwrap();
+        }
+
+        assert!(store.resolve_ref("abc").is_err());
     }
 }
