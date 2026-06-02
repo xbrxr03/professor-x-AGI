@@ -162,6 +162,10 @@ struct CliArgs {
     autonomous_run_commit_cycles: Option<u32>,
     /// Print the last N persisted autonomous queue items and exit.
     autonomy_queue_limit: Option<usize>,
+    /// Enqueue a bounded operator-run goal for later autonomous execution.
+    autonomy_enqueue_goal: Option<String>,
+    /// Profile to use for an operator-enqueued autonomous goal.
+    autonomy_enqueue_profile: WorkLoopProfile,
     /// Plan and enqueue the next autonomous work item without executing it.
     autonomy_plan: bool,
     /// Run N persisted autonomous queue items, seeding one default item if empty.
@@ -282,6 +286,8 @@ fn parse_args() -> CliArgs {
         autonomous_run_cycles: None,
         autonomous_run_commit_cycles: None,
         autonomy_queue_limit: None,
+        autonomy_enqueue_goal: None,
+        autonomy_enqueue_profile: WorkLoopProfile::Core,
         autonomy_plan: false,
         autonomy_step_count: None,
         operator_commit_smoke: false,
@@ -550,6 +556,16 @@ fn parse_args() -> CliArgs {
                 cli.autonomy_queue_limit = Some(limit.unwrap_or(10));
                 i += if limit.is_some() { 2 } else { 1 };
             }
+            "--autonomy-enqueue" | "--prof-x-enqueue" if i + 1 < args.len() => {
+                cli.autonomy_enqueue_goal = Some(args[i + 1].clone());
+                cli.autonomy_enqueue_profile = WorkLoopProfile::Core;
+                i += 2;
+            }
+            "--autonomy-enqueue-commit" | "--prof-x-enqueue-commit" if i + 1 < args.len() => {
+                cli.autonomy_enqueue_goal = Some(args[i + 1].clone());
+                cli.autonomy_enqueue_profile = WorkLoopProfile::Commit;
+                i += 2;
+            }
             "--autonomy-plan" | "--prof-x-plan" => {
                 cli.autonomy_plan = true;
                 i += 1;
@@ -690,6 +706,7 @@ async fn main() -> Result<()> {
         || cli.coding_sessions_limit.is_some()
         || cli.coding_session_review.is_some()
         || cli.autonomy_queue_limit.is_some()
+        || cli.autonomy_enqueue_goal.is_some()
         || cli.autonomy_plan
         || cli.work_loops_limit.is_some()
         || cli.run_log_limit.is_some()
@@ -777,6 +794,15 @@ async fn main() -> Result<()> {
 
     if let Some(limit) = cli.autonomy_queue_limit {
         return print_autonomy_queue(Arc::clone(&memory), limit);
+    }
+
+    if let Some(goal) = cli.autonomy_enqueue_goal {
+        return enqueue_operator_autonomy_goal(
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            &goal,
+            cli.autonomy_enqueue_profile,
+        );
     }
 
     if cli.autonomy_plan {
@@ -3192,6 +3218,63 @@ fn plan_autonomy_queue_once(memory: Arc<MemoryManager>, events: Arc<EventStore>)
     println!("Planned autonomous queue item");
     println!("{}", format_autonomy_queue_item(&item));
     print_autonomy_queue(memory, 10)
+}
+
+fn enqueue_operator_autonomy_goal(
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    goal: &str,
+    profile: WorkLoopProfile,
+) -> Result<()> {
+    let normalized_goal = sanitize_operator_goal(goal);
+    if normalized_goal.is_empty() {
+        anyhow::bail!("cannot enqueue an empty autonomous goal");
+    }
+    let cycles = match profile {
+        WorkLoopProfile::Basic => 1,
+        WorkLoopProfile::Core => 4,
+        WorkLoopProfile::Commit => 5,
+    };
+    let priority = match profile {
+        WorkLoopProfile::Basic => 45,
+        WorkLoopProfile::Core => 55,
+        WorkLoopProfile::Commit => 65,
+    };
+    let store = AutonomyQueueStore::new(Arc::clone(&memory.db));
+    let item = store.enqueue(
+        normalized_goal.clone(),
+        "operator_run",
+        profile.as_str(),
+        cycles,
+        priority,
+    )?;
+    events.append(
+        None,
+        None,
+        "autonomy.queue.enqueued",
+        format!(
+            "operator enqueued autonomous work item {}: {}",
+            short_fragment(&item.id),
+            truncate(&normalized_goal, 100)
+        ),
+        serde_json::json!({
+            "queue_id": item.id,
+            "goal": item.goal,
+            "kind": item.kind,
+            "profile": item.profile,
+            "cycles": item.cycles,
+            "priority": item.priority,
+            "source": "operator",
+            "next_command": "cargo run -- --prof-x-step 1",
+        }),
+    )?;
+
+    println!("Queued autonomous Professor X work");
+    println!("{}", format_autonomy_queue_item(&item));
+    println!("  execute: cargo run -- --prof-x-step 1");
+    println!("  watch: cargo run -- --observe-work");
+    println!("  queue: cargo run -- --prof-x-queue 10");
+    Ok(())
 }
 
 async fn run_autonomous_operator_run(
@@ -6031,6 +6114,28 @@ async fn run_interactive_tasks(
             plan_autonomy_queue_once(Arc::clone(&memory), Arc::clone(&events))?;
             continue;
         }
+        if let Some(rest) = input.strip_prefix("/enqueue-commit") {
+            let goal = rest.trim();
+            record_console_command(&events, "enqueue-commit", Some(goal.to_string()))?;
+            enqueue_operator_autonomy_goal(
+                Arc::clone(&memory),
+                Arc::clone(&events),
+                goal,
+                WorkLoopProfile::Commit,
+            )?;
+            continue;
+        }
+        if let Some(rest) = input.strip_prefix("/enqueue") {
+            let goal = rest.trim();
+            record_console_command(&events, "enqueue", Some(goal.to_string()))?;
+            enqueue_operator_autonomy_goal(
+                Arc::clone(&memory),
+                Arc::clone(&events),
+                goal,
+                WorkLoopProfile::Core,
+            )?;
+            continue;
+        }
         if let Some(rest) = input.strip_prefix("/runs") {
             let limit = rest.trim().parse::<usize>().unwrap_or(5);
             record_console_command(&events, "runs", Some(limit.to_string()))?;
@@ -6169,6 +6274,8 @@ fn format_interactive_help() -> String {
         "  /session-review [session] review latest or selected coding session",
         "  /queue [n]      show persistent autonomous work queue",
         "  /plan           enqueue the next planner-selected autonomous work item",
+        "  /enqueue <goal> enqueue a bounded core autonomous work goal",
+        "  /enqueue-commit <goal> enqueue a commit-capable autonomous work goal",
         "  /runs [n]       show recent operator/autonomous run ledger entries",
         "  /review [run]   review latest or selected run evidence",
         "  /replay [run]   replay latest or selected run timeline",
@@ -6459,6 +6566,8 @@ fn format_operator_help() -> String {
         "",
         "Watch him work",
         "  cargo run -- --prof-x-live 5",
+        "  cargo run -- --prof-x-enqueue \"tighten the next harness gap\"",
+        "  cargo run -- --prof-x-enqueue-commit \"capture a verified skill improvement\"",
         "  cargo run -- --prof-x-plan",
         "  cargo run -- --prof-x-step 1",
         "  cargo run -- --prof-x-queue 10",
@@ -8446,6 +8555,7 @@ fn event_action(event: &memd::events::AgentEvent) -> &'static str {
         "transcript.written" => "Wrote transcript",
         "console.command" => "Operator command",
         "autonomy.queue.seeded" => "Seeded queue",
+        "autonomy.queue.enqueued" => "Queued work",
         "autonomy.queue.started" => "Started queued work",
         "autonomy.queue.planned" => "Planned queued work",
         "autonomy.queue.completed" => "Completed queued work",
@@ -8500,6 +8610,17 @@ fn work_event_label(event_type: &str) -> &'static str {
 
 fn short_fragment(id: &str) -> &str {
     &id[..8.min(id.len())]
+}
+
+fn sanitize_operator_goal(goal: &str) -> String {
+    let compact = goal
+        .chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    truncate(&compact, 240)
 }
 
 fn truncate(text: &str, max_chars: usize) -> String {
@@ -8798,6 +8919,8 @@ mod tests {
 
         assert!(help.contains("Professor X operator commands"));
         assert!(help.contains("--prof-x-live 5"));
+        assert!(help.contains("--prof-x-enqueue"));
+        assert!(help.contains("--prof-x-enqueue-commit"));
         assert!(help.contains("--prof-x-plan"));
         assert!(help.contains("--prof-x-step 1"));
         assert!(help.contains("--prof-x-queue 10"));
@@ -8825,6 +8948,8 @@ mod tests {
         assert!(help.contains("/session-review [session]"));
         assert!(help.contains("/queue [n]"));
         assert!(help.contains("/plan"));
+        assert!(help.contains("/enqueue <goal>"));
+        assert!(help.contains("/enqueue-commit <goal>"));
         assert!(help.contains("/runs [n]"));
         assert!(help.contains("/review [run]"));
         assert!(help.contains("/replay [run]"));
@@ -8842,6 +8967,17 @@ mod tests {
         assert_eq!(nonempty_or_latest(""), "latest");
         assert_eq!(nonempty_or_latest("   "), "latest");
         assert_eq!(nonempty_or_latest(" abc123 "), "abc123");
+    }
+
+    #[test]
+    fn sanitize_operator_goal_removes_control_chars_and_bounds_length() {
+        let raw = format!("  improve\n\tProf X visibility  {}", "x".repeat(400));
+        let sanitized = sanitize_operator_goal(&raw);
+
+        assert!(sanitized.starts_with("improve Prof X visibility"));
+        assert!(!sanitized.contains('\n'));
+        assert!(!sanitized.contains('\t'));
+        assert!(sanitized.chars().count() <= 243);
     }
 
     #[test]
