@@ -84,6 +84,34 @@ impl CodingSessionStore {
         Ok(Some(parse_record(row)?))
     }
 
+    pub fn get_by_ref(&self, session_ref: &str) -> Result<Option<CodingSessionRecord>> {
+        let session_ref = session_ref.trim();
+        if session_ref.is_empty() || session_ref == "latest" {
+            return self.latest();
+        }
+
+        let db = self.db.lock().unwrap();
+        let mut stmt = db.prepare(
+            "SELECT id, generated_at, goal, status, workspace, smoke_id, smoke_report_path,
+                    session_report_path, transcript_path, artifacts, checks, failure_reason,
+                    recorded_at, exercise, plan_steps, step_outcomes
+             FROM coding_sessions
+             WHERE id = ?1 OR id LIKE ?2
+             ORDER BY generated_at DESC, recorded_at DESC
+             LIMIT 2",
+        )?;
+        let prefix = format!("{session_ref}%");
+        let rows = stmt.query_map(params![session_ref, prefix], parse_record)?;
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row?);
+        }
+        if records.len() > 1 {
+            anyhow::bail!("coding session reference '{session_ref}' is ambiguous");
+        }
+        Ok(records.pop())
+    }
+
     pub fn count(&self) -> Result<i64> {
         let db = self.db.lock().unwrap();
         Ok(db.query_row("SELECT COUNT(*) FROM coding_sessions", [], |row| row.get(0))?)
@@ -213,6 +241,14 @@ mod tests {
         assert_eq!(latest.plan_steps.len(), 3);
         assert_eq!(latest.step_outcomes.len(), 3);
         assert_eq!(latest.smoke_id, Some(7));
+        assert_eq!(
+            store.get_by_ref("session-1").unwrap().unwrap().id,
+            "session-1"
+        );
+        assert_eq!(
+            store.get_by_ref("latest").unwrap().unwrap().id,
+            "session-1"
+        );
         assert_eq!(store.recent(5).unwrap().len(), 1);
     }
 }

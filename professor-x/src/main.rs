@@ -142,6 +142,8 @@ struct CliArgs {
     skill_patch_commit_live_goal: Option<String>,
     /// Print the last N coding-agent sessions and exit.
     coding_sessions_limit: Option<usize>,
+    /// Review one coding-agent session by id prefix, or 'latest'.
+    coding_session_review: Option<String>,
     /// Run N bounded local supervised work-loop cycles and exit.
     supervised_loop_cycles: Option<u32>,
     /// Select supervised loop job mix: basic or core.
@@ -270,6 +272,7 @@ fn parse_args() -> CliArgs {
         skill_patch_live_goal: None,
         skill_patch_commit_live_goal: None,
         coding_sessions_limit: None,
+        coding_session_review: None,
         supervised_loop_cycles: None,
         supervised_loop_profile: WorkLoopProfile::Basic,
         operator_run_cycles: None,
@@ -530,6 +533,15 @@ fn parse_args() -> CliArgs {
                 cli.coding_sessions_limit = Some(limit.unwrap_or(10));
                 i += if limit.is_some() { 2 } else { 1 };
             }
+            "--coding-session-review" | "--prof-x-code-review" | "--session-review" => {
+                let value = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .cloned();
+                let has_value = value.is_some();
+                cli.coding_session_review = Some(value.unwrap_or_else(|| "latest".to_string()));
+                i += if has_value { 2 } else { 1 };
+            }
             "--autonomy-queue" | "--prof-x-queue" => {
                 let limit = args
                     .get(i + 1)
@@ -676,6 +688,7 @@ async fn main() -> Result<()> {
         || cli.transcripts_limit.is_some()
         || cli.task_runs_limit.is_some()
         || cli.coding_sessions_limit.is_some()
+        || cli.coding_session_review.is_some()
         || cli.autonomy_queue_limit.is_some()
         || cli.autonomy_plan
         || cli.work_loops_limit.is_some()
@@ -756,6 +769,10 @@ async fn main() -> Result<()> {
 
     if let Some(limit) = cli.coding_sessions_limit {
         return print_coding_sessions(Arc::clone(&memory), limit);
+    }
+
+    if let Some(session_ref) = cli.coding_session_review {
+        return print_coding_session_review(Arc::clone(&memory), &session_ref);
     }
 
     if let Some(limit) = cli.autonomy_queue_limit {
@@ -5997,6 +6014,12 @@ async fn run_interactive_tasks(
             print_coding_sessions(Arc::clone(&memory), limit)?;
             continue;
         }
+        if let Some(rest) = input.strip_prefix("/session-review") {
+            let session_ref = nonempty_or_latest(rest);
+            record_console_command(&events, "session-review", Some(session_ref.to_string()))?;
+            print_coding_session_review(Arc::clone(&memory), session_ref)?;
+            continue;
+        }
         if let Some(rest) = input.strip_prefix("/queue") {
             let limit = rest.trim().parse::<usize>().unwrap_or(10);
             record_console_command(&events, "queue", Some(limit.to_string()))?;
@@ -6143,6 +6166,7 @@ fn format_interactive_help() -> String {
         "  /cockpit        show live state, current run, latest coding session, and trace",
         "  /work [n]       show recent work/tool/task events",
         "  /sessions [n]   show recent coding-agent sessions and evidence paths",
+        "  /session-review [session] review latest or selected coding session",
         "  /queue [n]      show persistent autonomous work queue",
         "  /plan           enqueue the next planner-selected autonomous work item",
         "  /runs [n]       show recent operator/autonomous run ledger entries",
@@ -6445,6 +6469,7 @@ fn format_operator_help() -> String {
         "Give him a bounded coding-agent task",
         "  cargo run -- --prof-x-code-live \"update one safe local fixture\"",
         "  cargo run -- --coding-sessions 5",
+        "  cargo run -- --prof-x-code-review latest",
         "",
         "Turn a short operator goal into a verified skill patch",
         "  cargo run -- --prof-x-skill-live \"capture the next harness gap\"",
@@ -6581,6 +6606,162 @@ fn print_coding_sessions(memory: Arc<MemoryManager>, limit: usize) -> Result<()>
         }
     }
     Ok(())
+}
+
+fn print_coding_session_review(memory: Arc<MemoryManager>, session_ref: &str) -> Result<()> {
+    let store = CodingSessionStore::new(Arc::clone(&memory.db));
+    let Some(session) = store.get_by_ref(session_ref)? else {
+        println!("No coding session found for '{session_ref}'.");
+        return Ok(());
+    };
+    let repo_root = default_repo_root();
+    println!("Professor X coding session review");
+    println!("  session: {}", session.id);
+    println!("  status: {}", session.status);
+    println!("  exercise: {}", session.exercise);
+    println!("  generated: {}", session.generated_at.to_rfc3339());
+    println!("  goal: {}", session.goal);
+    if let Some(workspace) = &session.workspace {
+        println!("  workspace: {workspace}");
+    }
+    if let Some(smoke_id) = session.smoke_id {
+        println!("  smoke: #{smoke_id}");
+    }
+    println!(
+        "  report: {}{}",
+        session.session_report_path,
+        existing_marker(&repo_root, &session.session_report_path)
+    );
+    if let Some(path) = &session.smoke_report_path {
+        println!("  smoke report: {path}{}", existing_marker(&repo_root, path));
+    }
+    if let Some(path) = &session.transcript_path {
+        println!("  transcript: {path}{}", existing_marker(&repo_root, path));
+    }
+    if let Some(reason) = &session.failure_reason {
+        println!("  failure: {}", truncate(reason, 180));
+    }
+
+    println!("Plan");
+    if session.plan_steps.is_empty() {
+        println!("  no plan steps recorded");
+    } else {
+        for (index, step) in session.plan_steps.iter().enumerate() {
+            println!("  {}. {}", index + 1, step);
+        }
+    }
+
+    println!("Outcomes");
+    if session.step_outcomes.is_empty() {
+        println!("  no step outcomes recorded");
+    } else {
+        for (index, outcome) in session.step_outcomes.iter().enumerate() {
+            println!("  {}. {}", index + 1, outcome);
+        }
+    }
+
+    println!("Checks");
+    if session.checks.is_empty() {
+        println!("  no checks recorded");
+    } else {
+        for check in &session.checks {
+            println!("  - {check}");
+        }
+    }
+
+    println!("Artifacts");
+    if session.artifacts.is_empty() {
+        println!("  no artifacts recorded");
+    } else {
+        for artifact in &session.artifacts {
+            print_coding_session_artifact_review(&repo_root, artifact)?;
+        }
+    }
+
+    println!("Commands");
+    println!(
+        "  replay transcript: cargo run -- --task-review {}",
+        session
+            .transcript_path
+            .as_ref()
+            .map(|_| "latest")
+            .unwrap_or("latest")
+    );
+    println!(
+        "  review again: cargo run -- --prof-x-code-review {}",
+        short_fragment(&session.id)
+    );
+    println!("  watch: cargo run -- --observe-work");
+    Ok(())
+}
+
+fn print_coding_session_artifact_review(repo_root: &std::path::Path, artifact: &str) -> Result<()> {
+    let artifact_path = resolve_report_reference(repo_root, artifact);
+    println!(
+        "  - {}{}",
+        artifact,
+        if artifact_path.exists() {
+            ""
+        } else {
+            " (missing)"
+        }
+    );
+    if artifact_path.exists() {
+        if let Some(summary) = command_artifact_summary(&artifact_path)? {
+            println!("    {summary}");
+        }
+    }
+    Ok(())
+}
+
+fn command_artifact_summary(path: &std::path::Path) -> Result<Option<String>> {
+    if !path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.ends_with(".json"))
+        .unwrap_or(false)
+    {
+        return Ok(None);
+    }
+    let raw = std::fs::read_to_string(path)?;
+    let value: serde_json::Value = serde_json::from_str(&raw)?;
+    let Some(command) = value.get("command").and_then(|value| value.as_str()) else {
+        return Ok(None);
+    };
+    let success = value
+        .get("success")
+        .and_then(|value| value.as_bool())
+        .map(|success| if success { "passed" } else { "failed" })
+        .unwrap_or("unknown");
+    let exit_code = value
+        .get("exit_code")
+        .and_then(|value| value.as_i64())
+        .map(|code| code.to_string())
+        .unwrap_or_else(|| "none".to_string());
+    let stdout_bytes = value
+        .get("stdout_bytes")
+        .and_then(|value| value.as_u64())
+        .unwrap_or_default();
+    let stderr_bytes = value
+        .get("stderr_bytes")
+        .and_then(|value| value.as_u64())
+        .unwrap_or_default();
+    Ok(Some(format!(
+        "command `{}` {} exit={} stdout={}B stderr={}B",
+        truncate(command, 90),
+        success,
+        exit_code,
+        stdout_bytes,
+        stderr_bytes
+    )))
+}
+
+fn existing_marker(repo_root: &std::path::Path, raw: &str) -> &'static str {
+    if resolve_report_reference(repo_root, raw).exists() {
+        ""
+    } else {
+        " (missing)"
+    }
 }
 
 fn coding_session_commit_hint(session: &CodingSessionRecord) -> Option<String> {
@@ -8622,6 +8803,7 @@ mod tests {
         assert!(help.contains("--prof-x-queue 10"));
         assert!(help.contains("--observe-work"));
         assert!(help.contains("--prof-x-code-live"));
+        assert!(help.contains("--prof-x-code-review latest"));
         assert!(help.contains("--prof-x-skill-live"));
         assert!(help.contains("--prof-x-skill-commit-live"));
         assert!(help.contains("--prof-x-code-patch-live"));
@@ -8640,6 +8822,7 @@ mod tests {
         assert!(help.contains("/cockpit"));
         assert!(help.contains("/work [n]"));
         assert!(help.contains("/sessions [n]"));
+        assert!(help.contains("/session-review [session]"));
         assert!(help.contains("/queue [n]"));
         assert!(help.contains("/plan"));
         assert!(help.contains("/runs [n]"));
@@ -9657,6 +9840,35 @@ mod tests {
         };
 
         assert_eq!(coding_session_commit_hint(&session).as_deref(), Some("eedcd3e1"));
+    }
+
+    #[test]
+    fn command_artifact_summary_reads_reviewable_fields() {
+        let dir = std::env::temp_dir().join(format!("px-command-artifact-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("artifact.json");
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "command": "cargo test --bins",
+                "exit_code": 0,
+                "success": true,
+                "stdout": "ok",
+                "stderr": "",
+                "stdout_bytes": 2,
+                "stderr_bytes": 0,
+                "recorded_at": "2026-06-02T00:00:00Z"
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let summary = command_artifact_summary(&path).unwrap().unwrap();
+        assert!(summary.contains("cargo test --bins"));
+        assert!(summary.contains("passed"));
+        assert!(summary.contains("exit=0"));
+        assert!(summary.contains("stdout=2B"));
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]
