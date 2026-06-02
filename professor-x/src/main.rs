@@ -172,6 +172,8 @@ struct CliArgs {
     autonomy_preview: bool,
     /// Run N persisted autonomous queue items, seeding one default item if empty.
     autonomy_step_count: Option<u32>,
+    /// Run N persisted autonomous queue items while streaming work events.
+    autonomy_step_live_count: Option<u32>,
     /// Run one sandbox-verified autonomous commit smoke and exit.
     operator_commit_smoke: bool,
     /// Run one seeded autonomous evolution cycle and exit.
@@ -293,6 +295,7 @@ fn parse_args() -> CliArgs {
         autonomy_plan: false,
         autonomy_preview: false,
         autonomy_step_count: None,
+        autonomy_step_live_count: None,
         operator_commit_smoke: false,
         evolution_cycle: false,
         validate_artifacts: false,
@@ -583,6 +586,14 @@ fn parse_args() -> CliArgs {
                     .filter(|next| !next.starts_with("--"))
                     .and_then(|next| next.parse::<u32>().ok());
                 cli.autonomy_step_count = Some(count.unwrap_or(1));
+                i += if count.is_some() { 2 } else { 1 };
+            }
+            "--autonomy-step-live" | "--prof-x-step-live" => {
+                let count = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .and_then(|next| next.parse::<u32>().ok());
+                cli.autonomy_step_live_count = Some(count.unwrap_or(1));
                 i += if count.is_some() { 2 } else { 1 };
             }
             "--supervised-loop" => {
@@ -1130,6 +1141,19 @@ async fn main() -> Result<()> {
 
     if let Some(count) = cli.autonomy_step_count {
         return run_autonomy_queue_steps(
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            Arc::clone(&transcripts),
+            count,
+            cli.publish_after_run,
+        )
+        .await;
+    }
+
+    if let Some(count) = cli.autonomy_step_live_count {
+        return run_autonomy_queue_steps_live(
             Arc::clone(&registry),
             Arc::clone(&policy),
             Arc::clone(&memory),
@@ -3434,7 +3458,7 @@ fn preview_autonomy_step(memory: Arc<MemoryManager>, events: Arc<EventStore>) ->
             "reason": preview.reason,
             "planned_jobs": preview.planned_jobs,
             "mutates_queue": false,
-            "next_command": "cargo run -- --prof-x-step 1",
+            "next_command": "cargo run -- --prof-x-step-live 1",
         }),
     )?;
     print_autonomy_step_preview(&preview);
@@ -3471,7 +3495,8 @@ fn print_autonomy_step_preview(preview: &AutonomyStepPreview) {
             truncate(&job.reason, 110)
         );
     }
-    println!("  execute: cargo run -- --prof-x-step 1");
+    println!("  execute-live: cargo run -- --prof-x-step-live 1");
+    println!("  execute-quiet: cargo run -- --prof-x-step 1");
     println!("  watch: cargo run -- --observe-work");
 }
 
@@ -3564,13 +3589,14 @@ fn enqueue_operator_autonomy_goal(
             "cycles": item.cycles,
             "priority": item.priority,
             "source": "operator",
-            "next_command": "cargo run -- --prof-x-step 1",
+            "next_command": "cargo run -- --prof-x-step-live 1",
         }),
     )?;
 
     println!("Queued autonomous Professor X work");
     println!("{}", format_autonomy_queue_item(&item));
-    println!("  execute: cargo run -- --prof-x-step 1");
+    println!("  execute-live: cargo run -- --prof-x-step-live 1");
+    println!("  execute-quiet: cargo run -- --prof-x-step 1");
     println!("  watch: cargo run -- --observe-work");
     println!("  queue: cargo run -- --prof-x-queue 10");
     Ok(())
@@ -3746,6 +3772,67 @@ async fn run_autonomy_queue_steps(
     }
 
     print_autonomy_queue(memory, 10)
+}
+
+async fn run_autonomy_queue_steps_live(
+    registry: Arc<std::sync::RwLock<ToolRegistry>>,
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    transcripts: Arc<TranscriptStore>,
+    count: u32,
+    publish_after_run: bool,
+) -> Result<()> {
+    let count = count.clamp(1, 10);
+    let mut last_id = events.tail(1)?.last().map(|event| event.id).unwrap_or(0);
+    println!("Professor X live autonomy queue step");
+    println!("  requested items: {count}");
+    println!("  preview: cargo run -- --prof-x-preview-step");
+    println!("  queue: cargo run -- --prof-x-queue 10");
+    println!("  streaming work feed below");
+    io::stdout().flush()?;
+
+    let run_registry = Arc::clone(&registry);
+    let run_policy = Arc::clone(&policy);
+    let run_memory = Arc::clone(&memory);
+    let run_events = Arc::clone(&events);
+    let run_transcripts = Arc::clone(&transcripts);
+    let mut handle = tokio::spawn(async move {
+        run_autonomy_queue_steps(
+            run_registry,
+            run_policy,
+            run_memory,
+            run_events,
+            run_transcripts,
+            count,
+            publish_after_run,
+        )
+        .await
+    });
+
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                println!("Live autonomy queue step interrupted.");
+                handle.abort();
+                anyhow::bail!("live autonomy queue step interrupted");
+            }
+            result = &mut handle => {
+                for event in events.work_after_id(last_id, 200)? {
+                    println!("{}", format_work_event(&event));
+                }
+                io::stdout().flush()?;
+                return result?;
+            }
+            _ = tokio::time::sleep(tokio::time::Duration::from_millis(250)) => {
+                for event in events.work_after_id(last_id, 100)? {
+                    last_id = event.id;
+                    println!("{}", format_work_event(&event));
+                }
+                io::stdout().flush()?;
+            }
+        }
+    }
 }
 
 async fn run_supervised_loop_live(
@@ -6508,6 +6595,21 @@ async fn run_interactive_tasks(
             print_task_review(Arc::clone(&transcripts), task_ref)?;
             continue;
         }
+        if let Some(rest) = input.strip_prefix("/step-live") {
+            let count = rest.trim().parse::<u32>().unwrap_or(1);
+            record_console_command(&events, "step-live", Some(count.to_string()))?;
+            run_autonomy_queue_steps_live(
+                Arc::clone(&registry),
+                Arc::clone(&policy),
+                Arc::clone(&memory),
+                Arc::clone(&events),
+                Arc::clone(&transcripts),
+                count,
+                false,
+            )
+            .await?;
+            continue;
+        }
         if let Some(rest) = input.strip_prefix("/step") {
             let count = rest.trim().parse::<u32>().unwrap_or(1);
             record_console_command(&events, "step", Some(count.to_string()))?;
@@ -6624,6 +6726,7 @@ fn format_interactive_help() -> String {
         "  /replay [run]   replay latest or selected run timeline",
         "  /publish [run]  commit selected run report/ledger artifacts",
         "  /task-review [task] review latest or selected task transcript",
+        "  /step-live [n]  run queued autonomous work while streaming the work feed",
         "  /step [n]       run n queued autonomous work items, seeding one if empty",
         "  /run [n]        start a bounded core Prof X run",
         "  /run-commit [n] start a commit-capable verified Prof X run",
@@ -6913,6 +7016,7 @@ fn format_operator_help() -> String {
         "  cargo run -- --prof-x-enqueue-commit \"capture a verified skill improvement\"",
         "  cargo run -- --prof-x-plan",
         "  cargo run -- --prof-x-preview-step",
+        "  cargo run -- --prof-x-step-live 1",
         "  cargo run -- --prof-x-step 1",
         "  cargo run -- --prof-x-queue 10",
         "  cargo run -- --observe-work",
@@ -9306,6 +9410,7 @@ mod tests {
         assert!(help.contains("--prof-x-enqueue-commit"));
         assert!(help.contains("--prof-x-plan"));
         assert!(help.contains("--prof-x-preview-step"));
+        assert!(help.contains("--prof-x-step-live 1"));
         assert!(help.contains("--prof-x-step 1"));
         assert!(help.contains("--prof-x-queue 10"));
         assert!(help.contains("--observe-work"));
@@ -9340,6 +9445,7 @@ mod tests {
         assert!(help.contains("/replay [run]"));
         assert!(help.contains("/publish [run]"));
         assert!(help.contains("/task-review [task]"));
+        assert!(help.contains("/step-live [n]"));
         assert!(help.contains("/step [n]"));
         assert!(help.contains("/run [n]"));
         assert!(help.contains("/run-commit [n]"));
