@@ -1300,6 +1300,8 @@ struct EvolutionSmokeReport {
 struct EvolutionProposalDryRunReport {
     generated_at: String,
     mode: String,
+    #[serde(default)]
+    operator_goal: Option<String>,
     workspace: String,
     harness_commit: String,
     target_component: String,
@@ -1317,6 +1319,8 @@ struct EvolutionProposalDryRunReport {
 struct PatchVerificationReport {
     generated_at: String,
     mode: String,
+    #[serde(default)]
+    operator_goal: Option<String>,
     patch_path: String,
     workspace: String,
     harness_commit: String,
@@ -1475,9 +1479,10 @@ async fn execute_evolution_smoke(
 
 async fn execute_evolution_proposal_dry_run(
     events: Arc<EventStore>,
+    operator_goal: Option<String>,
 ) -> Result<(EvolutionProposalDryRunReport, PathBuf)> {
     let repo_root = default_repo_root();
-    let node = operator_proposal_node("px-operator-proposal-dry-run");
+    let node = operator_proposal_node("px-operator-proposal-dry-run", operator_goal.as_deref());
     events.append(
         None,
         None,
@@ -1488,6 +1493,7 @@ async fn execute_evolution_proposal_dry_run(
             "harness_commit": git_head(&repo_root).unwrap_or_else(|_| "unknown".to_string()),
             "target_component": format!("{:?}", node.target_component),
             "motivation": node.motivation,
+            "operator_goal": operator_goal.clone(),
         }),
     )?;
     events.append(
@@ -1516,6 +1522,7 @@ async fn execute_evolution_proposal_dry_run(
     let report = EvolutionProposalDryRunReport {
         generated_at: chrono::Utc::now().to_rfc3339(),
         mode: "dry_run".to_string(),
+        operator_goal,
         workspace: "repo-root".to_string(),
         harness_commit: git_head(&repo_root).unwrap_or_else(|_| "unknown".to_string()),
         target_component: format!("{:?}", node.target_component),
@@ -1553,6 +1560,7 @@ async fn execute_evolution_proposal_dry_run(
             "checks": report.checks,
             "diff_hash": report.diff_hash,
             "diff_bytes": report.diff_bytes,
+            "operator_goal": report.operator_goal.clone(),
             "report_path": path,
         }),
     )?;
@@ -1560,7 +1568,7 @@ async fn execute_evolution_proposal_dry_run(
 }
 
 async fn run_evolution_proposal_dry_run(events: Arc<EventStore>) -> Result<()> {
-    let (report, path) = execute_evolution_proposal_dry_run(events).await?;
+    let (report, path) = execute_evolution_proposal_dry_run(events, None).await?;
     println!(
         "Evolution proposal dry-run: {}",
         if report.accepted {
@@ -1588,7 +1596,7 @@ async fn run_evolution_proposal_dry_run_live(events: Arc<EventStore>) -> Result<
 
     let run_events = Arc::clone(&events);
     let mut handle =
-        tokio::spawn(async move { execute_evolution_proposal_dry_run(run_events).await });
+        tokio::spawn(async move { execute_evolution_proposal_dry_run(run_events, None).await });
 
     loop {
         tokio::select! {
@@ -1660,6 +1668,7 @@ async fn execute_patch_verify(
     let report = PatchVerificationReport {
         generated_at: chrono::Utc::now().to_rfc3339(),
         mode: "patch_verify".to_string(),
+        operator_goal: None,
         patch_path: patch_path.display().to_string(),
         workspace: "repo-root".to_string(),
         harness_commit: git_head(&repo_root).unwrap_or_else(|_| "unknown".to_string()),
@@ -1764,6 +1773,7 @@ async fn run_patch_verify_live(events: Arc<EventStore>, patch_path: PathBuf) -> 
 async fn execute_patch_apply_commit(
     events: Arc<EventStore>,
     patch_path: PathBuf,
+    operator_goal: Option<String>,
 ) -> Result<(PatchVerificationReport, PathBuf)> {
     let repo_root = default_repo_root();
     if !main_worktree_clean_for_patch_apply(&repo_root)? {
@@ -1780,6 +1790,7 @@ async fn execute_patch_apply_commit(
             "workspace": "repo-root",
             "harness_commit": git_head(&repo_root).unwrap_or_else(|_| "unknown".to_string()),
             "patch_path": patch_path.display().to_string(),
+            "operator_goal": operator_goal.clone(),
         }),
     )?;
     events.append(
@@ -1814,6 +1825,7 @@ async fn execute_patch_apply_commit(
     let mut report = PatchVerificationReport {
         generated_at: chrono::Utc::now().to_rfc3339(),
         mode: "patch_apply_commit".to_string(),
+        operator_goal,
         patch_path: patch_path.display().to_string(),
         workspace: "repo-root".to_string(),
         harness_commit: git_head(&repo_root).unwrap_or_else(|_| "unknown".to_string()),
@@ -1845,6 +1857,7 @@ async fn execute_patch_apply_commit(
                 "diff_hash": report.diff_hash,
                 "diff_bytes": report.diff_bytes,
                 "patch_path": report.patch_path,
+                "operator_goal": report.operator_goal.clone(),
                 "report_path": path,
             }),
         )?;
@@ -1901,6 +1914,7 @@ async fn execute_patch_apply_commit(
                     "diff_hash": report.diff_hash,
                     "diff_bytes": report.diff_bytes,
                     "patch_path": report.patch_path,
+                    "operator_goal": report.operator_goal.clone(),
                     "report_path": path,
                 }),
             )?;
@@ -1926,6 +1940,7 @@ async fn execute_patch_apply_commit(
                     "error": err.to_string(),
                     "checks": report.checks,
                     "patch_path": report.patch_path,
+                    "operator_goal": report.operator_goal.clone(),
                     "report_path": path,
                 }),
             )?;
@@ -1935,7 +1950,7 @@ async fn execute_patch_apply_commit(
 }
 
 async fn run_patch_apply_commit(events: Arc<EventStore>, patch_path: PathBuf) -> Result<()> {
-    let (report, path) = execute_patch_apply_commit(events, patch_path).await?;
+    let (report, path) = execute_patch_apply_commit(events, patch_path, None).await?;
     println!(
         "Patch apply commit: {}",
         if report.accepted && report.applied {
@@ -1966,7 +1981,7 @@ async fn run_patch_apply_commit_live(events: Arc<EventStore>, patch_path: PathBu
 
     let run_events = Arc::clone(&events);
     let mut handle =
-        tokio::spawn(async move { execute_patch_apply_commit(run_events, patch_path).await });
+        tokio::spawn(async move { execute_patch_apply_commit(run_events, patch_path, None).await });
 
     loop {
         tokio::select! {
@@ -2152,7 +2167,7 @@ Return `accepted`, `applied`, `commit`, `checks`, `diff_hash`, `diff_bytes`, and
 }
 
 async fn run_operator_commit_smoke(events: Arc<EventStore>) -> Result<()> {
-    let (report, path) = execute_operator_commit_smoke(events).await?;
+    let (report, path) = execute_operator_commit_smoke(events, None).await?;
     println!(
         "Operator commit smoke: {}",
         if report.accepted && report.applied {
@@ -2174,6 +2189,7 @@ async fn run_operator_commit_smoke(events: Arc<EventStore>) -> Result<()> {
 
 async fn execute_operator_commit_smoke(
     events: Arc<EventStore>,
+    operator_goal: Option<String>,
 ) -> Result<(EvolutionProposalDryRunReport, PathBuf)> {
     let repo_root = default_repo_root();
     if !main_worktree_clean_for_operator_commit(&repo_root)? {
@@ -2184,7 +2200,7 @@ async fn execute_operator_commit_smoke(
         "px-operator-autocommit-{}",
         chrono::Utc::now().format("%Y%m%d-%H%M%S")
     );
-    let node = operator_proposal_node(&skill_name);
+    let node = operator_proposal_node(&skill_name, operator_goal.as_deref());
     events.append(
         None,
         None,
@@ -2195,6 +2211,7 @@ async fn execute_operator_commit_smoke(
             "harness_commit": git_head(&repo_root).unwrap_or_else(|_| "unknown".to_string()),
             "target_component": format!("{:?}", node.target_component),
             "motivation": node.motivation,
+            "operator_goal": operator_goal.clone(),
         }),
     )?;
 
@@ -2207,6 +2224,7 @@ async fn execute_operator_commit_smoke(
     let mut report = EvolutionProposalDryRunReport {
         generated_at: chrono::Utc::now().to_rfc3339(),
         mode: "operator_commit_smoke".to_string(),
+        operator_goal,
         workspace: "repo-root".to_string(),
         harness_commit: git_head(&repo_root).unwrap_or_else(|_| "unknown".to_string()),
         target_component: format!("{:?}", node.target_component),
@@ -2233,6 +2251,7 @@ async fn execute_operator_commit_smoke(
             serde_json::json!({
                 "reason": report.reason,
                 "checks": report.checks,
+                "operator_goal": report.operator_goal.clone(),
                 "report_path": path,
             }),
         )?;
@@ -2273,6 +2292,7 @@ async fn execute_operator_commit_smoke(
                     "checks": report.checks,
                     "diff_hash": report.diff_hash,
                     "diff_bytes": report.diff_bytes,
+                    "operator_goal": report.operator_goal.clone(),
                     "report_commit": report_commit,
                 }),
             )?;
@@ -2294,6 +2314,7 @@ async fn execute_operator_commit_smoke(
                 format!("operator commit failed after sandbox verification: {err}"),
                 serde_json::json!({
                     "error": err.to_string(),
+                    "operator_goal": report.operator_goal.clone(),
                     "report_path": report_path,
                 }),
             )?;
@@ -2302,13 +2323,42 @@ async fn execute_operator_commit_smoke(
     }
 }
 
-fn operator_proposal_node(skill_name: &str) -> EvolutionNode {
-    smoke_node(
-        "operator_proposal",
-        HarnessComponent::SkillDefinition(skill_name.to_string()),
-        &format!(
+fn operator_proposal_node(skill_name: &str, operator_goal: Option<&str>) -> EvolutionNode {
+    let goal = operator_goal.map(normalize_operator_goal);
+    let body = match goal.as_deref() {
+        Some(goal) if !goal.is_empty() => operator_goal_skill_body(skill_name, goal),
+        _ => format!(
             "# {skill_name}\n\nPurpose: preserve the operator verify-then-commit workflow as a reusable skill.\n\nWorkflow:\n- State the proposed harness change and target component.\n- Verify it in an isolated sandbox before touching the main worktree.\n- Record the checks, diff hash, decision, commit id, and rollback path.\n\nOutput Contract:\n- A proposal record with motivation, target component, verification checks, decision, artifact path, and commit id when applied.\n"
         ),
+    };
+    let motivation = match goal.as_deref() {
+        Some(goal) if !goal.is_empty() => format!("operator queued goal proposal: {goal}"),
+        _ => "smoke verify operator_proposal proposal".to_string(),
+    };
+    EvolutionNode::new(
+        motivation,
+        HarnessComponent::SkillDefinition(skill_name.to_string()),
+        body.clone(),
+        ChangeManifest {
+            evidence_cited: vec![
+                "autonomy-queue".to_string(),
+                "operator-goal".to_string(),
+            ],
+            root_cause: goal
+                .as_ref()
+                .map(|goal| format!("queued operator goal needs a durable reusable skill: {goal}"))
+                .unwrap_or_else(|| {
+                    "verify sandbox accept/reject behavior before autonomous run".to_string()
+                }),
+            fix_description: body,
+            predicted_fixes: vec![
+                "operator goal provenance in proposal evidence".to_string(),
+                "sandbox verification coverage".to_string(),
+            ],
+            predicted_regressions: Vec::new(),
+            verification_status: VerificationStatus::Pending,
+            verified_at: None,
+        },
     )
 }
 
@@ -3777,6 +3827,7 @@ async fn run_supervised_loop(
             Arc::clone(&transcripts),
             &smoke_store,
             before_smoke_id,
+            context.as_ref(),
         )
         .await;
         let (passed, record, error) = match outcome {
@@ -3956,6 +4007,7 @@ async fn run_work_loop_job(
     transcripts: Arc<TranscriptStore>,
     smoke_store: &CodingSmokeStore,
     before_smoke_id: Option<i64>,
+    context: Option<&WorkLoopRunContext>,
 ) -> Result<WorkLoopSmokeRecord> {
     match job {
         WorkLoopJob::CodingSmoke => {
@@ -4012,7 +4064,11 @@ async fn run_work_loop_job(
             })
         }
         WorkLoopJob::ProposalDryRun => {
-            let (report, path) = execute_evolution_proposal_dry_run(Arc::clone(&events)).await?;
+            let (report, path) = execute_evolution_proposal_dry_run(
+                Arc::clone(&events),
+                context.and_then(|ctx| ctx.operator_goal.clone()),
+            )
+            .await?;
             Ok(WorkLoopSmokeRecord {
                 cycle: 0,
                 kind: job.kind().to_string(),
@@ -4031,8 +4087,12 @@ async fn run_work_loop_job(
         }
         WorkLoopJob::PatchApplyCommit => {
             let patch_path = write_autonomous_patch_apply_smoke_patch()?;
-            let (report, path) =
-                execute_patch_apply_commit(Arc::clone(&events), patch_path).await?;
+            let (report, path) = execute_patch_apply_commit(
+                Arc::clone(&events),
+                patch_path,
+                context.and_then(|ctx| ctx.operator_goal.clone()),
+            )
+            .await?;
             Ok(WorkLoopSmokeRecord {
                 cycle: 0,
                 kind: job.kind().to_string(),
@@ -4050,7 +4110,11 @@ async fn run_work_loop_job(
             })
         }
         WorkLoopJob::OperatorCommit => {
-            let (report, path) = execute_operator_commit_smoke(Arc::clone(&events)).await?;
+            let (report, path) = execute_operator_commit_smoke(
+                Arc::clone(&events),
+                context.and_then(|ctx| ctx.operator_goal.clone()),
+            )
+            .await?;
             Ok(WorkLoopSmokeRecord {
                 cycle: 0,
                 kind: job.kind().to_string(),
@@ -5195,7 +5259,7 @@ async fn run_repo_patch_commit_coding_session_with_goal(
     }
 
     let (verification, verification_path) =
-        execute_patch_apply_commit(Arc::clone(&events), patch_path.clone()).await?;
+        execute_patch_apply_commit(Arc::clone(&events), patch_path.clone(), None).await?;
     let passed = verification.accepted && verification.applied && verification.commit.is_some();
     let checks = verification.checks.clone();
     let step_outcomes = vec![
@@ -7751,6 +7815,9 @@ fn print_patch_apply_review(repo_root: &std::path::Path, path: &std::path::Path)
         report.commit.as_deref().unwrap_or("none"),
         report.report_commit.as_deref().unwrap_or("none")
     );
+    if let Some(goal) = &report.operator_goal {
+        println!("    operator goal: {}", truncate(goal, 140));
+    }
     println!("    checks: {}", report.checks.join(", "));
     println!(
         "    diff: {} bytes hash={}",
@@ -7788,6 +7855,9 @@ fn print_operator_commit_review(repo_root: &std::path::Path, path: &std::path::P
         report.commit.as_deref().unwrap_or("none")
     );
     println!("    target: {}", report.target_component);
+    if let Some(goal) = &report.operator_goal {
+        println!("    operator goal: {}", truncate(goal, 140));
+    }
     println!("    checks: {}", report.checks.join(", "));
     println!(
         "    diff: {} bytes hash={}",
@@ -8645,6 +8715,7 @@ fn format_work_event(event: &memd::events::AgentEvent) -> String {
     push_payload_line(&mut lines, "transcript", event.payload["transcript_path"].as_str());
     push_payload_line(&mut lines, "patch", event.payload["patch_path"].as_str());
     push_payload_line(&mut lines, "target", event.payload["target_component"].as_str());
+    push_payload_line(&mut lines, "operator-goal", event.payload["operator_goal"].as_str());
     if let Some(commit) = event.payload["commit"].as_str() {
         lines.push(format!("  L commit {}", short_fragment(commit)));
     }
@@ -9121,6 +9192,30 @@ mod tests {
     }
 
     #[test]
+    fn operator_goal_proposal_node_preserves_goal_in_manifest_and_diff() {
+        let node = operator_proposal_node(
+            "px-operator-goal-test",
+            Some("make queued Prof X proposals goal-specific"),
+        );
+
+        assert!(node
+            .motivation
+            .contains("make queued Prof X proposals goal-specific"));
+        assert!(node
+            .diff
+            .contains("Operator goal: make queued Prof X proposals goal-specific"));
+        assert!(node
+            .manifest
+            .root_cause
+            .contains("make queued Prof X proposals goal-specific"));
+        assert!(node
+            .manifest
+            .predicted_fixes
+            .iter()
+            .any(|fix| fix.contains("operator goal provenance")));
+    }
+
+    #[test]
     fn record_console_command_is_reviewable_work_event() {
         let db = Arc::new(std::sync::Mutex::new(
             rusqlite::Connection::open_in_memory().unwrap(),
@@ -9193,6 +9288,7 @@ mod tests {
             payload: serde_json::json!({
                 "queue_id": "12345678-aaaa-bbbb-cccc-123456789abc",
                 "goal": "run the next harness gate",
+                "operator_goal": "run the next harness gate",
                 "profile": "core",
                 "cycles": 1,
             }),
@@ -9203,6 +9299,7 @@ mod tests {
         assert!(line.contains("QUEUE"));
         assert!(line.contains("Started queued work"));
         assert!(line.contains("queue=12345678"));
+        assert!(line.contains("operator-goal run the next harness gate"));
         assert!(work_signal_summary(&[event]).contains("autonomy=1"));
     }
 
