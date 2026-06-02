@@ -1065,6 +1065,7 @@ async fn main() -> Result<()> {
             cycles,
             cli.supervised_loop_profile,
             false,
+            None,
         )
         .await;
     }
@@ -1080,6 +1081,7 @@ async fn main() -> Result<()> {
             cycles,
             WorkLoopProfile::Core,
             cli.publish_after_run,
+            None,
         )
         .await;
     }
@@ -1095,6 +1097,7 @@ async fn main() -> Result<()> {
             cycles,
             WorkLoopProfile::Commit,
             cli.publish_after_run,
+            None,
         )
         .await;
     }
@@ -2888,6 +2891,10 @@ struct CodingSessionReport {
 struct SupervisedLoopReport {
     run_id: String,
     run_kind: String,
+    #[serde(default)]
+    queue_id: Option<String>,
+    #[serde(default)]
+    operator_goal: Option<String>,
     started_at: String,
     completed_at: String,
     requested_cycles: u32,
@@ -2901,6 +2908,21 @@ struct SupervisedLoopReport {
     smoke_records: Vec<WorkLoopSmokeRecord>,
     #[serde(default)]
     timeline: Vec<WorkTimelineEntry>,
+}
+
+#[derive(Debug, Clone)]
+struct WorkLoopRunContext {
+    queue_id: Option<String>,
+    operator_goal: Option<String>,
+}
+
+impl WorkLoopRunContext {
+    fn from_queue_item(item: &AutonomyQueueItem) -> Self {
+        Self {
+            queue_id: Some(item.id.clone()),
+            operator_goal: Some(item.goal.clone()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -3088,6 +3110,19 @@ fn plan_work_loop_jobs(
         jobs.push(planned_job(cycle, job, profile.planning_reason(job)));
     }
     jobs
+}
+
+fn annotate_planned_jobs_with_context(
+    jobs: &mut [WorkLoopPlannedJob],
+    context: Option<&WorkLoopRunContext>,
+) {
+    let Some(goal) = context.and_then(|ctx| ctx.operator_goal.as_deref()) else {
+        return;
+    };
+    let goal = truncate(goal, 96);
+    for job in jobs {
+        job.reason = format!("queued goal: {goal}; {}", job.reason);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3325,6 +3360,7 @@ async fn run_autonomous_operator_run(
         cycles,
         profile,
         publish_after_run,
+        None,
     )
     .await
 }
@@ -3390,6 +3426,7 @@ async fn run_autonomy_queue_steps(
             item.cycles,
             profile,
             publish_after_run,
+            Some(WorkLoopRunContext::from_queue_item(&item)),
         )
         .await;
         let latest_run = WorkLoopRunStore::new(Arc::clone(&memory.db)).latest()?;
@@ -3488,6 +3525,7 @@ async fn run_supervised_loop_live(
             cycles,
             profile,
             publish_after_run,
+            None,
         )
         .await
     });
@@ -3573,13 +3611,15 @@ async fn run_supervised_loop(
     cycles: u32,
     profile: WorkLoopProfile,
     publish_after_run: bool,
+    context: Option<WorkLoopRunContext>,
 ) -> Result<()> {
     let run_id = uuid::Uuid::new_v4().to_string();
     let started_at = chrono::Utc::now();
     let cycles = cycles.clamp(1, 50);
     let timeline_start_id = events.tail(1)?.last().map(|event| event.id).unwrap_or(0);
     let recent_runs = WorkLoopRunStore::new(Arc::clone(&memory.db)).recent(5)?;
-    let planned_jobs = plan_work_loop_jobs(run_kind, profile, cycles, &recent_runs);
+    let mut planned_jobs = plan_work_loop_jobs(run_kind, profile, cycles, &recent_runs);
+    annotate_planned_jobs_with_context(&mut planned_jobs, context.as_ref());
     let gate_store = WorkLoopGateStore::new(Arc::clone(&memory.db));
     events.append(
         None,
@@ -3593,6 +3633,8 @@ async fn run_supervised_loop(
         serde_json::json!({
             "run_id": run_id,
             "run_kind": run_kind.as_str(),
+            "queue_id": context.as_ref().and_then(|ctx| ctx.queue_id.clone()),
+            "operator_goal": context.as_ref().and_then(|ctx| ctx.operator_goal.clone()),
             "cycles": cycles,
             "profile": profile.as_str(),
             "planned_jobs": &planned_jobs,
@@ -3614,6 +3656,8 @@ async fn run_supervised_loop(
             serde_json::json!({
                 "run_id": run_id,
                 "run_kind": run_kind.as_str(),
+                "queue_id": context.as_ref().and_then(|ctx| ctx.queue_id.clone()),
+                "operator_goal": context.as_ref().and_then(|ctx| ctx.operator_goal.clone()),
                 "profile": profile.as_str(),
                 "cycle": planned.cycle,
                 "job": planned.kind,
@@ -3644,6 +3688,8 @@ async fn run_supervised_loop(
             serde_json::json!({
                 "run_id": run_id,
                 "run_kind": run_kind.as_str(),
+                "queue_id": context.as_ref().and_then(|ctx| ctx.queue_id.clone()),
+                "operator_goal": context.as_ref().and_then(|ctx| ctx.operator_goal.clone()),
                 "cycle": cycle,
                 "cycles": cycles,
                 "job": job.kind(),
@@ -3705,6 +3751,8 @@ async fn run_supervised_loop(
             serde_json::json!({
                 "run_id": run_id,
                 "run_kind": run_kind.as_str(),
+                "queue_id": context.as_ref().and_then(|ctx| ctx.queue_id.clone()),
+                "operator_goal": context.as_ref().and_then(|ctx| ctx.operator_goal.clone()),
                 "cycle": cycle,
                 "cycles": cycles,
                 "job": job.kind(),
@@ -3722,6 +3770,8 @@ async fn run_supervised_loop(
     let mut report = SupervisedLoopReport {
         run_id: run_id.clone(),
         run_kind: run_kind.as_str().to_string(),
+        queue_id: context.as_ref().and_then(|ctx| ctx.queue_id.clone()),
+        operator_goal: context.as_ref().and_then(|ctx| ctx.operator_goal.clone()),
         started_at: started_at.to_rfc3339(),
         completed_at: chrono::Utc::now().to_rfc3339(),
         requested_cycles: cycles,
@@ -3772,6 +3822,8 @@ async fn run_supervised_loop(
         serde_json::json!({
             "run_id": run_id,
             "run_kind": run_kind.as_str(),
+            "queue_id": report.queue_id.clone(),
+            "operator_goal": report.operator_goal.clone(),
             "report_path": report_path,
             "ledger_path": ledger_path,
             "passed_cycles": report.passed_cycles,
@@ -5468,6 +5520,12 @@ fn format_work_loop_ledger(
     out.push(format!("- run_id: `{}`", report.run_id));
     out.push(format!("- kind: `{}`", report.run_kind));
     out.push(format!("- profile: `{}`", report.profile));
+    if let Some(queue_id) = &report.queue_id {
+        out.push(format!("- queue_id: `{queue_id}`"));
+    }
+    if let Some(goal) = &report.operator_goal {
+        out.push(format!("- operator_goal: {}", truncate(goal, 180)));
+    }
     out.push(format!("- started_at: `{}`", report.started_at));
     out.push(format!("- completed_at: `{}`", report.completed_at));
     out.push(format!(
@@ -7199,6 +7257,12 @@ fn print_run_review(memory: Arc<MemoryManager>, run_ref: &str) -> Result<()> {
     println!("Professor X run review");
     println!("  run: {}", report.run_id);
     println!("  kind/profile: {}:{}", report.run_kind, report.profile);
+    if let Some(queue_id) = &report.queue_id {
+        println!("  queue: {}", short_fragment(queue_id));
+    }
+    if let Some(goal) = &report.operator_goal {
+        println!("  operator goal: {}", truncate(goal, 180));
+    }
     println!("  started: {}", report.started_at);
     println!("  completed: {}", report.completed_at);
     println!(
@@ -7278,6 +7342,12 @@ fn print_run_replay(memory: Arc<MemoryManager>, run_ref: &str) -> Result<()> {
         report.failed_cycles
     );
     println!("report: {}", display_repo_path(&repo_root, &report_path));
+    if let Some(queue_id) = &report.queue_id {
+        println!("queue: {}", short_fragment(queue_id));
+    }
+    if let Some(goal) = &report.operator_goal {
+        println!("operator_goal: {}", truncate(goal, 180));
+    }
     println!();
 
     if !report.planned_jobs.is_empty() {
@@ -9139,6 +9209,28 @@ mod tests {
     }
 
     #[test]
+    fn queued_context_annotates_planned_jobs() {
+        let mut jobs = vec![planned_job(
+            1,
+            WorkLoopJob::CodingSmoke,
+            "prove local coding-agent edit and verification",
+        )];
+        let context = WorkLoopRunContext {
+            queue_id: Some("queue-12345678".to_string()),
+            operator_goal: Some("make queued Prof X work visible to operators".to_string()),
+        };
+
+        annotate_planned_jobs_with_context(&mut jobs, Some(&context));
+
+        assert!(jobs[0]
+            .reason
+            .contains("queued goal: make queued Prof X work visible to operators"));
+        assert!(jobs[0]
+            .reason
+            .contains("prove local coding-agent edit and verification"));
+    }
+
+    #[test]
     fn autonomy_planner_retries_failed_gate_first() {
         let recent = vec![work_loop_run(
             "operator",
@@ -9454,6 +9546,8 @@ mod tests {
         let report = SupervisedLoopReport {
             run_id: "12345678-aaaa-bbbb-cccc-123456789abc".to_string(),
             run_kind: "operator".to_string(),
+            queue_id: Some("queue-12345678".to_string()),
+            operator_goal: Some("make Prof X work visible".to_string()),
             started_at: "2026-06-01T01:00:00Z".to_string(),
             completed_at: "2026-06-01T01:01:00Z".to_string(),
             requested_cycles: 1,
@@ -9505,6 +9599,8 @@ mod tests {
 
         assert!(ledger.contains("# Professor X Run 12345678"));
         assert!(ledger.contains("- kind: `operator`"));
+        assert!(ledger.contains("- queue_id: `queue-12345678`"));
+        assert!(ledger.contains("- operator_goal: make Prof X work visible"));
         assert!(ledger.contains("cycle 1: `coding_smoke`"));
         assert!(ledger.contains("cycle 1 `coding_smoke`: passed"));
         assert!(ledger.contains("report: `artifacts/coding-smoke/report.json`"));
@@ -9618,6 +9714,8 @@ mod tests {
         let report = SupervisedLoopReport {
             run_id: "12345678-aaaa-bbbb-cccc-123456789abc".to_string(),
             run_kind: "operator".to_string(),
+            queue_id: None,
+            operator_goal: None,
             started_at: "2026-06-01T01:00:00Z".to_string(),
             completed_at: "2026-06-01T01:01:00Z".to_string(),
             requested_cycles: 1,
