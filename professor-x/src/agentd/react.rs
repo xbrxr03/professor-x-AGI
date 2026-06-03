@@ -327,7 +327,7 @@ impl ReactLoop {
             }
         }
 
-        // All attempts exhausted — MARS reflection + DHE attribution
+        // All attempts exhausted — MARS reflection + DHE attribution (LLM-as-judge for Layer 5)
 
         // Affect (H16): negative valence on full exhaustion
         {
@@ -346,7 +346,7 @@ impl ReactLoop {
         }
 
         let mars = self.generate_mars_reflection(task).await;
-        let dhe = crate::evolved::dhe::Dhe::diagnose(task);
+        let dhe = crate::evolved::dhe::Dhe::diagnose_async(task, &self.ollama).await;
         let failure_mode = format!(
             "{mars} [DHE:layer={},lever={}]",
             dhe.failed_layer, dhe.recommended_lever

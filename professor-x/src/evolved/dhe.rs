@@ -15,6 +15,7 @@
 /// Target: ≥60% fix-prediction precision vs AHE baseline of 33.7% (H10).
 
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 use crate::agentd::graph::TaskNode;
 
@@ -41,7 +42,25 @@ pub struct DiagnosticTrace {
 pub struct Dhe;
 
 impl Dhe {
-    /// Run all 5 layers on a failed task. Returns DiagnosticTrace.
+    /// Async variant — uses an LLM-as-judge for Layer 5 (reasoning quality).
+    /// Layers 1-4 are heuristic and run synchronously; Layer 5 calls Ollama.
+    /// Falls back to the heuristic circular-check on Ollama error.
+    pub async fn diagnose_async(
+        task: &TaskNode,
+        ollama: &crate::ollama::OllamaClient,
+    ) -> DiagnosticTrace {
+        let probes = vec![
+            Self::probe_layer1(task),
+            Self::probe_layer2(task),
+            Self::probe_layer3(task),
+            Self::probe_layer4(task),
+            Self::probe_layer5_llm(task, ollama).await,
+        ];
+        Self::select_trace(probes)
+    }
+
+    /// Run all 5 layers synchronously (heuristic-only, no LLM call).
+    /// Use `diagnose_async` when Ollama is available for better Layer 5 precision.
     pub fn diagnose(task: &TaskNode) -> DiagnosticTrace {
         let probes = vec![
             Self::probe_layer1(task),
@@ -50,10 +69,11 @@ impl Dhe {
             Self::probe_layer4(task),
             Self::probe_layer5(task),
         ];
+        Self::select_trace(probes)
+    }
 
-        // Find the first failing layer
+    fn select_trace(probes: Vec<LayerResult>) -> DiagnosticTrace {
         let first_fail = probes.iter().find(|p| !p.passed);
-
         match first_fail {
             None => DiagnosticTrace {
                 task_id: 0,
@@ -65,9 +85,9 @@ impl Dhe {
             },
             Some(fail) => {
                 let lever = match fail.layer {
-                    1 | 2 => 2, // Retrieval/context → LCAP + ICE
-                    3 | 4 => 3, // Tool dispatch/execution → structural
-                    5 => 1,     // Reasoning → parametric (if pervasive)
+                    1 | 2 => 2,
+                    3 | 4 => 3,
+                    5 => 1,
                     _ => 3,
                 };
                 DiagnosticTrace {
@@ -78,6 +98,88 @@ impl Dhe {
                     probe_results: probes,
                     recommended_lever: lever,
                 }
+            }
+        }
+    }
+
+    /// Layer 5 (async): LLM-as-judge for reasoning quality.
+    /// Runs circular check first (fast path). If that passes, calls Ollama
+    /// to assess whether the model's reasoning used observations correctly.
+    async fn probe_layer5_llm(
+        task: &TaskNode,
+        ollama: &crate::ollama::OllamaClient,
+    ) -> LayerResult {
+        // Fast path: catch obvious circular reasoning without an LLM call
+        let heuristic = Self::probe_layer5(task);
+        if !heuristic.passed {
+            return heuristic;
+        }
+
+        if task.steps.is_empty() {
+            return LayerResult {
+                layer: 5,
+                passed: true,
+                evidence: "no steps to evaluate".to_string(),
+                confidence: 0.5,
+            };
+        }
+
+        // Build a compact context: last 3 steps, truncated
+        let steps_context = task
+            .steps
+            .iter()
+            .rev()
+            .take(3)
+            .map(|s| {
+                format!(
+                    "Thought: {}\nObservation: {}",
+                    s.thought.chars().take(150).collect::<String>(),
+                    s.observation.output.chars().take(200).collect::<String>(),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        let prompt = format!(
+            "Task: {}\n\nFinal steps:\n{}\n\n\
+             Did the reasoning correctly use the tool observations to make \
+             progress toward the task? Answer YES or NO only.",
+            task.description.chars().take(200).collect::<String>(),
+            steps_context,
+        );
+
+        let resp = ollama
+            .generate(
+                &prompt,
+                Some("You are a reasoning quality evaluator. Answer with only YES or NO."),
+                Some(crate::ollama::ModelOptions {
+                    temperature: Some(0.0),
+                    num_ctx: Some(2048),
+                    top_p: None,
+                    stop: None,
+                    think: Some(false),
+                }),
+            )
+            .await;
+
+        match resp {
+            Ok(r) => {
+                let (_, answer) = r.split_thinking();
+                let passed = answer.trim().to_uppercase().starts_with("YES");
+                LayerResult {
+                    layer: 5,
+                    passed,
+                    evidence: if passed {
+                        "LLM judge: reasoning used observations correctly".to_string()
+                    } else {
+                        "LLM judge: reasoning failed to use observations toward the goal".to_string()
+                    },
+                    confidence: 0.85,
+                }
+            }
+            Err(e) => {
+                warn!("dhe: LLM-as-judge failed, falling back to heuristic: {e}");
+                Self::probe_layer5(task)
             }
         }
     }

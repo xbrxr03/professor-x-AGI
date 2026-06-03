@@ -395,13 +395,32 @@ impl ToolExecutor {
                 let query = req_str(&action.params, "query")?;
                 let layer = action.params["layer"].as_str().unwrap_or("episodic");
                 let out = match layer {
-                    "episodic" => mem
-                        .episodic
-                        .search_fts(query, 5)?
-                        .iter()
-                        .map(|e| format!("[{}] {}", e.timestamp.format("%Y-%m-%d"), e.content))
-                        .collect::<Vec<_>>()
-                        .join("\n"),
+                    "episodic" => {
+                        // Prefer semantic search; fall back to FTS when embedding unavailable
+                        let entries = if let Some(ollama) = self.ollama.as_ref() {
+                            if let Ok(vec) = ollama.embed(query).await {
+                                let emb_store = crate::embeddings::EmbeddingStore::new(
+                                    Arc::clone(&mem.db),
+                                );
+                                mem.episodic
+                                    .search_semantic(&emb_store, &vec, 5)
+                                    .unwrap_or_else(|_| {
+                                        mem.episodic.search_fts(query, 5).unwrap_or_default()
+                                    })
+                            } else {
+                                mem.episodic.search_fts(query, 5).unwrap_or_default()
+                            }
+                        } else {
+                            mem.episodic.search_fts(query, 5).unwrap_or_default()
+                        };
+                        entries
+                            .iter()
+                            .map(|e| {
+                                format!("[{}] {}", e.timestamp.format("%Y-%m-%d"), e.content)
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    }
                     "semantic" => {
                         let words: Vec<String> =
                             query.split_whitespace().map(String::from).collect();
@@ -487,8 +506,63 @@ impl ToolExecutor {
                 Ok(ToolDispatch::with_tokens(answer, resp.tokens_used()))
             }
             _ => {
-                warn!("unimplemented tool: {}", action.tool_name);
-                anyhow::bail!("tool '{}' not implemented", action.tool_name)
+                // Cerebellum bypass (Voyager arXiv:2305.16291):
+                // If this is a known procedural skill, serve it without a
+                // full LLM reasoning cycle. High-quality skills (score > 0.85,
+                // ≥ 3 uses) get direct shell execution; others get skill body
+                // returned as context for the next ReAct step.
+                let Some(mem) = self.memory.as_ref() else {
+                    warn!("unimplemented tool: {}", action.tool_name);
+                    anyhow::bail!("tool '{}' not implemented", action.tool_name);
+                };
+
+                let skill = mem.procedural.get_by_name(&action.tool_name)?;
+                match skill {
+                    None => {
+                        warn!("unimplemented tool: {}", action.tool_name);
+                        anyhow::bail!("tool '{}' not implemented", action.tool_name);
+                    }
+                    Some(entry) => {
+                        // High-quality skill: direct execution without extra LLM step
+                        if entry.verification_score > 0.85 && entry.times_used >= 3 {
+                            if let Some(cmd) = extract_skill_command(&entry.skill_body) {
+                                debug!(
+                                    "cerebellum: directly executing skill '{}' (score={:.2}, uses={}): {}",
+                                    entry.name,
+                                    entry.verification_score,
+                                    entry.times_used,
+                                    cmd.chars().take(80).collect::<String>()
+                                );
+                                let output = tokio::process::Command::new("sh")
+                                    .args(["-c", &cmd])
+                                    .current_dir(&self.workspace_root)
+                                    .output()
+                                    .await?;
+                                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                                let combined = if stderr.is_empty() {
+                                    stdout
+                                } else {
+                                    format!("{stdout}\nstderr: {stderr}")
+                                };
+                                return Ok(ToolDispatch::output(format!(
+                                    "cerebellum: skill '{}' executed directly\n{}",
+                                    entry.name,
+                                    combined.chars().take(4096).collect::<String>()
+                                )));
+                            }
+                        }
+                        // Lower-confidence skill: return body as LLM context
+                        Ok(ToolDispatch::output(format!(
+                            "Skill '{}' (score={:.2}, uses={}):\n{}\n\n{}",
+                            entry.name,
+                            entry.verification_score,
+                            entry.times_used,
+                            entry.description,
+                            entry.skill_body.chars().take(2048).collect::<String>()
+                        )))
+                    }
+                }
             }
         }
     }
@@ -695,6 +769,33 @@ fn req_str<'a>(p: &'a serde_json::Value, key: &str) -> Result<&'a str> {
     p[key]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("missing param '{key}'"))
+}
+
+/// Extract the primary shell command from a skill body for cerebellum bypass.
+/// Looks for the first non-comment line inside a ```bash/```sh block,
+/// or the first line prefixed with `$ `.
+fn extract_skill_command(skill_body: &str) -> Option<String> {
+    let mut in_bash = false;
+    for line in skill_body.lines() {
+        let trimmed = line.trim();
+        if trimmed == "```bash" || trimmed == "```sh" || trimmed == "```shell" {
+            in_bash = true;
+            continue;
+        }
+        if trimmed == "```" && in_bash {
+            in_bash = false;
+            continue;
+        }
+        if in_bash && !trimmed.is_empty() && !trimmed.starts_with('#') {
+            return Some(trimmed.to_string());
+        }
+        if let Some(cmd) = trimmed.strip_prefix("$ ") {
+            if !cmd.is_empty() {
+                return Some(cmd.to_string());
+            }
+        }
+    }
+    None
 }
 
 /// Built-in tool prefixes the executor dispatches itself. Any name not in this
