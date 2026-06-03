@@ -89,6 +89,10 @@ pub struct ReactLoop {
     /// behaviour for the current task, made before execution. Error against the
     /// actual run is recorded at task end.
     self_prediction: std::sync::Mutex<SelfPrediction>,
+    /// Seed 2 read-back: learned causal tool-sequence patterns for the current
+    /// task category, computed once per task and injected each step so the
+    /// agent acts on what has actually worked before. The self-knowledge loop.
+    causal_hint: std::sync::Mutex<String>,
 }
 
 impl ReactLoop {
@@ -116,6 +120,7 @@ impl ReactLoop {
             canvas: std::sync::Mutex::new(MermaidCanvas::default()),
             body_prediction: std::sync::Mutex::new(ComputationalVitals::neutral()),
             self_prediction: std::sync::Mutex::new(SelfPrediction::uninformed()),
+            causal_hint: std::sync::Mutex::new(String::new()),
             session_id,
         }
     }
@@ -204,6 +209,20 @@ impl ReactLoop {
 
         // LCAP: select context budget (Balanced before round 10, UCB1 after)
         let category = LcapPolicy::classify(&task.description);
+
+        // Seed 2 read-back: surface tool-sequences that have reliably worked for
+        // this task category, so the agent acts on its own learned causality.
+        {
+            let hint = self
+                .memory
+                .causal_traces
+                .format_for_context(&format!("{category:?}"), 4)
+                .unwrap_or_default();
+            if let Ok(mut h) = self.causal_hint.lock() {
+                *h = hint;
+            }
+        }
+
         let lcap_ceiling = {
             let lc = self.lcap.lock().unwrap();
             lc.select(&category, self.current_round).hard_ceiling_tokens
@@ -1103,6 +1122,15 @@ impl ReactLoop {
         if !cognition_context.is_empty() {
             let knowledge = cognition_context.join("\n- ");
             parts.push(format!("<knowledge>\n- {knowledge}\n</knowledge>"));
+        }
+
+        // Seed 2 read-back: learned causal tool-sequences that worked before for
+        // this kind of task. The agent's own accumulated self-knowledge guiding
+        // its next action.
+        if let Ok(hint) = self.causal_hint.lock() {
+            if !hint.is_empty() {
+                parts.push(format!("<learned-strategies>\n{hint}\n</learned-strategies>"));
+            }
         }
 
         // Current task
