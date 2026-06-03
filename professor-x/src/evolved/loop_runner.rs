@@ -24,6 +24,7 @@ use crate::evolved::proposer::{
 };
 use crate::evolved::tracker::OutcomeTracker;
 use crate::memd::events::EventStore;
+use crate::memd::free_energy::{compute_fed, FedRecord};
 use crate::memd::MemoryManager;
 use crate::ollama::{ChatMessage, ModelOptions, OllamaClient};
 
@@ -631,6 +632,32 @@ fn default_repo_root() -> PathBuf {
     }
 }
 
+/// Drain accumulated FED samples from a `ReactLoop` and persist a `FedRecord`
+/// to `memory.free_energy` (H15 — Free Energy Delta trajectory).
+///
+/// Call once after each HIRO round or supervised-loop session completes.
+/// A noop if no samples have been collected (e.g. the loop ran no tasks).
+pub fn flush_fed_to_memory(
+    react: &crate::agentd::react::ReactLoop,
+    memory: &MemoryManager,
+    round: u32,
+    session_id: &str,
+) {
+    let samples = react.drain_fed_samples();
+    if samples.is_empty() {
+        return;
+    }
+    let (mae, n) = compute_fed(&samples);
+    let record = FedRecord::new(session_id, round, n as u32, mae);
+    if let Err(e) = memory.free_energy.append(&record) {
+        warn!("evolved: FED flush failed: {e}");
+    } else {
+        info!(
+            "evolved: FED flushed — round={round} n={n} mae={mae:.4}"
+        );
+    }
+}
+
 pub struct EvolvedLoop {
     ollama: Arc<OllamaClient>,
     memory: Arc<MemoryManager>,
@@ -660,6 +687,25 @@ impl EvolvedLoop {
     /// Run one evolution cycle. Returns Ok(true) if a change was applied.
     pub async fn run_cycle(&self, tracker: &OutcomeTracker) -> Result<bool> {
         info!("evolved: starting Researcher/Engineer/Analyzer cycle");
+
+        // ── Ratchet: retire low-quality skills before proposing ──────────
+        // arXiv:2605.22148 — WITHOUT retire_skill: +0.0pp. WITH: +0.328pp.
+        match self.memory.procedural.retire_low_quality(5, 0.30) {
+            Ok(retired) if !retired.is_empty() => {
+                info!(
+                    "evolved: Ratchet retired {} low-quality skill(s): {:?}",
+                    retired.len(),
+                    retired
+                );
+                self.emit_event(
+                    "evolution.ratchet_retired",
+                    format!("Ratchet retired {} low-quality skill(s)", retired.len()),
+                    serde_json::json!({ "retired": retired }),
+                );
+            }
+            Ok(_) => {}
+            Err(e) => warn!("evolved: Ratchet retirement check failed: {e}"),
+        }
 
         // ── Researcher: diagnose and propose ─────────────────────────────
         let recent_outcomes = tracker.recent(20);
@@ -765,6 +811,13 @@ impl EvolvedLoop {
             node.id.unwrap_or(0),
             format!("{:?}", node.status)
         );
+
+        // ── Self-model update every 10 rounds (H14/H15) ──────────────────
+        let current_round = tracker.len() as u32;
+        if current_round > 0 && current_round % 10 == 0 {
+            self.maybe_update_self_model(current_round, tracker).await;
+        }
+
         Ok(true)
     }
 
@@ -996,6 +1049,80 @@ impl EvolvedLoop {
 
     async fn git_worktree_clean(&self) -> Result<bool> {
         git_worktree_clean_at(&default_repo_root()).await
+    }
+
+    /// Update the Strange Loop self-model snapshot via LLM (H14).
+    /// Called every 10 rounds from run_cycle. Skips silently on Ollama error
+    /// so a transient failure never blocks the evolution cycle.
+    async fn maybe_update_self_model(&self, round: u32, tracker: &OutcomeTracker) {
+        let prior = match self.memory.self_model.latest() {
+            Ok(Some(snap)) => snap,
+            Ok(None) => {
+                info!("evolved: self-model has no baseline snapshot; skipping update at round {round}");
+                return;
+            }
+            Err(e) => {
+                warn!("evolved: failed to load self-model snapshot: {e}");
+                return;
+            }
+        };
+
+        let success_rate = tracker.success_rate(20);
+        let failure_patterns = tracker.failure_patterns(20);
+        let behavior_summary = format!(
+            "success rate over the last 20 tasks: {:.0}%. \
+             Main failure patterns: {}.",
+            success_rate * 100.0,
+            if failure_patterns.is_empty() {
+                "none observed".to_string()
+            } else {
+                failure_patterns.join(", ")
+            }
+        );
+
+        let prompt = crate::memd::self_model::SelfModelStore::build_update_prompt(
+            &prior.text,
+            round,
+            &behavior_summary,
+        );
+
+        let resp = match self
+            .ollama
+            .generate(
+                &prompt,
+                Some("You are Professor X. Update your self-description concisely."),
+                Some(ModelOptions::for_reflection()),
+            )
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("evolved: self-model update LLM call failed: {e}");
+                return;
+            }
+        };
+
+        let (_, text) = resp.split_thinking();
+        let text = text.trim().to_string();
+        if text.is_empty() {
+            warn!("evolved: self-model update response was empty at round {round}");
+            return;
+        }
+
+        match self.memory.self_model.update_with_text(round, text) {
+            Ok(snap) => {
+                info!(
+                    "evolved: self-model updated at round {round} (id={:?})",
+                    snap.id
+                );
+                self.emit_event(
+                    "evolution.self_model_updated",
+                    format!("self-model updated at round {round}"),
+                    serde_json::json!({ "round": round, "snapshot_id": snap.id }),
+                );
+            }
+            Err(e) => warn!("evolved: failed to persist self-model update: {e}"),
+        }
     }
 
     async fn commit_node(&self, node: &EvolutionNode) -> Result<Option<String>> {
