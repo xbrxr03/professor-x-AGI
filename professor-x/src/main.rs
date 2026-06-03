@@ -1,5 +1,6 @@
 mod agentd;
 mod artifacts;
+mod embeddings;
 mod evolved;
 mod memd;
 mod observer;

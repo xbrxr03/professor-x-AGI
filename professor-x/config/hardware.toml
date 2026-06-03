@@ -4,9 +4,9 @@ ram_gb = 32
 gpu = "rtx3060"
 
 [model]
-primary  = "qwen3:8b-q4_k_m"    # 5.2GB VRAM, 42 tok/s, thinking mode
-upgrade  = "llama4:scout"         # when tasks need more headroom
-fallback = "qwen3:14b-q4_k_m"    # if primary fails; ~8.5GB VRAM
+primary  = "llama4:scout"         # 17B active / 109B MoE, ~10GB VRAM, best available locally
+fallback = "qwen3:8b-q4_k_m"     # if llama4:scout OOMs; 5.2GB VRAM, 42 tok/s
+embed    = "nomic-embed-text"     # 768-dim, CPU-only; run: ollama pull nomic-embed-text
 inference = "ollama"
 ollama_url = "http://localhost:11434"
 

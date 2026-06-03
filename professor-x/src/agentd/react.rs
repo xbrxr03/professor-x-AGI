@@ -33,6 +33,7 @@ use crate::agentd::graph::{ExecutionStep, TaskNode, TaskStatus};
 use crate::evolved::lcap::LcapPolicy;
 use crate::evolved::tracker::TaskOutcome;
 use crate::memd::affect::{arousal_from_load, state_label, valence_from_outcome, AffectState};
+use crate::memd::working::MermaidCanvas;
 use crate::memd::episodic::EpisodicEntry;
 use crate::memd::events::EventStore;
 use crate::memd::task_runs::TaskRunStore;
@@ -74,6 +75,9 @@ pub struct ReactLoop {
     /// Accumulated (predicted_success, actual_success) pairs for FED recording (H15).
     /// Drained by the caller via `drain_fed_samples()` after a batch completes.
     fed_samples: std::sync::Mutex<Vec<(f32, f32)>>,
+    /// Per-attempt MermaidCanvas — cleared between retries, injected as
+    /// compact `<history>` block (~61% token savings vs raw transcript).
+    canvas: std::sync::Mutex<MermaidCanvas>,
 }
 
 impl ReactLoop {
@@ -98,6 +102,7 @@ impl ReactLoop {
             memory_budget_override: None,
             affect: std::sync::Mutex::new(AffectState::neutral(session_id.clone(), 0)),
             fed_samples: std::sync::Mutex::new(Vec::new()),
+            canvas: std::sync::Mutex::new(MermaidCanvas::default()),
             session_id,
         }
     }
@@ -295,6 +300,7 @@ impl ReactLoop {
                         let reflection = self.generate_reflection(task).await;
                         task.push_reflection(reflection);
                         task.steps.clear();
+                        if let Ok(mut c) = self.canvas.lock() { c.clear(); }
                     }
                 }
                 Err(e) => {
@@ -646,18 +652,29 @@ impl ReactLoop {
                         return Ok(false);
                     }
 
-                    // Record the step
+                    // Record step on TaskNode and MermaidCanvas
                     let step = ExecutionStep {
                         index: (step_idx + 1) as u32,
                         thought: parsed.thought,
                         action: Action {
-                            tool_name: parsed.tool_name,
-                            params: parsed.params,
+                            tool_name: parsed.tool_name.clone(),
+                            params: parsed.params.clone(),
                             risk_score: gate.risk_score,
                         },
                         observation: observation.clone(),
                         timestamp: Utc::now(),
                     };
+                    {
+                        let param_preview = tool_params_preview(&parsed.params)
+                            .unwrap_or_default();
+                        if let Ok(mut canvas) = self.canvas.lock() {
+                            canvas.record_canvas_step(
+                                &parsed.tool_name,
+                                &param_preview,
+                                observation.success,
+                            );
+                        }
+                    }
                     task.steps.push(step);
                     let _ = TaskRunStore::new(Arc::clone(&self.memory.db)).step_recorded(task);
 
@@ -785,8 +802,20 @@ impl ReactLoop {
             parts.push(format!("<reflections>\n{refs}\n</reflections>"));
         }
 
-        // Prior steps this attempt
-        if !task.steps.is_empty() {
+        // Prior steps this attempt — MermaidCanvas (~61% token savings vs raw transcript)
+        if let Ok(canvas) = self.canvas.lock() {
+            let frag = if !canvas.is_empty() {
+                format!("<history>\n{}\n</history>", canvas.to_mermaid())
+            } else if !task.steps.is_empty() {
+                // Fallback: canvas not populated yet (first step)
+                format!("<history>\n{}\n</history>", task.steps_text())
+            } else {
+                String::new()
+            };
+            if !frag.is_empty() {
+                parts.push(frag);
+            }
+        } else if !task.steps.is_empty() {
             parts.push(format!("<history>\n{}\n</history>", task.steps_text()));
         }
 
@@ -800,21 +829,28 @@ impl ReactLoop {
     }
 
     async fn retrieve_ice(&self, task_desc: &str) -> Vec<String> {
-        match self.memory.episodic.search_fts(task_desc, 3) {
-            Ok(entries) => entries
-                .iter()
-                .filter(|e| e.importance > 0.3)
-                .map(|e| {
-                    let outcome = if e.importance >= 0.7 {
-                        "succeeded"
-                    } else {
-                        "failed"
-                    };
-                    format!("Past task ({outcome}): {}", e.content)
-                })
-                .collect(),
-            Err(_) => Vec::new(),
-        }
+        // Prefer semantic search (nomic-embed-text) for better recall.
+        // Falls back to FTS5 keyword search when embeddings unavailable.
+        let entries = if let Ok(query_vec) = self.ollama.embed(task_desc).await {
+            self.memory
+                .episodic
+                .search_semantic(&self.memory.embeddings, &query_vec, 3)
+                .unwrap_or_default()
+        } else {
+            self.memory
+                .episodic
+                .search_fts(task_desc, 3)
+                .unwrap_or_default()
+        };
+
+        entries
+            .iter()
+            .filter(|e| e.importance > 0.3)
+            .map(|e| {
+                let outcome = if e.importance >= 0.7 { "succeeded" } else { "failed" };
+                format!("Past task ({outcome}): {}", e.content)
+            })
+            .collect()
     }
 
     fn retrieve_cognition(&self, query: &str) -> Vec<String> {
@@ -924,7 +960,7 @@ impl ReactLoop {
             session_id: None,
             task_id: Some(task.id),
             timestamp: Utc::now(),
-            content: summary,
+            content: summary.clone(),
             keywords: extract_keywords(&task.description),
             importance,
             embedding_id: None,
@@ -932,6 +968,17 @@ impl ReactLoop {
         };
 
         let _ = self.memory.episodic.insert(&entry);
+
+        // Embed and store for future semantic retrieval (nomic-embed-text).
+        // Failure is silently swallowed — FTS5 fallback handles it.
+        crate::embeddings::embed_and_store(
+            &self.ollama,
+            &self.memory.embeddings,
+            "episodic",
+            &entry.id.to_string(),
+            &summary,
+        )
+        .await;
     }
 }
 

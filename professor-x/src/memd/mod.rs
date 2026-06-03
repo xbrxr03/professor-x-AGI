@@ -22,6 +22,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tracing::info;
 
+use crate::embeddings::EmbeddingStore;
 use crate::memd::affect::AffectStore;
 use crate::memd::episodic::EpisodicStore;
 use crate::memd::free_energy::FreeEnergyStore;
@@ -417,6 +418,18 @@ CREATE TABLE IF NOT EXISTS fed_records (
     recorded_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_fed_round ON fed_records(round);
+
+-- embeddings: dense vector store for semantic retrieval.
+-- Keyed by (source_table, source_id). Brute-force cosine at query time.
+-- Populated by Ollama nomic-embed-text (768-dim). Falls back to FTS5 if empty.
+CREATE TABLE IF NOT EXISTS embeddings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_table TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    vector BLOB NOT NULL,
+    UNIQUE(source_table, source_id)
+);
+CREATE INDEX IF NOT EXISTS idx_embeddings_table ON embeddings(source_table);
 "#;
 
 pub struct MemoryManager {
@@ -426,13 +439,13 @@ pub struct MemoryManager {
     pub episodic: EpisodicStore,
     pub semantic: SemanticStore,
     pub procedural: ProceduralStore,
-    /// IPE — Identity-Preserving Evolution. Stubs landed in the IPE
-    /// module stubs PR; the LLM update + prompt-injection wiring is
-    /// follow-up work.
     pub self_model: SelfModelStore,
     pub ics: IcsStore,
     pub affect: AffectStore,
     pub free_energy: FreeEnergyStore,
+    /// Dense vector store for semantic retrieval (nomic-embed-text, 768-dim).
+    /// Populated lazily at task write-time; falls back to FTS5 when empty.
+    pub embeddings: EmbeddingStore,
 }
 
 impl MemoryManager {
@@ -514,6 +527,7 @@ impl MemoryManager {
             ics: IcsStore::new(Arc::clone(&db)),
             affect: AffectStore::new(Arc::clone(&db)),
             free_energy: FreeEnergyStore::new(Arc::clone(&db)),
+            embeddings: EmbeddingStore::new(Arc::clone(&db)),
             db,
         })
     }

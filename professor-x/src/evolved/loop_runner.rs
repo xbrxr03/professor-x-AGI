@@ -724,12 +724,19 @@ impl EvolvedLoop {
         // Sample a node via UCB1 (ASI-Evolve)
         let candidates = self.node_db.sample_ucb1(3)?;
 
-        let proposal = self
-            .researcher_propose(&failure_patterns, &candidates, success_rate)
+        // Generate 3 proposals, run Elo tournament, commit winner
+        // (Co-Scientist pattern — arXiv:2502.18864)
+        let proposals = self
+            .researcher_propose_tournament(&failure_patterns, &candidates, success_rate)
             .await?;
-        let Some(mut node) = proposal else {
-            info!("evolved: Researcher produced no actionable proposal");
+        if proposals.is_empty() {
+            info!("evolved: Researcher produced no actionable proposals");
             return Ok(false);
+        }
+        let mut node = if proposals.len() == 1 {
+            proposals.into_iter().next().unwrap()
+        } else {
+            self.elo_tournament(proposals).await?
         };
         let proposal_artifact = self.write_node_artifact(&node, "proposal")?;
         self.emit_event(
@@ -821,11 +828,167 @@ impl EvolvedLoop {
         Ok(true)
     }
 
+    /// Generate up to 3 distinct proposals, returning all that parse successfully.
+    /// Called in place of the old single-proposal `researcher_propose`.
+    async fn researcher_propose_tournament(
+        &self,
+        failure_patterns: &[String],
+        candidates: &[EvolutionNode],
+        success_rate: f32,
+    ) -> Result<Vec<EvolutionNode>> {
+        const N: usize = 3;
+        let mut proposals = Vec::with_capacity(N);
+
+        for i in 0..N {
+            // Each call adds a diversity instruction so proposals diverge
+            let diversity_hint = match i {
+                0 => "Focus on the most impactful change.",
+                1 => "Propose a different target component than you might usually choose.",
+                2 => "Propose a minimal, surgical change — smallest diff that could fix the failure.",
+                _ => "",
+            };
+            match self
+                .researcher_propose_with_hint(
+                    failure_patterns,
+                    candidates,
+                    success_rate,
+                    diversity_hint,
+                )
+                .await
+            {
+                Ok(Some(node)) => {
+                    info!(
+                        "evolved: proposal {}/{N} — {:?}: {}",
+                        i + 1,
+                        node.target_component,
+                        node.motivation.chars().take(60).collect::<String>()
+                    );
+                    proposals.push(node);
+                }
+                Ok(None) => info!("evolved: proposal {}/{N} — no actionable output", i + 1),
+                Err(e) => warn!("evolved: proposal {}/{N} failed: {e}", i + 1),
+            }
+        }
+
+        Ok(proposals)
+    }
+
+    /// Run Elo tournament: every pair compared once, winner has highest Elo.
+    /// K=32, initial rating=1200. Returns the winner node.
+    async fn elo_tournament(&self, mut proposals: Vec<EvolutionNode>) -> Result<EvolutionNode> {
+        let n = proposals.len();
+        let mut ratings = vec![1200.0f32; n];
+        const K: f32 = 32.0;
+
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let score = self
+                    .elo_compare(&proposals[i], &proposals[j])
+                    .await
+                    .unwrap_or(0.5); // tie on error
+
+                // Expected score for i against j
+                let exp_i = 1.0 / (1.0 + 10.0f32.powf((ratings[j] - ratings[i]) / 400.0));
+                let exp_j = 1.0 - exp_i;
+
+                ratings[i] += K * (score - exp_i);
+                ratings[j] += K * ((1.0 - score) - exp_j);
+            }
+        }
+
+        let winner_idx = ratings
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+
+        info!(
+            "evolved: Elo tournament — winner proposal {} (rating={:.0}) of {}",
+            winner_idx + 1,
+            ratings[winner_idx],
+            n
+        );
+        self.emit_event(
+            "evolution.elo_winner",
+            format!(
+                "Elo winner: proposal {} (rating={:.0})",
+                winner_idx + 1,
+                ratings[winner_idx]
+            ),
+            serde_json::json!({
+                "winner_idx": winner_idx,
+                "ratings": ratings,
+                "motivation": proposals[winner_idx].motivation,
+            }),
+        );
+
+        Ok(proposals.swap_remove(winner_idx))
+    }
+
+    /// Ask the LLM which of two proposals is better.
+    /// Returns 1.0 if A wins, 0.0 if B wins, 0.5 on tie/error.
+    async fn elo_compare(
+        &self,
+        a: &EvolutionNode,
+        b: &EvolutionNode,
+    ) -> Result<f32> {
+        let prompt = format!(
+            "Two harness improvement proposals are competing. \
+             Judge which is more likely to improve the agent's task success rate.\n\n\
+             Proposal A:\n  Component: {:?}\n  Motivation: {}\n  Root cause: {}\n\n\
+             Proposal B:\n  Component: {:?}\n  Motivation: {}\n  Root cause: {}\n\n\
+             Answer with exactly one word: A or B",
+            a.target_component,
+            a.motivation.chars().take(120).collect::<String>(),
+            a.manifest.root_cause.chars().take(120).collect::<String>(),
+            b.target_component,
+            b.motivation.chars().take(120).collect::<String>(),
+            b.manifest.root_cause.chars().take(120).collect::<String>(),
+        );
+
+        let resp = self
+            .ollama
+            .generate(
+                &prompt,
+                Some("You are a research judge. Be decisive."),
+                Some(ModelOptions {
+                    temperature: Some(0.1),
+                    num_ctx: Some(2048),
+                    top_p: Some(0.9),
+                    stop: None,
+                    think: Some(false),
+                }),
+            )
+            .await?;
+
+        let (_, answer) = resp.split_thinking();
+        let trimmed = answer.trim().to_uppercase();
+        Ok(if trimmed.starts_with('A') {
+            1.0
+        } else if trimmed.starts_with('B') {
+            0.0
+        } else {
+            0.5 // unclear → tie
+        })
+    }
+
     async fn researcher_propose(
         &self,
         failure_patterns: &[String],
         candidates: &[EvolutionNode],
         success_rate: f32,
+    ) -> Result<Option<EvolutionNode>> {
+        self.researcher_propose_with_hint(failure_patterns, candidates, success_rate, "")
+            .await
+    }
+
+    async fn researcher_propose_with_hint(
+        &self,
+        failure_patterns: &[String],
+        candidates: &[EvolutionNode],
+        success_rate: f32,
+        diversity_hint: &str,
     ) -> Result<Option<EvolutionNode>> {
         // Retrieve top cognition items for context
         let cognition_items = self
@@ -855,13 +1018,20 @@ impl EvolvedLoop {
                 .join("\n")
         };
 
+        let diversity_section = if diversity_hint.is_empty() {
+            String::new()
+        } else {
+            format!("\nInstruction: {diversity_hint}\n")
+        };
+
         let prompt = format!(
             "You are the Researcher in an autonomous self-improvement loop.\n\n\
              Current state:\n\
              - Success rate (last 20 tasks): {success_rate:.0}%\n\
              - Failure patterns: {}\n\n\
              Prior evolution nodes (UCB1 sampled):\n{candidates_text}\n\n\
-             Knowledge base:\n{cognition_context}\n\n\
+             Knowledge base:\n{cognition_context}\n\
+             {diversity_section}\n\
              Propose ONE specific harness improvement. The improvement must target one of:\n\
              - SystemPrompt: the system prompt injected before every task\n\
              - ToolDescription(name): a tool's description in the registry\n\

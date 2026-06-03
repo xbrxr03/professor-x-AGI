@@ -15,6 +15,9 @@ use std::time::Duration;
 use tracing::warn;
 
 pub const DEFAULT_MODEL: &str = "qwen3:8b-q4_k_m";
+/// Dedicated embedding model — much smaller than the main LLM, CPU-only.
+/// Run: `ollama pull nomic-embed-text`
+pub const EMBED_MODEL: &str = "nomic-embed-text";
 pub const MAX_RETRIES: u32 = 4;
 pub const RETRY_BASE_MS: u64 = 500;
 
@@ -185,6 +188,17 @@ impl ChatResponse {
     }
 }
 
+#[derive(Debug, Serialize)]
+struct EmbedRequest {
+    model: String,
+    input: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct EmbedResponse {
+    embeddings: Vec<Vec<f32>>,
+}
+
 #[derive(Debug, Deserialize)]
 struct TagsResponse {
     models: Vec<ModelInfo>,
@@ -278,6 +292,62 @@ impl OllamaClient {
             options,
         };
         self.chat_with_retry(&req).await
+    }
+
+    /// Embed a single text using `nomic-embed-text` (768-dim).
+    /// Requires: `ollama pull nomic-embed-text`
+    /// Falls back gracefully — callers should treat Err as "embedding unavailable".
+    pub async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        let req = EmbedRequest {
+            model: EMBED_MODEL.to_string(),
+            input: serde_json::Value::String(text.chars().take(2048).collect()),
+        };
+        let url = format!("{}/api/embed", self.base_url);
+        let resp = self
+            .http
+            .post(&url)
+            .json(&req)
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            bail!("ollama embed failed {}: {}", resp.status(), resp.text().await.unwrap_or_default());
+        }
+        let embed_resp: EmbedResponse = resp.json().await?;
+        embed_resp
+            .embeddings
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("ollama embed: no embeddings in response"))
+    }
+
+    /// Embed a batch of texts in one API call.
+    pub async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        if texts.is_empty() {
+            return Ok(Vec::new());
+        }
+        let req = EmbedRequest {
+            model: EMBED_MODEL.to_string(),
+            input: serde_json::Value::Array(
+                texts
+                    .iter()
+                    .map(|t| serde_json::Value::String(t.chars().take(2048).collect()))
+                    .collect(),
+            ),
+        };
+        let url = format!("{}/api/embed", self.base_url);
+        let resp = self
+            .http
+            .post(&url)
+            .json(&req)
+            .timeout(Duration::from_secs(60))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            bail!("ollama embed_batch failed {}", resp.status());
+        }
+        let embed_resp: EmbedResponse = resp.json().await?;
+        Ok(embed_resp.embeddings)
     }
 
     async fn generate_with_retry(&self, req: &GenerateRequest) -> Result<GenerateResponse> {
