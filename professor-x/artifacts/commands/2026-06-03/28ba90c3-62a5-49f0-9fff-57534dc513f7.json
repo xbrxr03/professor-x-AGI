@@ -1,0 +1,10 @@
+{
+  "command": "git log --oneline -10",
+  "exit_code": 0,
+  "success": true,
+  "stdout": "7a22c00 Fix web.search timeouts and the retry-loop they caused\n06cb246 Add prof-x-stream.py — polished coding-agent-style live transcript\n3a140f6 Fix watch-prof-x.sh: drop malformed ANSI codes for clean readable output\n5696c94 Kill reasoning loops: duplicate-action breaker + workspace grounding\ndf39079 Fix circular-reasoning loop: show recent observations in the prompt\n1020ac4 Add watch-prof-x.sh — live coding-agent-style transcript\nf087df7 Stream HIRO step events so benchmark runs are observable live\nb626fb5 Fix thinking-mode control: think is a top-level Ollama field, not an option\n2af05a5 Correct model config to reality: qwen3:8b primary, not llama4:scout\n04fab64 Add --consciousness-report measurement harness\n",
+  "stderr": "",
+  "stdout_bytes": 726,
+  "stderr_bytes": 0,
+  "recorded_at": "2026-06-03T23:03:11.809981945+00:00"
+}

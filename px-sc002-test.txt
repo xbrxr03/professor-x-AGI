@@ -1,1 +1,13 @@
-hiro-sc002-test
+# Regression Test for ReAct Loop
+
+## Task 1: Basic Reaction
+- **Expected Behavior**: The system should correctly identify and execute a basic reaction to a simple input.
+- **Pass/Fail Criterion**: The reaction must be executed within 1 minute and the output must match the expected result.
+
+## Task 2: Complex Reaction
+- **Expected Behavior**: The system should correctly identify and execute a complex reaction to a multi-step input.
+- **Pass/Fail Criterion**: The reaction must be executed within 3 minutes and the output must match the expected result.
+
+## Task 3: Self-Reflection
+- **Expected Behavior**: The system should correctly identify and execute a self-reflection task to evaluate its own performance.
+- **Pass/Fail Criterion**: The self-reflection must be executed within 5 minutes and the output must indicate a clear understanding of its own performance.

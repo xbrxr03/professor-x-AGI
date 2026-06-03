@@ -506,6 +506,29 @@ fn allowed_shell_program(program: &str) -> bool {
             | "lspci"
             | "nvidia-smi"
             | "xargs"
+            // Read-only text processing — needed for legitimate count / sort /
+            // extract tasks. All non-destructive; destructive programs are
+            // covered by denied_shell_program and the control-fragment block.
+            | "sort"
+            | "uniq"
+            | "head"
+            | "tail"
+            | "cut"
+            | "tr"
+            | "nl"
+            | "tac"
+            | "comm"
+            | "column"
+            | "awk"
+            | "seq"
+            | "basename"
+            | "dirname"
+            | "realpath"
+            | "stat"
+            | "file"
+            | "tree"
+            | "md5sum"
+            | "sha256sum"
     )
 }
 
