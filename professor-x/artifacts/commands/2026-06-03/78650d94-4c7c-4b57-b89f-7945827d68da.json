@@ -1,0 +1,10 @@
+{
+  "command": "lspci | grep -i vga",
+  "exit_code": 0,
+  "success": true,
+  "stdout": "01:00.0 VGA compatible controller: NVIDIA Corporation GA104 [GeForce RTX 3060] (rev a1)\n",
+  "stderr": "",
+  "stdout_bytes": 88,
+  "stderr_bytes": 0,
+  "recorded_at": "2026-06-03T19:47:32.261240952+00:00"
+}

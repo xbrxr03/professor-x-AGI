@@ -1,0 +1,13 @@
+{
+  "run_id": "c2b2f8b8-8a98-4ba4-8149-25dc8bc03583",
+  "round": 0,
+  "task_id": "tu_009",
+  "category": "tool_use",
+  "attempt": 1,
+  "passed": false,
+  "failure_reason": "The task failed because `ollama_url` was absent from `hardware.toml`, and the `primary` model wasn't in the fetched tags, likely due to Ollama not running or the model not being loaded. Next, I will explicitly check for `ollama_url` in the config, use a default URL if missing, verify Ollama's availability via a health check, and ensure the model name matches exactly what Ollama expects.",
+  "output_hash": "2e52194e599f320043259dab03e02b1e0bda97b46628c726f0c1320f7a4aca64",
+  "duration_ms": 55421,
+  "harness_commit": "b626fb56c06426e1bc365b33396e40ba715f50f2",
+  "recorded_at": "2026-06-03T19:26:42.700190043Z"
+}

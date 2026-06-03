@@ -1,0 +1,13 @@
+{
+  "run_id": "c2b2f8b8-8a98-4ba4-8149-25dc8bc03583",
+  "round": 0,
+  "task_id": "tu_002",
+  "category": "tool_use",
+  "attempt": 2,
+  "passed": false,
+  "failure_reason": "policy denied: shell program 'sort' is not allowed",
+  "output_hash": "2094f81a6dfd3f5c6ff6126e3a7d21f12319093c3238e1732ea39ef53ea6ad27",
+  "duration_ms": 28138,
+  "harness_commit": "b626fb56c06426e1bc365b33396e40ba715f50f2",
+  "recorded_at": "2026-06-03T19:10:52.473741884Z"
+}

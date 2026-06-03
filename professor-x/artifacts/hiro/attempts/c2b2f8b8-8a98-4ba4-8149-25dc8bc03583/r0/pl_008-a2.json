@@ -1,0 +1,13 @@
+{
+  "run_id": "c2b2f8b8-8a98-4ba4-8149-25dc8bc03583",
+  "round": 0,
+  "task_id": "pl_008",
+  "category": "planning",
+  "attempt": 2,
+  "passed": false,
+  "failure_reason": "**What went wrong:** The semantic memory queries failed to retrieve Lever 1 details and truncated Lever 2/3 descriptions, resulting in an incomplete summary lacking specificity.  \n\n**Next steps:** Query each lever individually (e.g., \"Lever 1 MHE framework\") to extract full definitions. Explicitly verify activation timing from memory results to craft precise, one-sentence bullet points for all three levers.",
+  "output_hash": "ee5e334cf5a6235663fee1ff6a9d2578015616893c1aaaf5ee1629dcaa1acb03",
+  "duration_ms": 52582,
+  "harness_commit": "b626fb56c06426e1bc365b33396e40ba715f50f2",
+  "recorded_at": "2026-06-03T20:22:11.900707871Z"
+}

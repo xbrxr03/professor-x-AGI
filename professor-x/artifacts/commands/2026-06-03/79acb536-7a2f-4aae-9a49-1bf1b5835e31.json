@@ -1,0 +1,10 @@
+{
+  "command": "df -h /",
+  "exit_code": 0,
+  "success": true,
+  "stdout": "Filesystem      Size  Used Avail Use% Mounted on\n/dev/sda2       469G   38G  408G   9% /\n",
+  "stderr": "",
+  "stdout_bytes": 89,
+  "stderr_bytes": 0,
+  "recorded_at": "2026-06-03T19:17:02.212610943+00:00"
+}
