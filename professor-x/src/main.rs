@@ -32,6 +32,7 @@ use evolved::verify_diff_in_sandbox;
 use evolved::verify_node_in_sandbox;
 use evolved::{EvolvedLoop, HiroRunner};
 use memd::MemoryManager;
+use memd::pinned::PinnedEntry;
 use memd::autonomy_queue::{AutonomyQueueItem, AutonomyQueueStore};
 use memd::coding_sessions::{CodingSessionRecord, CodingSessionStore};
 use memd::coding_smoke::{CodingSmokeRecord, CodingSmokeStore};
@@ -1269,11 +1270,41 @@ async fn main() -> Result<()> {
         info!("evolved: cognition base has {} items", cognition.count()?);
     }
 
+    // ── identity: seed pinned memory from professor_x.md (immutable) ────
+    {
+        let persona_path = default_repo_root().join("professor-x/personas/professor_x.md");
+        match std::fs::read_to_string(&persona_path) {
+            Ok(content) if !content.trim().is_empty() => {
+                let entry = PinnedEntry {
+                    id: "professor-x-identity".to_string(),
+                    content: content.clone(),
+                    immutable: true,
+                };
+                if let Err(e) = memory.pinned.upsert(&entry) {
+                    warn!("startup: failed to seed pinned identity: {e}");
+                } else {
+                    info!("startup: pinned identity seeded from {}", persona_path.display());
+                }
+                // ── self-model: seed round-0 Strange Loop snapshot ──────────
+                if let Err(e) = memory.self_model.seed_if_empty(content) {
+                    warn!("startup: failed to seed self-model round-0: {e}");
+                } else {
+                    info!("startup: self-model round-0 snapshot ready");
+                }
+            }
+            Ok(_) => warn!("startup: professor_x.md is empty — identity not seeded"),
+            Err(e) => warn!(
+                "startup: could not read {} — identity not seeded: {e}",
+                persona_path.display()
+            ),
+        }
+    }
+
     // ── ollama health check ───────────────────────────────────────────────
     let ollama = Arc::new(ollama::OllamaClient::new("http://localhost:11434"));
     match ollama.health_check().await {
-        Ok(true) => info!("ollama: reachable, model qwen3:8b-q4_k_m ready"),
-        Ok(false) => warn!("ollama: reachable but model may not be loaded"),
+        Ok(true) => info!("ollama: reachable, model ready"),
+        Ok(false) => warn!("ollama: reachable but model may not be loaded — check `ollama list`"),
         Err(e) => warn!("ollama: not reachable ({e}) — tasks will fail until Ollama starts"),
     }
 

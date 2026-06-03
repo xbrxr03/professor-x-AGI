@@ -967,18 +967,40 @@ impl ReactLoop {
             cluster_id: None,
         };
 
-        let _ = self.memory.episodic.insert(&entry);
+        // Surprise filter (arXiv:2603.07670 write pipeline, step 4):
+        // skip if the new entry is too similar to an existing one — avoids
+        // filling episodic memory with near-identical failure observations.
+        // Threshold 0.92 from the memory write-pipeline spec.
+        // Falls back to always-insert when embeddings are unavailable.
+        let novel = if let Ok(query_vec) = self.ollama.embed(&summary).await {
+            let emb_store = crate::embeddings::EmbeddingStore::new(
+                Arc::clone(&self.memory.db),
+            );
+            let top_sim = emb_store
+                .top_k("episodic", &query_vec, 1)
+                .unwrap_or_default()
+                .into_iter()
+                .next()
+                .map(|(_, sim)| sim)
+                .unwrap_or(0.0);
 
-        // Embed and store for future semantic retrieval (nomic-embed-text).
-        // Failure is silently swallowed — FTS5 fallback handles it.
-        crate::embeddings::embed_and_store(
-            &self.ollama,
-            &self.memory.embeddings,
-            "episodic",
-            &entry.id.to_string(),
-            &summary,
-        )
-        .await;
+            if top_sim > 0.92 {
+                debug!(
+                    "react: episodic surprise filter skipped near-duplicate (sim={top_sim:.3})"
+                );
+                false
+            } else {
+                // While we have the embedding, store it for future retrieval
+                let _ = emb_store.upsert("episodic", &entry.id.to_string(), &query_vec);
+                true
+            }
+        } else {
+            true // no embedding available → always store
+        };
+
+        if novel {
+            let _ = self.memory.episodic.insert(&entry);
+        }
     }
 }
 

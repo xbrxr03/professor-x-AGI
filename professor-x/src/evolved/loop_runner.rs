@@ -1314,8 +1314,64 @@ impl EvolvedLoop {
                     format!("self-model updated at round {round}"),
                     serde_json::json!({ "round": round, "snapshot_id": snap.id }),
                 );
+
+                // ── ICS: measure drift from round-0 baseline (H14) ──────────
+                self.compute_and_record_ics(round, &snap.text).await;
             }
             Err(e) => warn!("evolved: failed to persist self-model update: {e}"),
+        }
+    }
+
+    /// Embed the new snapshot and the round-0 baseline, compute cosine ICS,
+    /// persist the record, and warn at the alert (0.70) and halt (0.50) thresholds.
+    async fn compute_and_record_ics(&self, round: u32, new_text: &str) {
+        let baseline = match self.memory.self_model.at_round(0) {
+            Ok(Some(b)) => b,
+            Ok(None) => {
+                warn!("evolved: ICS skipped — no round-0 baseline snapshot");
+                return;
+            }
+            Err(e) => {
+                warn!("evolved: ICS skipped — baseline load failed: {e}");
+                return;
+            }
+        };
+
+        let (vec_new, vec_base) = match tokio::try_join!(
+            self.ollama.embed(new_text),
+            self.ollama.embed(&baseline.text),
+        ) {
+            Ok(pair) => pair,
+            Err(e) => {
+                warn!("evolved: ICS skipped — embedding failed: {e}");
+                return;
+            }
+        };
+
+        let score = crate::memd::ics::compute_ics(&vec_new, &vec_base);
+        let record = crate::memd::ics::IcsRecord::new(0, round, score);
+
+        match self.memory.ics.append(&record) {
+            Ok(_) => {
+                info!("evolved: ICS round {round} vs baseline = {score:.3}");
+                if score < 0.50 {
+                    warn!(
+                        "evolved: ICS BELOW HALT THRESHOLD (0.50) at round {round}: {score:.3} \
+                         — identity drift is severe"
+                    );
+                } else if score < 0.70 {
+                    warn!(
+                        "evolved: ICS below alert threshold (0.70) at round {round}: {score:.3}"
+                    );
+                }
+                self.emit_event(
+                    "evolution.ics_recorded",
+                    format!("ICS at round {round} = {score:.3}"),
+                    serde_json::json!({ "round": round, "ics": score,
+                        "alert": score < 0.70, "halt": score < 0.50 }),
+                );
+            }
+            Err(e) => warn!("evolved: ICS record write failed: {e}"),
         }
     }
 
