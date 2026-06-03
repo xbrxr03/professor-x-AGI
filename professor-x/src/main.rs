@@ -144,6 +144,8 @@ struct CliArgs {
     coding_sessions_limit: Option<usize>,
     /// Review one coding-agent session by id prefix, or 'latest'.
     coding_session_review: Option<String>,
+    /// Publish one coding-agent session evidence bundle by id prefix, or 'latest'.
+    coding_session_publish: Option<String>,
     /// Run N bounded local supervised work-loop cycles and exit.
     supervised_loop_cycles: Option<u32>,
     /// Select supervised loop job mix: basic or core.
@@ -287,6 +289,7 @@ fn parse_args() -> CliArgs {
         skill_patch_commit_live_goal: None,
         coding_sessions_limit: None,
         coding_session_review: None,
+        coding_session_publish: None,
         supervised_loop_cycles: None,
         supervised_loop_profile: WorkLoopProfile::Basic,
         operator_run_cycles: None,
@@ -561,6 +564,15 @@ fn parse_args() -> CliArgs {
                     .cloned();
                 let has_value = value.is_some();
                 cli.coding_session_review = Some(value.unwrap_or_else(|| "latest".to_string()));
+                i += if has_value { 2 } else { 1 };
+            }
+            "--coding-session-publish" | "--prof-x-code-publish" | "--session-publish" => {
+                let value = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .cloned();
+                let has_value = value.is_some();
+                cli.coding_session_publish = Some(value.unwrap_or_else(|| "latest".to_string()));
                 i += if has_value { 2 } else { 1 };
             }
             "--autonomy-queue" | "--prof-x-queue" => {
@@ -844,6 +856,10 @@ async fn main() -> Result<()> {
 
     if let Some(session_ref) = cli.coding_session_review {
         return print_coding_session_review(Arc::clone(&memory), &session_ref);
+    }
+
+    if let Some(session_ref) = cli.coding_session_publish {
+        return publish_coding_session_artifacts(Arc::clone(&memory), &session_ref);
     }
 
     if let Some(limit) = cli.autonomy_queue_limit {
@@ -6575,6 +6591,12 @@ async fn run_interactive_tasks(
             print_coding_session_review(Arc::clone(&memory), session_ref)?;
             continue;
         }
+        if let Some(rest) = input.strip_prefix("/session-publish") {
+            let session_ref = nonempty_or_latest(rest);
+            record_console_command(&events, "session-publish", Some(session_ref.to_string()))?;
+            publish_coding_session_artifacts(Arc::clone(&memory), session_ref)?;
+            continue;
+        }
         if let Some(rest) = input.strip_prefix("/queue-review") {
             let queue_ref = nonempty_or_latest(rest);
             record_console_command(&events, "queue-review", Some(queue_ref.to_string()))?;
@@ -6782,6 +6804,7 @@ fn format_interactive_help() -> String {
         "  /work [n]       show recent work/tool/task events",
         "  /sessions [n]   show recent coding-agent sessions and evidence paths",
         "  /session-review [session] review latest or selected coding session",
+        "  /session-publish [session] publish coding session evidence to git",
         "  /queue [n]      show persistent autonomous work queue",
         "  /queue-review [queue] review linked run evidence for a queue item",
         "  /queue-replay [queue] replay linked run timeline for a queue item",
@@ -7098,6 +7121,7 @@ fn format_operator_help() -> String {
         "  cargo run -- --prof-x-code-live \"update one safe local fixture\"",
         "  cargo run -- --coding-sessions 5",
         "  cargo run -- --prof-x-code-review latest",
+        "  cargo run -- --prof-x-code-publish latest",
         "",
         "Turn a short operator goal into a verified skill patch",
         "  cargo run -- --prof-x-skill-live \"capture the next harness gap\"",
@@ -7319,8 +7343,127 @@ fn print_coding_session_review(memory: Arc<MemoryManager>, session_ref: &str) ->
         "  review again: cargo run -- --prof-x-code-review {}",
         short_fragment(&session.id)
     );
+    println!(
+        "  publish evidence: cargo run -- --prof-x-code-publish {}",
+        short_fragment(&session.id)
+    );
     println!("  watch: cargo run -- --observe-work");
     Ok(())
+}
+
+fn publish_coding_session_artifacts(memory: Arc<MemoryManager>, session_ref: &str) -> Result<()> {
+    let store = CodingSessionStore::new(Arc::clone(&memory.db));
+    let session = store
+        .get_by_ref(session_ref)?
+        .ok_or_else(|| anyhow::anyhow!("no coding session found for '{session_ref}'"))?;
+    let repo_root = default_repo_root();
+    let paths = publishable_coding_session_artifact_paths(&repo_root, &session)?;
+    let commit = commit_coding_session_artifacts(&repo_root, &paths, &session)?;
+
+    println!("Published Professor X coding session {}", short_fragment(&session.id));
+    println!("  commit: {commit}");
+    for path in paths {
+        println!("  artifact: {}", path.display());
+    }
+    Ok(())
+}
+
+fn publishable_coding_session_artifact_paths(
+    repo_root: &std::path::Path,
+    session: &CodingSessionRecord,
+) -> Result<Vec<PathBuf>> {
+    let mut candidates = Vec::new();
+    candidates.push(session.session_report_path.clone());
+    if let Some(path) = &session.smoke_report_path {
+        candidates.push(path.clone());
+    }
+    if let Some(path) = &session.transcript_path {
+        candidates.push(path.clone());
+    }
+    candidates.extend(session.artifacts.iter().cloned());
+
+    let mut paths = Vec::new();
+    for candidate in candidates {
+        let resolved = resolve_report_reference(repo_root, &candidate);
+        if !resolved.exists() {
+            continue;
+        }
+        let relative = repo_relative_existing_path(repo_root, &resolved)?;
+        if !publishable_coding_session_artifact_path(&relative) {
+            anyhow::bail!(
+                "refusing to publish coding session artifact '{}' because it is outside the coding-session artifact allowlist",
+                relative.display()
+            );
+        }
+        paths.push(relative);
+    }
+    paths.sort();
+    paths.dedup();
+    if paths.is_empty() {
+        anyhow::bail!("no existing coding session artifacts found for {}", short_fragment(&session.id));
+    }
+    Ok(paths)
+}
+
+fn publishable_coding_session_artifact_path(path: &std::path::Path) -> bool {
+    publishable_run_artifact_path(path)
+        || path
+            .to_string_lossy()
+            .starts_with("professor-x/artifacts/commands/")
+        || path
+            .to_string_lossy()
+            .starts_with("artifacts/commands/")
+        || path
+            .to_string_lossy()
+            .starts_with("professor-x/artifacts/repo-patches/")
+        || path
+            .to_string_lossy()
+            .starts_with("artifacts/repo-patches/")
+}
+
+fn commit_coding_session_artifacts(
+    repo_root: &std::path::Path,
+    paths: &[PathBuf],
+    session: &CodingSessionRecord,
+) -> Result<String> {
+    if paths.is_empty() {
+        anyhow::bail!("no coding session artifacts selected for publish");
+    }
+    let mut add = std::process::Command::new("git");
+    add.arg("add").arg("--");
+    for path in paths {
+        add.arg(path);
+    }
+    let add = add.current_dir(repo_root).output()?;
+    if !add.status.success() {
+        anyhow::bail!(
+            "git add coding session artifacts failed: {}",
+            String::from_utf8_lossy(&add.stderr)
+        );
+    }
+    let diff = std::process::Command::new("git")
+        .args(["diff", "--cached", "--quiet", "--"])
+        .args(paths)
+        .current_dir(repo_root)
+        .status()?;
+    if diff.success() {
+        anyhow::bail!("coding session artifacts are already published; no staged changes");
+    }
+    let message = format!(
+        "professor-x: publish coding session {}",
+        short_fragment(&session.id)
+    );
+    let commit = std::process::Command::new("git")
+        .args(["commit", "-m", &message])
+        .current_dir(repo_root)
+        .output()?;
+    if !commit.status.success() {
+        anyhow::bail!(
+            "git commit coding session artifacts failed: {}",
+            String::from_utf8_lossy(&commit.stderr)
+        );
+    }
+    git_head(repo_root)
 }
 
 fn print_coding_session_artifact_review(repo_root: &std::path::Path, artifact: &str) -> Result<()> {
@@ -9544,6 +9687,7 @@ mod tests {
         assert!(help.contains("--observe-work"));
         assert!(help.contains("--prof-x-code-live"));
         assert!(help.contains("--prof-x-code-review latest"));
+        assert!(help.contains("--prof-x-code-publish latest"));
         assert!(help.contains("--prof-x-skill-live"));
         assert!(help.contains("--prof-x-skill-commit-live"));
         assert!(help.contains("--prof-x-code-patch-live"));
@@ -9563,6 +9707,7 @@ mod tests {
         assert!(help.contains("/work [n]"));
         assert!(help.contains("/sessions [n]"));
         assert!(help.contains("/session-review [session]"));
+        assert!(help.contains("/session-publish [session]"));
         assert!(help.contains("/queue [n]"));
         assert!(help.contains("/queue-review [queue]"));
         assert!(help.contains("/queue-replay [queue]"));
@@ -10473,6 +10618,70 @@ mod tests {
         assert!(!publishable_run_artifact_path(std::path::Path::new(
             "professor-x/src/main.rs"
         )));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn publishable_coding_session_artifact_paths_allow_only_evidence_artifacts() {
+        let root = std::env::temp_dir().join(format!("px-session-publish-{}", uuid::Uuid::new_v4()));
+        let session_report = root
+            .join("professor-x")
+            .join("artifacts")
+            .join("coding-sessions")
+            .join("2026-06-01")
+            .join("session-12345678.json");
+        let transcript = root
+            .join("professor-x")
+            .join("artifacts")
+            .join("transcripts")
+            .join("2026-06-01")
+            .join("task-12345678.json");
+        let command = root
+            .join("professor-x")
+            .join("artifacts")
+            .join("commands")
+            .join("2026-06-01")
+            .join("cargo-check.json");
+        let source_file = root.join("professor-x").join("src").join("main.rs");
+        for path in [&session_report, &transcript, &command, &source_file] {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "{}").unwrap();
+        }
+        let now = chrono::Utc::now();
+        let mut session = CodingSessionRecord {
+            id: "12345678-aaaa-bbbb-cccc-123456789abc".to_string(),
+            generated_at: now,
+            goal: "publish coding evidence".to_string(),
+            exercise: "repo_patch".to_string(),
+            status: "passed".to_string(),
+            workspace: None,
+            smoke_id: None,
+            smoke_report_path: None,
+            session_report_path: session_report.display().to_string(),
+            transcript_path: Some(transcript.display().to_string()),
+            artifacts: vec![command.display().to_string()],
+            checks: vec!["cargo check".to_string()],
+            plan_steps: Vec::new(),
+            step_outcomes: Vec::new(),
+            failure_reason: None,
+            recorded_at: now,
+        };
+
+        let paths = publishable_coding_session_artifact_paths(&root, &session).unwrap();
+
+        assert_eq!(paths.len(), 3);
+        assert!(paths.iter().any(|path| path.ends_with("session-12345678.json")));
+        assert!(paths.iter().any(|path| path.ends_with("task-12345678.json")));
+        assert!(paths.iter().any(|path| path.ends_with("cargo-check.json")));
+        assert!(publishable_coding_session_artifact_path(std::path::Path::new(
+            "professor-x/artifacts/commands/2026-06-01/cargo-check.json"
+        )));
+        assert!(!publishable_coding_session_artifact_path(std::path::Path::new(
+            "professor-x/src/main.rs"
+        )));
+
+        session.artifacts.push(source_file.display().to_string());
+        assert!(publishable_coding_session_artifact_paths(&root, &session).is_err());
         let _ = std::fs::remove_dir_all(root);
     }
 
