@@ -27,6 +27,7 @@ use uuid::Uuid;
 use crate::agentd::graph::{TaskNode, TaskType};
 use crate::agentd::react::ReactLoop;
 use crate::evolved::bf::BfTracker;
+use crate::evolved::flush_fed_to_memory;
 use crate::evolved::lcap::LcapPolicy;
 use crate::memd::events::EventStore;
 use crate::memd::metacognitive::MetacognitiveStore;
@@ -593,6 +594,9 @@ impl HiroRunner {
         let start = Instant::now();
         let outcome = react.run(&mut task).await?;
         let duration_ms = start.elapsed().as_millis() as u64;
+
+        // H15 — Free Energy Delta: flush (predicted, actual) pairs to DB
+        flush_fed_to_memory(&react, &self.memory, round, &self.run_id);
         let evaluation = evaluate_task(hiro_task, &task, outcome.success);
         let attempts = summarize_attempts(
             hiro_task,

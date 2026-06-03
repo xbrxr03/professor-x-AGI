@@ -990,10 +990,25 @@ impl EvolvedLoop {
         success_rate: f32,
         diversity_hint: &str,
     ) -> Result<Option<EvolutionNode>> {
-        // Retrieve top cognition items for context
-        let cognition_items = self
-            .cognition
-            .query_top_k("harness improvement failure", 5)?;
+        // Retrieve top cognition items — prefer semantic search, fallback to keyword
+        let query_text = format!(
+            "harness improvement {} failure",
+            failure_patterns.first().map(|s| s.as_str()).unwrap_or("unknown")
+        );
+        let cognition_items = if let Ok(vec) = self.ollama.embed(&query_text).await {
+            let emb_store = crate::embeddings::EmbeddingStore::new(Arc::clone(&self.memory.db));
+            let semantic = self
+                .cognition
+                .search_semantic(&emb_store, &vec, 5)
+                .unwrap_or_default();
+            if semantic.is_empty() {
+                self.cognition.query_top_k(&query_text, 5).unwrap_or_default()
+            } else {
+                semantic
+            }
+        } else {
+            self.cognition.query_top_k(&query_text, 5).unwrap_or_default()
+        };
         let cognition_context = cognition_items
             .iter()
             .map(|c| format!("- {}", c.content))
@@ -1176,12 +1191,21 @@ impl EvolvedLoop {
         node.manifest.verification_status = VerificationStatus::Confirmed;
         node.manifest.verified_at = Some(Utc::now());
 
-        // Write lesson to cognition base
+        // Write lesson to cognition base and embed it for future semantic retrieval
         if !lesson.is_empty() {
             let node_id = node.id.unwrap_or(0) as u64;
             let item = Analyzer::to_cognition_item(&lesson, node_id);
             self.cognition.insert(&item)?;
             info!("evolved: Analyzer wrote new cognition item");
+            let emb_store = crate::embeddings::EmbeddingStore::new(Arc::clone(&self.memory.db));
+            crate::embeddings::embed_and_store(
+                &self.ollama,
+                &emb_store,
+                "cognition",
+                &item.id.to_string(),
+                &item.content,
+            )
+            .await;
         }
 
         // Record DHE attribution into the metacognitive store. The entry is
