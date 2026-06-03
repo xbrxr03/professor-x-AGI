@@ -190,6 +190,8 @@ struct CliArgs {
     operator_commit_smoke: bool,
     /// Run one seeded autonomous evolution cycle and exit.
     evolution_cycle: bool,
+    /// Run one evolution cycle learning from REAL recent task outcomes.
+    evolve_live: bool,
     /// Phase B truth gate one-shot: scan brain/, artifacts/, ops/daily/ against
     /// the artifact schemas and report. Exit 1 on any failure.
     validate_artifacts: bool,
@@ -315,6 +317,7 @@ fn parse_args() -> CliArgs {
         autonomy_step_live_count: None,
         operator_commit_smoke: false,
         evolution_cycle: false,
+        evolve_live: false,
         validate_artifacts: false,
     };
     let mut i = 1;
@@ -745,6 +748,10 @@ fn parse_args() -> CliArgs {
             }
             "--operator-commit-smoke" => {
                 cli.operator_commit_smoke = true;
+                i += 1;
+            }
+            "--evolve" | "--evolve-live" => {
+                cli.evolve_live = true;
                 i += 1;
             }
             "--evolution-cycle" => {
@@ -1318,6 +1325,15 @@ async fn main() -> Result<()> {
         Ok(true) => info!("ollama: reachable, model ready"),
         Ok(false) => warn!("ollama: reachable but model may not be loaded — check `ollama list`"),
         Err(e) => warn!("ollama: not reachable ({e}) — tasks will fail until Ollama starts"),
+    }
+
+    if cli.evolve_live {
+        return run_live_evolution_cycle(
+            Arc::clone(&ollama),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+        )
+        .await;
     }
 
     if cli.evolution_cycle {
@@ -6124,6 +6140,79 @@ async fn run_one_evolution_cycle(
     );
     println!("  events: cargo run -- --events 20");
     println!("  artifacts: find artifacts/evolution -type f | sort");
+    Ok(())
+}
+
+/// Load real recent task outcomes from `task_runs` so the evolution cycle
+/// learns from what actually happened (e.g. the HIRO round just run), not from
+/// seeded calibration data. Only finished runs are included.
+fn outcomes_from_recent_runs(memory: &Arc<MemoryManager>, limit: usize) -> Vec<TaskOutcome> {
+    let store = TaskRunStore::new(Arc::clone(&memory.db));
+    let runs = store.recent(limit).unwrap_or_default();
+    runs.into_iter()
+        .filter(|r| matches!(r.status.as_str(), "Complete" | "Failed"))
+        .map(|r| {
+            let success = r.status == "Complete";
+            TaskOutcome {
+                task_id: uuid::Uuid::parse_str(&r.task_id).unwrap_or_else(|_| uuid::Uuid::new_v4()),
+                description: r.description,
+                success,
+                score: r.outcome_score.unwrap_or(if success { 1.0 } else { 0.0 }),
+                failure_mode: r.failure_mode,
+                steps_taken: r.step_count as u32,
+                timestamp: r.completed_at.unwrap_or(r.updated_at),
+            }
+        })
+        .collect()
+}
+
+/// Run one evolution cycle that learns from REAL recent outcomes. Falls back to
+/// seeded calibration outcomes only if no finished runs exist yet.
+async fn run_live_evolution_cycle(
+    ollama: Arc<ollama::OllamaClient>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+) -> Result<()> {
+    let mut tracker = OutcomeTracker::new();
+    let real = outcomes_from_recent_runs(&memory, 40);
+    let source = if real.is_empty() {
+        for outcome in seeded_evolution_outcomes() {
+            tracker.record(outcome);
+        }
+        "seeded (no finished runs yet)"
+    } else {
+        for outcome in real {
+            tracker.record(outcome);
+        }
+        "real task outcomes"
+    };
+
+    println!("Evolution cycle (live) — learning from {source}");
+    println!(
+        "  outcomes={}  success_rate(20)={:.0}%  failure_patterns={:?}",
+        tracker.len(),
+        tracker.success_rate(20) * 100.0,
+        tracker.failure_patterns(20),
+    );
+    events.append(
+        None,
+        None,
+        "evolution.live_cycle.started",
+        format!("starting live evolution cycle from {source}"),
+        serde_json::json!({
+            "outcomes": tracker.len(),
+            "success_rate_20": tracker.success_rate(20),
+            "failure_patterns": tracker.failure_patterns(20),
+        }),
+    )?;
+
+    let evolved = EvolvedLoop::new(ollama, memory).with_events(Arc::clone(&events));
+    let applied = evolved.run_cycle(&tracker).await?;
+    println!(
+        "Result: {}",
+        if applied { "APPLIED a harness change" } else { "no change this cycle" }
+    );
+    println!("  watch: ./prof-x-stream.py     artifacts: find artifacts/evolution -type f | sort");
     Ok(())
 }
 

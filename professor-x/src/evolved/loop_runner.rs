@@ -583,18 +583,18 @@ async fn git_head(repo_root: &Path) -> Result<String> {
 }
 
 async fn git_worktree_clean_at(repo_root: &Path) -> Result<bool> {
+    // The evolution cycle only requires that SOURCE / harness files are clean
+    // before it mutates them. The entire artifacts/ tree is runtime output
+    // (HIRO attempts, transcripts, commands, evolution reports, ...) and must
+    // not block autonomous mutation, so the whole tree is excluded.
     let out = tokio::process::Command::new("git")
         .args([
             "status",
             "--porcelain",
             "--",
             ".",
-            ":!professor-x/artifacts/events",
-            ":!professor-x/artifacts/evolution",
-            ":!professor-x/artifacts/work-loop",
-            ":!artifacts/events",
-            ":!artifacts/evolution",
-            ":!artifacts/work-loop",
+            ":!professor-x/artifacts",
+            ":!artifacts",
         ])
         .current_dir(repo_root)
         .output()

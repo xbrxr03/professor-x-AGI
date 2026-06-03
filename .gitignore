@@ -19,3 +19,13 @@ _refs/
 # See professor-x/brain/STUB.md.
 professor-x/brain/*
 !professor-x/brain/STUB.md
+
+# Runtime output (HIRO runs, transcripts, command logs, smoke). Evolution
+# evidence is committed explicitly via the publish commands when wanted.
+professor-x/artifacts/hiro/
+professor-x/artifacts/transcripts/
+professor-x/artifacts/commands/
+professor-x/artifacts/coding-smoke/
+professor-x/artifacts/coding-sessions/
+professor-x/artifacts/replacements/
+professor-x/artifacts/patches/
