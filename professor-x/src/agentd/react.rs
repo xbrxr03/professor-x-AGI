@@ -32,6 +32,7 @@ use uuid::Uuid;
 use crate::agentd::graph::{ExecutionStep, TaskNode, TaskStatus};
 use crate::evolved::lcap::LcapPolicy;
 use crate::evolved::tracker::TaskOutcome;
+use crate::memd::affect::{arousal_from_load, state_label, valence_from_outcome, AffectState};
 use crate::memd::episodic::EpisodicEntry;
 use crate::memd::events::EventStore;
 use crate::memd::task_runs::TaskRunStore;
@@ -65,6 +66,14 @@ pub struct ReactLoop {
     /// clamps the ceiling to N tokens per task. Lets `--memory-budget N`
     /// sweep T* without touching LCAP arm state.
     memory_budget_override: Option<u32>,
+    /// Stable identifier for this loop's affect session (one per ReactLoop instance).
+    session_id: String,
+    /// Running affect state (valence + arousal) updated after each task attempt.
+    /// Injected into every ReAct prompt via `<affect .../>` (H16).
+    affect: std::sync::Mutex<AffectState>,
+    /// Accumulated (predicted_success, actual_success) pairs for FED recording (H15).
+    /// Drained by the caller via `drain_fed_samples()` after a batch completes.
+    fed_samples: std::sync::Mutex<Vec<(f32, f32)>>,
 }
 
 impl ReactLoop {
@@ -75,6 +84,7 @@ impl ReactLoop {
         memory: Arc<MemoryManager>,
         cancel: CancellationToken,
     ) -> Self {
+        let session_id = Uuid::new_v4().to_string();
         Self {
             ollama,
             registry,
@@ -86,6 +96,9 @@ impl ReactLoop {
             events: None,
             transcripts: None,
             memory_budget_override: None,
+            affect: std::sync::Mutex::new(AffectState::neutral(session_id.clone(), 0)),
+            fed_samples: std::sync::Mutex::new(Vec::new()),
+            session_id,
         }
     }
 
@@ -112,6 +125,16 @@ impl ReactLoop {
     pub fn with_memory_budget_override(mut self, budget: u32) -> Self {
         self.memory_budget_override = Some(budget);
         self
+    }
+
+    /// Drain accumulated (predicted_success, actual_success) pairs collected
+    /// across tasks run by this loop. Call after a batch/session completes to
+    /// compute and persist a `FedRecord` (H15 — Free Energy Delta trajectory).
+    pub fn drain_fed_samples(&self) -> Vec<(f32, f32)> {
+        self.fed_samples
+            .lock()
+            .map(|mut v| std::mem::take(&mut *v))
+            .unwrap_or_default()
     }
 
     /// Run a task to completion or exhaustion. Returns outcome for the tracker.
@@ -146,6 +169,9 @@ impl ReactLoop {
 
         // ICE: retrieve similar past tasks from episodic memory
         let ice_examples = self.retrieve_ice(&task.description).await;
+
+        // FED (H15): predict success before execution from ICE hit quality
+        let predicted_success = predict_success_from_ice(&ice_examples);
 
         // Cognition context: relevant items from cognition base
         let cognition_context = self.retrieve_cognition(&task.description);
@@ -223,6 +249,25 @@ impl ReactLoop {
                         lc.update(&category, &arm, 1.0);
                     }
 
+                    // Affect (H16): positive valence on success
+                    {
+                        let tool_density = task.steps.len() as f32 / 20.0;
+                        let retry_pressure =
+                            task.attempt_count.saturating_sub(1) as f32
+                            / task.max_attempts as f32;
+                        let v = valence_from_outcome(1.0, predicted_success);
+                        let a = arousal_from_load(tool_density, retry_pressure);
+                        if let Ok(mut aff) = self.affect.lock() {
+                            aff.round = self.current_round;
+                            aff.update_ema(v, a, 0.3);
+                            let _ = self.memory.affect.append(&*aff);
+                        }
+                    }
+                    // FED (H15): record prediction accuracy
+                    if let Ok(mut fed) = self.fed_samples.lock() {
+                        fed.push((predicted_success, 1.0));
+                    }
+
                     return Ok(TaskOutcome {
                         task_id: task.id,
                         description: task.description.clone(),
@@ -235,6 +280,18 @@ impl ReactLoop {
                 }
                 Ok(false) => {
                     if attempt + 1 < task.max_attempts {
+                        // Affect: mildly negative after a failed attempt, arousal rises with retries
+                        {
+                            let tool_density = task.steps.len() as f32 / 20.0;
+                            let retry_pressure =
+                                (attempt + 1) as f32 / task.max_attempts as f32;
+                            let v = valence_from_outcome(0.0, predicted_success);
+                            let a = arousal_from_load(tool_density, retry_pressure);
+                            if let Ok(mut aff) = self.affect.lock() {
+                                aff.round = self.current_round;
+                                aff.update_ema(v, a, 0.3);
+                            }
+                        }
                         let reflection = self.generate_reflection(task).await;
                         task.push_reflection(reflection);
                         task.steps.clear();
@@ -265,6 +322,23 @@ impl ReactLoop {
         }
 
         // All attempts exhausted — MARS reflection + DHE attribution
+
+        // Affect (H16): negative valence on full exhaustion
+        {
+            let tool_density = task.steps.len() as f32 / 20.0;
+            let v = valence_from_outcome(0.0, predicted_success);
+            let a = arousal_from_load(tool_density, 1.0);
+            if let Ok(mut aff) = self.affect.lock() {
+                aff.round = self.current_round;
+                aff.update_ema(v, a, 0.3);
+                let _ = self.memory.affect.append(&*aff);
+            }
+        }
+        // FED (H15): record prediction accuracy
+        if let Ok(mut fed) = self.fed_samples.lock() {
+            fed.push((predicted_success, 0.0));
+        }
+
         let mars = self.generate_mars_reflection(task).await;
         let dhe = crate::evolved::dhe::Dhe::diagnose(task);
         let failure_mode = format!(
@@ -673,6 +747,19 @@ impl ReactLoop {
             parts.push(ctx_prefix);
         }
 
+        // Affect (H16): inject emotional state when non-trivial so the model
+        // can condition on its own performance trajectory
+        if let Ok(aff) = self.affect.lock() {
+            if aff.valence.abs() > 0.05 || aff.arousal > 0.05 {
+                parts.push(format!(
+                    "<affect state=\"{}\" valence=\"{:.2}\" arousal=\"{:.2}\" />",
+                    state_label(aff.valence, aff.arousal),
+                    aff.valence,
+                    aff.arousal,
+                ));
+            }
+        }
+
         // ICE: similar past tasks
         if !ice_examples.is_empty() {
             let examples = ice_examples
@@ -1018,6 +1105,20 @@ const TOOLS_DESCRIPTION: &str = "Available tools:
 
 const REACT_SUFFIX: &str = "Now complete the task. Follow the ReAct format.\n\nThought:";
 
+/// Predict task success probability from ICE example outcomes.
+/// Laplace-smoothed so no ICE → 0.5 uninformative prior; all-success → ~0.9.
+/// Used to seed the FED sample (H15) before task execution begins.
+fn predict_success_from_ice(examples: &[String]) -> f32 {
+    if examples.is_empty() {
+        return 0.5;
+    }
+    let successes = examples
+        .iter()
+        .filter(|e| e.contains("(succeeded)") || e.contains("SUCCEEDED"))
+        .count();
+    (successes as f32 + 1.0) / (examples.len() as f32 + 2.0)
+}
+
 /// Resolve the effective per-task context ceiling. The override only ever
 /// clamps the LCAP-selected value down; raising it would let an H1 sweep
 /// silently exceed LCAP's learned distribution and contaminate other runs.
@@ -1030,7 +1131,7 @@ pub(crate) fn effective_memory_ceiling(lcap_ceiling: u32, override_budget: Optio
 
 #[cfg(test)]
 mod tests {
-    use super::effective_memory_ceiling;
+    use super::{effective_memory_ceiling, predict_success_from_ice};
 
     #[test]
     fn override_clamps_below_lcap() {
@@ -1057,5 +1158,33 @@ mod tests {
         // Useful sanity case: --memory-budget 0 forces zero injection,
         // matching H1's left endpoint of the sweep.
         assert_eq!(effective_memory_ceiling(8192, Some(0)), 0);
+    }
+
+    #[test]
+    fn predict_no_examples_gives_uninformative_prior() {
+        let p = predict_success_from_ice(&[]);
+        assert!((p - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn predict_all_successes_gives_high_estimate() {
+        let examples = vec![
+            "Past task (succeeded): do X".to_string(),
+            "Past task (succeeded): do Y".to_string(),
+        ];
+        let p = predict_success_from_ice(&examples);
+        // (2+1)/(2+2) = 0.75
+        assert!((p - 0.75).abs() < 1e-6);
+    }
+
+    #[test]
+    fn predict_all_failures_gives_low_estimate() {
+        let examples = vec![
+            "Past task (failed): do X".to_string(),
+            "Past task (failed): do Y".to_string(),
+        ];
+        let p = predict_success_from_ice(&examples);
+        // (0+1)/(2+2) = 0.25
+        assert!((p - 0.25).abs() < 1e-6);
     }
 }
