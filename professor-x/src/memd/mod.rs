@@ -1,5 +1,7 @@
 pub mod affect;
 pub mod autonomy_queue;
+pub mod causal_traces;
+pub mod computational_body;
 pub mod self_authored_tests;
 pub mod coding_sessions;
 pub mod coding_smoke;
@@ -24,6 +26,8 @@ use std::sync::{Arc, Mutex};
 use tracing::info;
 
 use crate::embeddings::EmbeddingStore;
+use crate::memd::causal_traces::CausalTraceStore;
+use crate::memd::computational_body::ComputationalBodyStore;
 use crate::memd::self_authored_tests::SelfAuthoredTestStore;
 use crate::memd::affect::AffectStore;
 use crate::memd::episodic::EpisodicStore;
@@ -449,6 +453,36 @@ CREATE TABLE IF NOT EXISTS embeddings (
     UNIQUE(source_table, source_id)
 );
 CREATE INDEX IF NOT EXISTS idx_embeddings_table ON embeddings(source_table);
+
+-- causal_traces (Seed 2 — STDP): action sequences with timing relative to outcome.
+-- Learns causal chains, not correlations. Order and timing carry the signal.
+CREATE TABLE IF NOT EXISTS causal_traces (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    task_category TEXT NOT NULL,
+    actions TEXT NOT NULL,
+    outcome INTEGER NOT NULL,
+    outcome_score REAL NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_causal_traces_category ON causal_traces(task_category, created_at);
+
+-- computational_vitals (Seed 4 — interoception): the agent's "body" signals.
+-- Inference latency, token budget, evolution health. The substrate IS the body.
+CREATE TABLE IF NOT EXISTS computational_vitals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    round INTEGER NOT NULL,
+    inference_latency_ms REAL NOT NULL,
+    token_budget_used REAL NOT NULL,
+    memory_pressure REAL NOT NULL,
+    evolution_health REAL NOT NULL,
+    predicted_latency_ms REAL,
+    interoceptive_error REAL,
+    recorded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_vitals_session ON computational_vitals(session_id);
 "#;
 
 pub struct MemoryManager {
@@ -467,6 +501,10 @@ pub struct MemoryManager {
     pub embeddings: EmbeddingStore,
     /// Agent-authored benchmark: tests the Researcher writes to catch its own failure classes.
     pub self_authored_tests: SelfAuthoredTestStore,
+    /// Seed 2 (STDP): causal action-sequence traces with timing.
+    pub causal_traces: CausalTraceStore,
+    /// Seed 4 (interoception): the agent's computational "body" signals.
+    pub computational_body: ComputationalBodyStore,
 }
 
 impl MemoryManager {
@@ -550,6 +588,8 @@ impl MemoryManager {
             free_energy: FreeEnergyStore::new(Arc::clone(&db)),
             embeddings: EmbeddingStore::new(Arc::clone(&db)),
             self_authored_tests: SelfAuthoredTestStore::new(Arc::clone(&db)),
+            causal_traces: CausalTraceStore::new(Arc::clone(&db)),
+            computational_body: ComputationalBodyStore::new(Arc::clone(&db)),
             db,
         })
     }

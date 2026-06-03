@@ -7,6 +7,7 @@ pub mod lcap;
 pub mod loop_runner;
 pub mod proposer;
 pub mod reflector;
+pub mod sleep;
 pub mod tracker;
 
 pub use cognition_base::CognitionStore;

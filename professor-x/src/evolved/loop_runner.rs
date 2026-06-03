@@ -863,6 +863,26 @@ impl EvolvedLoop {
             self.maybe_update_self_model(current_round, tracker).await;
         }
 
+        // ── Sleep consolidation (Seed 3 — CLS) ───────────────────────────
+        // The agent "sleeps" after each cycle: replay episodics, extract
+        // cross-task patterns, promote to semantic memory, decay stale traces.
+        match crate::evolved::sleep::consolidate(&self.memory, &self.ollama, current_round).await {
+            Ok(report) => self.emit_event(
+                "evolution.consolidated",
+                format!(
+                    "sleep consolidation: {} promoted, {} decayed",
+                    report.promoted_to_semantic, report.episodics_decayed
+                ),
+                serde_json::json!({
+                    "replayed": report.episodics_replayed,
+                    "patterns": report.patterns_extracted,
+                    "promoted": report.promoted_to_semantic,
+                    "decayed": report.episodics_decayed,
+                }),
+            ),
+            Err(e) => warn!("evolved: sleep consolidation failed: {e}"),
+        }
+
         Ok(true)
     }
 

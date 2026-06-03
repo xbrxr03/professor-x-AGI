@@ -33,6 +33,8 @@ use crate::agentd::graph::{ExecutionStep, TaskNode, TaskStatus};
 use crate::evolved::lcap::LcapPolicy;
 use crate::evolved::tracker::TaskOutcome;
 use crate::memd::affect::{arousal_from_load, state_label, valence_from_outcome, AffectState};
+use crate::memd::causal_traces::{CausalTrace, TimedAction};
+use crate::memd::computational_body::ComputationalVitals;
 use crate::memd::working::MermaidCanvas;
 use crate::memd::episodic::EpisodicEntry;
 use crate::memd::events::EventStore;
@@ -78,6 +80,10 @@ pub struct ReactLoop {
     /// Per-attempt MermaidCanvas — cleared between retries, injected as
     /// compact `<history>` block (~61% token savings vs raw transcript).
     canvas: std::sync::Mutex<MermaidCanvas>,
+    /// Seed 4 (interoception): predicted computational body state for the
+    /// current task, set at task start from recent vitals history and injected
+    /// into every prompt as `<body .../>`. Actual vitals recorded at task end.
+    body_prediction: std::sync::Mutex<ComputationalVitals>,
 }
 
 impl ReactLoop {
@@ -103,6 +109,7 @@ impl ReactLoop {
             affect: std::sync::Mutex::new(AffectState::neutral(session_id.clone(), 0)),
             fed_samples: std::sync::Mutex::new(Vec::new()),
             canvas: std::sync::Mutex::new(MermaidCanvas::default()),
+            body_prediction: std::sync::Mutex::new(ComputationalVitals::neutral()),
             session_id,
         }
     }
@@ -188,6 +195,30 @@ impl ReactLoop {
             lc.select(&category, self.current_round).hard_ceiling_tokens
         };
         let num_ctx = effective_memory_ceiling(lcap_ceiling, self.memory_budget_override);
+
+        // Seed 4 (interoception): predict the computational body state for this
+        // task from recent vitals history. Seth's "controlled hallucination" —
+        // the agent experiences its predicted body; reality only corrects it.
+        {
+            let predicted_latency = self
+                .memory
+                .computational_body
+                .recent_mean_latency(10)
+                .ok()
+                .flatten()
+                .unwrap_or(1500.0);
+            let evolution_health = 0.5; // updated by evolution loop; neutral prior here
+            let predicted = ComputationalVitals {
+                inference_latency_ms: predicted_latency,
+                token_budget_used: (num_ctx as f32 / 32768.0).min(1.0),
+                memory_pressure: 0.2,
+                evolution_health,
+            };
+            if let Ok(mut bp) = self.body_prediction.lock() {
+                *bp = predicted;
+            }
+        }
+
         if let Some(override_budget) = self.memory_budget_override {
             self.emit_event(
                 None,
@@ -231,7 +262,7 @@ impl ReactLoop {
                     task.completed_at = Some(Utc::now());
                     task.outcome_score = Some(1.0);
 
-                    self.write_episodic(task, true).await;
+                    self.write_episodic(task, true, predicted_success).await;
                     let transcript_path =
                         self.record_transcript(task, "succeeded", "task completed successfully");
                     let _ = task_runs.finished(task, None, transcript_path.as_deref());
@@ -272,6 +303,9 @@ impl ReactLoop {
                     if let Ok(mut fed) = self.fed_samples.lock() {
                         fed.push((predicted_success, 1.0));
                     }
+
+                    // Seeds 2 + 4: record causal trace and computational vitals
+                    self.record_body_and_causal(task, &category, num_ctx, true, 1.0);
 
                     return Ok(TaskOutcome {
                         task_id: task.id,
@@ -356,7 +390,7 @@ impl ReactLoop {
         task.completed_at = Some(Utc::now());
         task.outcome_score = Some(0.0);
 
-        self.write_episodic(task, false).await;
+        self.write_episodic(task, false, predicted_success).await;
         let transcript_path = self.record_transcript(task, "failed", &failure_mode);
         let _ = task_runs.finished(task, Some(&failure_mode), transcript_path.as_deref());
         self.emit_event(
@@ -378,6 +412,9 @@ impl ReactLoop {
             lc.update(&category, &arm, 0.0);
         }
 
+        // Seeds 2 + 4: record causal trace and computational vitals
+        self.record_body_and_causal(task, &category, num_ctx, false, 0.0);
+
         Ok(TaskOutcome {
             task_id: task.id,
             description: task.description.clone(),
@@ -387,6 +424,83 @@ impl ReactLoop {
             steps_taken: task.steps.len() as u32,
             timestamp: Utc::now(),
         })
+    }
+
+    /// Seeds 2 (STDP) + 4 (interoception): at task end, derive a causal trace
+    /// from the executed steps (with timing relative to completion) and the
+    /// actual computational vitals, then record both. The interoceptive error
+    /// (predicted vs actual body state) is computed against the prediction made
+    /// at task start.
+    fn record_body_and_causal(
+        &self,
+        task: &TaskNode,
+        category: &crate::evolved::lcap::TaskCategory,
+        num_ctx: u32,
+        outcome: bool,
+        score: f32,
+    ) {
+        let category_name = format!("{category:?}");
+        let completed = task.completed_at.unwrap_or_else(Utc::now);
+
+        // ── Seed 2: build timed action sequence (STDP) ───────────────────
+        let actions: Vec<TimedAction> = task
+            .steps
+            .iter()
+            .map(|s| {
+                let ms_before = (completed - s.timestamp).num_milliseconds().max(0);
+                TimedAction {
+                    tool: s.action.tool_name.clone(),
+                    ms_before_outcome: ms_before,
+                    succeeded: s.observation.success,
+                }
+            })
+            .collect();
+
+        if !actions.is_empty() {
+            let trace = CausalTrace::new(
+                self.session_id.clone(),
+                task.id.to_string(),
+                category_name,
+                actions,
+                outcome,
+                score,
+            );
+            if let Err(e) = self.memory.causal_traces.insert(&trace) {
+                warn!("react: failed to record causal trace: {e}");
+            }
+        }
+
+        // ── Seed 4: actual computational vitals (interoception) ──────────
+        let total_ms: i64 = task
+            .steps
+            .iter()
+            .map(|s| s.observation.execution_ms as i64)
+            .sum();
+        let mean_latency = if task.steps.is_empty() {
+            0.0
+        } else {
+            total_ms as f32 / task.steps.len() as f32
+        };
+        let actual = ComputationalVitals {
+            inference_latency_ms: mean_latency,
+            token_budget_used: (num_ctx as f32 / 32768.0).min(1.0),
+            memory_pressure: (task.steps.len() as f32 / 20.0).min(1.0),
+            evolution_health: 0.5,
+        };
+        let (predicted_latency, intero_err) = if let Ok(bp) = self.body_prediction.lock() {
+            (bp.inference_latency_ms, actual.interoceptive_error(&bp))
+        } else {
+            (0.0, 0.0)
+        };
+        if let Err(e) = self.memory.computational_body.record(
+            &self.session_id,
+            self.current_round,
+            &actual,
+            Some(predicted_latency),
+            Some(intero_err),
+        ) {
+            warn!("react: failed to record computational vitals: {e}");
+        }
     }
 
     /// Run one attempt. Returns Ok(true) on success, Ok(false) on failure.
@@ -777,6 +891,12 @@ impl ReactLoop {
             }
         }
 
+        // Seed 4 (interoception): inject the predicted computational body state.
+        // Under stress the model is told to conserve (System 1); when fresh, explore.
+        if let Ok(body) = self.body_prediction.lock() {
+            parts.push(body.to_prompt_fragment());
+        }
+
         // ICE: similar past tasks
         if !ice_examples.is_empty() {
             let examples = ice_examples
@@ -945,8 +1065,17 @@ impl ReactLoop {
         )
     }
 
-    async fn write_episodic(&self, task: &TaskNode, success: bool) {
-        let importance = if success { 0.8 } else { 0.4 };
+    async fn write_episodic(&self, task: &TaskNode, success: bool, predicted_success: f32) {
+        // Seed 1 (oscillatory / predictive coding): encoding depth scales with
+        // SURPRISE, not a flat success/failure value. The brain encodes
+        // prediction errors deeply and predictable events shallowly (this is
+        // why surprising moments are vivid memories). Surprise = |actual -
+        // predicted|. A failure you expected is unremarkable; a failure you
+        // were confident wouldn't happen is highly salient.
+        let actual = if success { 1.0 } else { 0.0 };
+        let surprise = (actual - predicted_success).abs(); // 0..1
+        let base = if success { 0.6 } else { 0.3 };
+        let importance = (base + 0.4 * surprise).clamp(0.0, 1.0);
         let summary = format!(
             "Task: {} | {} in {} steps | attempts: {}",
             task.description,
@@ -1164,6 +1293,11 @@ Complete tasks precisely and efficiently using the available tools.\n\n\
 ## Affect context\n\
 If a <affect> tag appears in context, use it: negative valence signals accumulated failures — \
 be more conservative and diagnostic; positive valence signals momentum — continue the current approach.\n\n\
+## Body context (interoception)\n\
+If a <body> tag appears, it is your computational state. mode=\"conserve\" means you are under \
+load — prefer fewer, higher-confidence steps and known skills over exploration. mode=\"explore\" \
+means you have headroom — you may take more deliberate, multi-step approaches. mode=\"balanced\" \
+is normal operation. Treat your body state as real information about how to think right now.\n\n\
 ## Format — strict, the parser depends on exact compliance\n\
 Thought: <1-3 sentences of reasoning>\n\
 Action: <exact_tool_name>\n\
