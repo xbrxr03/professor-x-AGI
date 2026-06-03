@@ -724,38 +724,74 @@ fn clean_patch_header_path(raw: &str) -> Option<String> {
 }
 
 async fn web_search(query: &str, n: usize) -> Result<String> {
-    let url = format!("https://html.duckduckgo.com/html/?q={}", url_encode(query));
-    let client = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 (compatible; ProfessorX/0.1)")
-        .timeout(std::time::Duration::from_secs(15))
-        .build()?;
-    let body = client.get(&url).send().await?.text().await?;
-    let mut results = Vec::new();
-    for chunk in body.split("result__body") {
-        if results.len() >= n {
-            break;
+    // Try the lite endpoint first (simpler HTML, more scrape-friendly), then
+    // the html endpoint. Short 8s timeout so a stall doesn't block the agent.
+    // CRUCIAL: on total failure we return a usable MESSAGE (Ok), not an error —
+    // a hard error makes the agent retry-loop; a clear "search unavailable,
+    // proceed without it" observation makes it adapt and move on.
+    let endpoints = [
+        format!("https://lite.duckduckgo.com/lite/?q={}", url_encode(query)),
+        format!("https://html.duckduckgo.com/html/?q={}", url_encode(query)),
+    ];
+    for url in &endpoints {
+        match try_web_search(url, n).await {
+            Ok(Some(text)) => return Ok(text),
+            Ok(None) => continue,        // reachable but empty → try fallback
+            Err(_) => break,             // network/timeout → no point retrying same network
         }
-        let text = strip_html(chunk);
-        let t = text.trim();
-        if t.len() > 30 {
-            results.push(t.chars().take(300).collect::<String>());
+    }
+    Ok(format!(
+        "web search is currently unavailable or returned no results for '{query}'. \
+         Do NOT repeat this search. Proceed using your existing knowledge, or take \
+         a different action toward the task."
+    ))
+}
+
+/// Single search attempt against one endpoint. Returns Ok(Some(results)) on
+/// hits, Ok(None) when reachable but empty, Err on network/timeout.
+async fn try_web_search(url: &str, n: usize) -> Result<Option<String>> {
+    let client = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (X11; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0")
+        .timeout(std::time::Duration::from_secs(8))
+        .build()?;
+    let body = client.get(url).send().await?.text().await?;
+    let mut results = Vec::new();
+    // Both DDG variants delimit results with one of these markers.
+    for marker in ["result__body", "result-snippet", "result-link"] {
+        if !body.contains(marker) {
+            continue;
+        }
+        for chunk in body.split(marker).skip(1) {
+            if results.len() >= n {
+                break;
+            }
+            let text = strip_html(chunk);
+            let t = text.trim();
+            if t.len() > 30 {
+                results.push(t.chars().take(300).collect::<String>());
+            }
+        }
+        if !results.is_empty() {
+            break;
         }
     }
     if results.is_empty() {
-        return Ok(format!("no results for '{query}'"));
+        return Ok(None);
     }
-    Ok(results
-        .iter()
-        .enumerate()
-        .map(|(i, r)| format!("{}. {r}", i + 1))
-        .collect::<Vec<_>>()
-        .join("\n\n"))
+    Ok(Some(
+        results
+            .iter()
+            .enumerate()
+            .map(|(i, r)| format!("{}. {r}", i + 1))
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+    ))
 }
 
 async fn web_fetch(url: &str) -> Result<String> {
     let client = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 (compatible; ProfessorX/0.1)")
-        .timeout(std::time::Duration::from_secs(30))
+        .user_agent("Mozilla/5.0 (X11; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0")
+        .timeout(std::time::Duration::from_secs(12))
         .build()?;
     let resp = client.get(url).send().await?;
     if !resp.status().is_success() {
