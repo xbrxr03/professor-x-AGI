@@ -1,3 +1,4 @@
+pub mod binding;
 pub mod graph;
 pub mod queue;
 pub mod react;

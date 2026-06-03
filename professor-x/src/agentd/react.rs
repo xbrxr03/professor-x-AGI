@@ -194,6 +194,14 @@ impl ReactLoop {
         // Cognition context: relevant items from cognition base
         let cognition_context = self.retrieve_cognition(&task.description);
 
+        // Binding: keep only context that resonates ACROSS modalities. A memory
+        // echoed in both episodic and cognition is grounded; one standing alone
+        // is suppressed. Reduces confabulation, raises integration. Best-effort —
+        // a no-op when embeddings are unavailable.
+        let (ice_examples, cognition_context) = self
+            .apply_binding(ice_examples, cognition_context)
+            .await;
+
         // LCAP: select context budget (Balanced before round 10, UCB1 after)
         let category = LcapPolicy::classify(&task.description);
         let lcap_ceiling = {
@@ -346,7 +354,10 @@ impl ReactLoop {
                     }
 
                     // Seeds 2 + 4: record causal trace and computational vitals
-                    self.record_body_and_causal(task, &category, num_ctx, true, 1.0);
+                    self.record_body_and_causal(
+                        task, &category, num_ctx, true, 1.0,
+                        !ice_examples.is_empty(), !cognition_context.is_empty(),
+                    );
 
                     return Ok(TaskOutcome {
                         task_id: task.id,
@@ -454,7 +465,10 @@ impl ReactLoop {
         }
 
         // Seeds 2 + 4: record causal trace and computational vitals
-        self.record_body_and_causal(task, &category, num_ctx, false, 0.0);
+        self.record_body_and_causal(
+            task, &category, num_ctx, false, 0.0,
+            !ice_examples.is_empty(), !cognition_context.is_empty(),
+        );
 
         Ok(TaskOutcome {
             task_id: task.id,
@@ -479,6 +493,8 @@ impl ReactLoop {
         num_ctx: u32,
         outcome: bool,
         score: f32,
+        ice_hit: bool,
+        cognition_hit: bool,
     ) {
         let category_name = format!("{category:?}");
         let completed = task.completed_at.unwrap_or_else(Utc::now);
@@ -562,6 +578,54 @@ impl ReactLoop {
                 ) {
                     warn!("react: failed to record self-prediction: {e}");
                 }
+            }
+        }
+
+        // ── IIT: record which cognitive modules activated this decision ──
+        // The 7-module co-activation vector feeds the per-round phi (total
+        // correlation) computed at round end.
+        {
+            use crate::memd::phi::ModuleActivation;
+            let used_memory_tool = task
+                .steps
+                .iter()
+                .any(|s| s.action.tool_name.starts_with("memory."));
+            let affect_active = self
+                .affect
+                .lock()
+                .map(|a| a.valence.abs() > 0.05 || a.arousal > 0.05)
+                .unwrap_or(false);
+            let body_active = self
+                .body_prediction
+                .lock()
+                .map(|b| b.stress() > 0.35)
+                .unwrap_or(false);
+            let causal_active = self
+                .memory
+                .causal_traces
+                .extract_patterns(Some(&category_name), 3, 0.6, 10_000)
+                .map(|p| !p.is_empty())
+                .unwrap_or(false);
+            let self_model_active = self
+                .memory
+                .self_model
+                .latest()
+                .ok()
+                .flatten()
+                .map(|s| s.round > 0)
+                .unwrap_or(false);
+
+            let activation = ModuleActivation {
+                episodic: ice_hit,
+                semantic: used_memory_tool,
+                cognition: cognition_hit,
+                affect: affect_active,
+                body: body_active,
+                causal: causal_active,
+                self_model: self_model_active,
+            };
+            if let Err(e) = self.memory.phi.record_activation(self.current_round, &activation) {
+                warn!("react: failed to record phi activation: {e}");
             }
         }
     }
@@ -1009,6 +1073,65 @@ impl ReactLoop {
         parts.push(REACT_SUFFIX.to_string());
 
         parts.join("\n\n")
+    }
+
+    /// Cross-modal binding: embed ICE (episodic) and cognition candidates,
+    /// keep only those that resonate across the two modalities. Best-effort —
+    /// if embeddings are unavailable, returns the inputs unchanged.
+    async fn apply_binding(
+        &self,
+        ice: Vec<String>,
+        cognition: Vec<String>,
+    ) -> (Vec<String>, Vec<String>) {
+        use crate::agentd::binding::{bind, ModalityFeature};
+        if ice.len() + cognition.len() < 2 {
+            return (ice, cognition);
+        }
+
+        let mut features: Vec<ModalityFeature> = Vec::new();
+        for content in &ice {
+            match self.ollama.embed(content).await {
+                Ok(emb) => features.push(ModalityFeature {
+                    modality: "episodic".to_string(),
+                    content: content.clone(),
+                    embedding: emb,
+                    base_relevance: 0.6,
+                }),
+                Err(_) => return (ice, cognition), // embeddings down → no-op
+            }
+        }
+        for content in &cognition {
+            match self.ollama.embed(content).await {
+                Ok(emb) => features.push(ModalityFeature {
+                    modality: "cognition".to_string(),
+                    content: content.clone(),
+                    embedding: emb,
+                    base_relevance: 0.6,
+                }),
+                Err(_) => return (ice, cognition),
+            }
+        }
+
+        let bound = bind(&features, 0.45);
+        let kept_ice: Vec<String> = bound
+            .iter()
+            .filter(|b| b.kept && b.modality == "episodic")
+            .map(|b| b.content.clone())
+            .collect();
+        let kept_cog: Vec<String> = bound
+            .iter()
+            .filter(|b| b.kept && b.modality == "cognition")
+            .map(|b| b.content.clone())
+            .collect();
+
+        let dropped = (ice.len() + cognition.len()) - (kept_ice.len() + kept_cog.len());
+        if dropped > 0 {
+            debug!("react: binding suppressed {dropped} incoherent context element(s)");
+        }
+        // Never strip a modality to empty if it had content — fall back per side.
+        let final_ice = if kept_ice.is_empty() { ice } else { kept_ice };
+        let final_cog = if kept_cog.is_empty() { cognition } else { kept_cog };
+        (final_ice, final_cog)
     }
 
     async fn retrieve_ice(&self, task_desc: &str) -> Vec<String> {

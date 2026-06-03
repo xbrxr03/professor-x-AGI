@@ -3,6 +3,7 @@ pub mod autonomy_queue;
 pub mod causal_traces;
 pub mod computational_body;
 pub mod narrative;
+pub mod phi;
 pub mod self_authored_tests;
 pub mod self_prediction;
 pub mod coding_sessions;
@@ -31,6 +32,7 @@ use crate::embeddings::EmbeddingStore;
 use crate::memd::causal_traces::CausalTraceStore;
 use crate::memd::computational_body::ComputationalBodyStore;
 use crate::memd::narrative::NarrativeStore;
+use crate::memd::phi::PhiStore;
 use crate::memd::self_authored_tests::SelfAuthoredTestStore;
 use crate::memd::self_prediction::SelfPredictionStore;
 use crate::memd::affect::AffectStore;
@@ -519,6 +521,28 @@ CREATE TABLE IF NOT EXISTS self_predictions (
     recorded_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_self_pred_session ON self_predictions(session_id);
+
+-- phi_activations (IIT): which cognitive modules activated per decision.
+-- One row per task; activation_index packs the 7 module bits.
+CREATE TABLE IF NOT EXISTS phi_activations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    round INTEGER NOT NULL,
+    activation_index INTEGER NOT NULL,
+    active_count INTEGER NOT NULL,
+    recorded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_phi_activations_round ON phi_activations(round);
+
+-- phi_rounds (IIT): integrated information (total correlation) per round.
+-- The trajectory tests whether the system grows more unified as it evolves.
+CREATE TABLE IF NOT EXISTS phi_rounds (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    round INTEGER NOT NULL UNIQUE,
+    phi REAL NOT NULL,
+    n_decisions INTEGER NOT NULL,
+    mean_active_modules REAL NOT NULL,
+    recorded_at TEXT NOT NULL
+);
 "#;
 
 pub struct MemoryManager {
@@ -545,6 +569,9 @@ pub struct MemoryManager {
     pub narrative: NarrativeStore,
     /// Seed 7 (predictive self-model): the agent's predictions about itself.
     pub self_prediction: SelfPredictionStore,
+    /// IIT: integrated information (phi) — module co-activation per decision,
+    /// total correlation per round. Tests whether the system grows more unified.
+    pub phi: PhiStore,
 }
 
 impl MemoryManager {
@@ -632,6 +659,7 @@ impl MemoryManager {
             computational_body: ComputationalBodyStore::new(Arc::clone(&db)),
             narrative: NarrativeStore::new(Arc::clone(&db)),
             self_prediction: SelfPredictionStore::new(Arc::clone(&db)),
+            phi: PhiStore::new(Arc::clone(&db)),
             db,
         })
     }

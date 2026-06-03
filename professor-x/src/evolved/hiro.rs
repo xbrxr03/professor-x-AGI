@@ -414,6 +414,18 @@ impl HiroRunner {
             }
         }
 
+        // IIT: compute integrated information (phi) from this round's module
+        // co-activations. The trajectory tests whether the system grows more
+        // unified as the harness evolves.
+        match self.memory.phi.compute_and_record_round(round) {
+            Ok(Some(rec)) => info!(
+                "hiro: round {} phi={:.3} (n={}, mean_active_modules={:.2})",
+                round, rec.phi, rec.n_decisions, rec.mean_active_modules
+            ),
+            Ok(None) => {}
+            Err(e) => warn!("hiro: failed to compute phi for round {}: {e}", round),
+        }
+
         // H13 verification hook: any metacognitive entries logged at
         // (round - 1) become eligible for credit now that we know the
         // per-category fingerprint at `round`. The lever-specific verifier
