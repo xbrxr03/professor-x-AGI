@@ -18,6 +18,7 @@ use tracing::{info, warn};
 
 use crate::evolved::analyzer::Analyzer;
 use crate::evolved::cognition_base::CognitionStore;
+use crate::memd::self_authored_tests::SelfAuthoredTest;
 use crate::memd::metacognitive::{MetacognitiveEntry, MetacognitiveStore};
 use crate::evolved::proposer::{
     ChangeManifest, EvolutionNode, HarnessComponent, NodeDatabase, VerificationStatus,
@@ -769,6 +770,43 @@ impl EvolvedLoop {
             return Ok(false);
         }
 
+        // ── Self-authored test: store alongside accepted proposals ───────────
+        // The Researcher included TEST_* fields in its output. Parse and persist
+        // so the agent-authored benchmark grows with every accepted evolution.
+        if node.status == crate::evolved::proposer::NodeStatus::Accepted {
+            let current_round = tracker.len() as u32;
+            let (layer, _lever) = parse_dhe_from_patterns(&failure_patterns);
+            let primary_pattern = failure_patterns.first().map(|s| s.as_str()).unwrap_or("unknown");
+            // We re-derive the test from the node's diff text (contains the full Researcher output)
+            if let Some(test) = Self::parse_self_authored_test(
+                &node.diff,
+                current_round,
+                layer,
+                primary_pattern,
+            ) {
+                match self.memory.self_authored_tests.insert(&test) {
+                    Ok(id) => {
+                        info!(
+                            "evolved: self-authored test #{id} written (round={current_round}, layer={layer}): {}",
+                            test.description.chars().take(80).collect::<String>()
+                        );
+                        self.emit_event(
+                            "evolution.test_authored",
+                            format!("self-authored test #{id} for layer {layer} failure"),
+                            serde_json::json!({
+                                "test_id": id,
+                                "origin_round": current_round,
+                                "origin_layer": layer,
+                                "description": test.description,
+                                "category": test.category,
+                            }),
+                        );
+                    }
+                    Err(e) => warn!("evolved: failed to store self-authored test: {e}"),
+                }
+            }
+        }
+
         match node.status {
             crate::evolved::proposer::NodeStatus::Accepted => {
                 let verification_artifact = self.write_node_artifact(&node, "verification")?;
@@ -1063,7 +1101,12 @@ impl EvolvedLoop {
              <complete replacement file content for SystemPrompt, HarnessConfig, or SkillDefinition. \
              For SkillDefinition, write a complete markdown skill with '# <name>', Purpose, Workflow, and Output Contract.>\n\
              PREDICTS_FIX: <what task type should improve>\n\
-             PREDICTS_REGRESSION: <what might get worse, or 'none'>",
+             PREDICTS_REGRESSION: <what might get worse, or 'none'>\n\n\
+             Also propose a NEW TEST that would catch the failure class you just diagnosed.\n\
+             A test is a concrete task description an agent could attempt, plus a clear pass criterion.\n\
+             TEST_DESCRIPTION: <a specific task the agent should complete to demonstrate the fix worked>\n\
+             TEST_EVALUATOR: <how to tell if the agent passed: what output or state counts as success>\n\
+             TEST_CATEGORY: <tool_use|planning|self_correction>",
             failure_patterns.join(", "),
         );
 
@@ -1115,6 +1158,30 @@ impl EvolvedLoop {
         Ok(Some(EvolutionNode::new(
             motivation, component, fix, manifest,
         )))
+    }
+
+    /// Parse self-authored test fields from Researcher output.
+    fn parse_self_authored_test(
+        text: &str,
+        origin_round: u32,
+        origin_layer: u8,
+        failure_pattern: &str,
+    ) -> Option<SelfAuthoredTest> {
+        let description = extract_field(text, "TEST_DESCRIPTION")?;
+        let evaluator = extract_field(text, "TEST_EVALUATOR")?;
+        if description.trim().is_empty() || evaluator.trim().is_empty() {
+            return None;
+        }
+        let category = extract_field(text, "TEST_CATEGORY")
+            .unwrap_or_else(|| "other".to_string());
+        Some(SelfAuthoredTest::new(
+            origin_round,
+            origin_layer,
+            failure_pattern,
+            description,
+            evaluator,
+            category,
+        ))
     }
 
     async fn verify_then_apply(

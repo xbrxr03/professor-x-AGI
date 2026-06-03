@@ -1177,21 +1177,22 @@ Action: fail\n\
 Action Input: {\"reason\": \"<what was tried and why it did not work>\"}";
 
 const TOOLS_DESCRIPTION: &str = "Available tools:
-- fs.read       {\"path\": \"<path>\"} — read file contents
-- fs.list       {\"path\": \"<path>\"} — list directory
-- fs.write      {\"path\": \"<path>\", \"content\": \"<text>\"} — write file
-- fs.replace    {\"path\": \"<path>\", \"old\": \"<exact text>\", \"new\": \"<replacement>\", \"mode\": \"check|apply\"} — replace exactly one matching text span
-- fs.delete     {\"path\": \"<path>\"} — delete file (risk: high, may require approval)
-- web.search    {\"query\": \"<q>\", \"num_results\": 5} — search the web
-- web.fetch     {\"url\": \"<url>\"} — fetch a URL
+- fs.read          {\"path\": \"<path>\"} — read file contents
+- fs.list          {\"path\": \"<path>\"} — list directory
+- fs.write         {\"path\": \"<path>\", \"content\": \"<text>\"} — write file
+- fs.replace       {\"path\": \"<path>\", \"old\": \"<exact text>\", \"new\": \"<replacement>\", \"mode\": \"check|apply\"} — replace exactly one matching text span
+- fs.delete        {\"path\": \"<path>\"} — delete file (risk: high, may require approval)
+- web.search       {\"query\": \"<q>\", \"num_results\": 5} — search the web
+- web.fetch        {\"url\": \"<url>\"} — fetch a URL
+- vision.analyze   {\"path\": \"<image_path>\", \"prompt\": \"<question>\"} — describe or reason about an image; also accepts {\"url\": \"<image_url>\"}
 - shell.restricted {\"command\": \"<cmd>\"} — run a shell command (sandboxed)
-- patch.apply  {\"mode\": \"check|apply\", \"patch\": \"<unified diff>\"} — check or apply a reviewable git-style patch
-- memory.read   {\"query\": \"<q>\", \"layer\": \"episodic|semantic|procedural\"} — search memory
-- memory.write  {\"content\": \"<text>\", \"layer\": \"semantic\", \"source\": \"<src>\"} — store knowledge
-- git.commit    {\"message\": \"<msg>\"} — commit current changes
-- ollama.complete {\"prompt\": \"<p>\"} — run a sub-query through the LLM
-- finish        {} — signal task complete
-- fail          {\"reason\": \"<why>\"} — signal task failed (all options exhausted)";
+- patch.apply      {\"mode\": \"check|apply\", \"patch\": \"<unified diff>\"} — check or apply a reviewable git-style patch
+- memory.read      {\"query\": \"<q>\", \"layer\": \"episodic|semantic|procedural\"} — search memory
+- memory.write     {\"content\": \"<text>\", \"layer\": \"semantic\", \"source\": \"<src>\"} — store knowledge
+- git.commit       {\"message\": \"<msg>\"} — commit current changes
+- ollama.complete  {\"prompt\": \"<p>\"} — run a sub-query through the LLM
+- finish           {} — signal task complete
+- fail             {\"reason\": \"<why>\"} — signal task failed (all options exhausted)";
 
 const REACT_SUFFIX: &str = "Now complete the task. Follow the ReAct format.\n\nThought:";
 

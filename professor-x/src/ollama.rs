@@ -34,6 +34,9 @@ pub struct GenerateRequest {
     pub options: Option<ModelOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<Vec<i64>>,
+    /// Base64-encoded images for multimodal models (e.g. llama4:scout).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub images: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -274,6 +277,7 @@ impl OllamaClient {
             system: system.map(str::to_string),
             options,
             context: None,
+            images: None,
         };
 
         self.generate_with_retry(&req).await
@@ -350,6 +354,41 @@ impl OllamaClient {
         Ok(embed_resp.embeddings)
     }
 
+    /// Multimodal generate — describe or reason about one or more images.
+    /// Images are read from disk and base64-encoded before sending.
+    /// Uses the primary model (llama4:scout natively supports vision).
+    /// Requires: `ollama pull llama4:scout`
+    pub async fn vision_generate(
+        &self,
+        prompt: &str,
+        image_paths: &[&str],
+        system: Option<&str>,
+    ) -> Result<GenerateResponse> {
+        let mut images = Vec::new();
+        for path in image_paths {
+            let bytes = std::fs::read(path)
+                .map_err(|e| anyhow::anyhow!("vision: could not read image {path}: {e}"))?;
+            images.push(base64_encode(&bytes));
+        }
+
+        let req = GenerateRequest {
+            model: self.model.clone(),
+            prompt: prompt.to_string(),
+            stream: false,
+            system: system.map(str::to_string),
+            options: Some(ModelOptions {
+                temperature: Some(0.3),
+                num_ctx: Some(16384),
+                top_p: Some(0.9),
+                stop: None,
+                think: Some(false),
+            }),
+            context: None,
+            images: Some(images),
+        };
+        self.generate_with_retry(&req).await
+    }
+
     async fn generate_with_retry(&self, req: &GenerateRequest) -> Result<GenerateResponse> {
         let url = format!("{}/api/generate", self.base_url);
         let mut delay_ms = RETRY_BASE_MS;
@@ -379,6 +418,10 @@ impl OllamaClient {
             delay_ms = (delay_ms * 2).min(16_000);
         }
         unreachable!()
+    }
+
+    fn model_name(&self) -> &str {
+        &self.model
     }
 
     async fn chat_with_retry(&self, req: &ChatRequest) -> Result<ChatResponse> {
@@ -411,4 +454,27 @@ impl OllamaClient {
         }
         unreachable!()
     }
+}
+
+fn base64_encode(data: &[u8]) -> String {
+    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as usize;
+        let b1 = if chunk.len() > 1 { chunk[1] as usize } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as usize } else { 0 };
+        out.push(TABLE[(b0 >> 2)] as char);
+        out.push(TABLE[((b0 & 3) << 4) | (b1 >> 4)] as char);
+        if chunk.len() > 1 {
+            out.push(TABLE[((b1 & 15) << 2) | (b2 >> 6)] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(TABLE[b2 & 63] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
 }

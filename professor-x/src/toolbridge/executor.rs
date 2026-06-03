@@ -387,6 +387,44 @@ impl ToolExecutor {
                 };
                 Ok(ToolDispatch::output(out))
             }
+            "vision.analyze" => {
+                // Multimodal perception — describe or reason about an image file.
+                // Routes to the primary model (llama4:scout supports vision natively).
+                // Usage: {"path": "/path/to/image.png", "prompt": "what do you see?"}
+                // Also accepts {"url": "https://..."} for web images (fetched first).
+                let prompt = action.params["prompt"]
+                    .as_str()
+                    .unwrap_or("Describe this image in detail.");
+                let ollama = self
+                    .ollama
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("vision.analyze requires ollama client"))?;
+
+                let result = if let Some(path) = action.params["path"].as_str() {
+                    // Local file
+                    let resp = ollama
+                        .vision_generate(prompt, &[path], None)
+                        .await?;
+                    let (_, answer) = resp.split_thinking();
+                    answer
+                } else if let Some(url) = action.params["url"].as_str() {
+                    // Fetch remote image, write to temp file, then analyze
+                    let bytes = reqwest::get(url).await?.bytes().await?;
+                    let tmp = std::env::temp_dir()
+                        .join(format!("px-vision-{}.bin", uuid::Uuid::new_v4()));
+                    std::fs::write(&tmp, &bytes)?;
+                    let resp = ollama
+                        .vision_generate(prompt, &[tmp.to_str().unwrap_or("")], None)
+                        .await?;
+                    let _ = std::fs::remove_file(&tmp);
+                    let (_, answer) = resp.split_thinking();
+                    answer
+                } else {
+                    anyhow::bail!("vision.analyze requires 'path' or 'url' param");
+                };
+
+                Ok(ToolDispatch::output(result))
+            }
             "memory.read" => {
                 let mem = self
                     .memory
@@ -810,6 +848,7 @@ fn is_known_builtin_tool(tool_name: &str) -> bool {
             | "fs.list"
             | "fs.write"
             | "shell.restricted"
+            | "vision.analyze"
             | "memory.read"
             | "memory.write"
             | "web.fetch"

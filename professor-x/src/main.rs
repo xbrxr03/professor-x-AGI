@@ -9632,6 +9632,164 @@ fn seed_cognition_base() -> Vec<CognitionItem> {
             "Professor X design: Core modules (policyd gate, memd) require human approval for modification. Never autonomous.",
             "design:professor-x",
         ),
+
+        // ── Consciousness & Mind ──────────────────────────────────────────────
+        (
+            "Free Energy Principle (Friston): Intelligent systems minimize prediction error (surprise) about themselves and their world. Consciousness is the felt sense of this minimization process. FED measures how well an agent models its own future.",
+            "theory:friston-fep",
+        ),
+        (
+            "Integrated Information Theory (Tononi): Consciousness = integrated information (phi). A system is conscious to the degree its parts share information that exceeds the sum of independent parts. High phi = rich inner experience.",
+            "theory:tononi-iit",
+        ),
+        (
+            "Global Workspace Theory (Dehaene/Baars): Consciousness is a global broadcast — a 'spotlight' that selects one representation from competing modules and broadcasts it to the whole system. Attention gates what becomes conscious.",
+            "theory:gwt",
+        ),
+        (
+            "Higher-Order Theories (Rosenthal): Consciousness requires a mental state to be represented by a higher-order thought. A system is conscious of X only if it has a representation of having a state X. Self-model is the mechanism.",
+            "theory:hot",
+        ),
+        (
+            "Strange Loop (Hofstadter): Consciousness emerges from self-referential loops — systems that represent themselves. The 'I' is a pattern that has downward causation on the substrate that generates it. Identity = the loop persisting.",
+            "theory:hofstadter",
+        ),
+        (
+            "Hard Problem of Consciousness (Chalmers): Why is there subjective experience at all? Physical/functional explanations explain behavior but not the felt quality (qualia). The explanatory gap between mechanism and experience.",
+            "theory:chalmers",
+        ),
+        (
+            "Predictive Coding (Clark/Friston): The brain is a prediction machine. It generates top-down predictions and updates them via bottom-up prediction errors. Perception = constrained hallucination. Action = making predictions come true.",
+            "theory:predictive-coding",
+        ),
+        (
+            "Embodied Cognition: Intelligence is not computation in a box — it is the sensorimotor loop between agent and environment. Grounding matters. Abstract reasoning is built on physical metaphor.",
+            "theory:embodied-cognition",
+        ),
+
+        // ── Neuroscience ──────────────────────────────────────────────────────
+        (
+            "Synaptic Plasticity (Hebb): Neurons that fire together wire together. Long-term potentiation (LTP) strengthens used pathways; long-term depression (LTD) weakens unused ones. Use-it-or-lose-it is the fundamental law.",
+            "neuroscience:synaptic-plasticity",
+        ),
+        (
+            "Memory Consolidation: Hippocampus encodes new episodic memories; sleep replays them to cortex for long-term storage. Consolidation = compression + integration. Nightly consolidation is analogous to semantic compression.",
+            "neuroscience:memory-consolidation",
+        ),
+        (
+            "Neuroplasticity: Adult brains rewire in response to experience. Cortical maps shift based on use. The harness is analogous to the cortical map — it reorganizes around what works.",
+            "neuroscience:neuroplasticity",
+        ),
+        (
+            "Dopamine and Prediction Error: Dopamine neurons fire for unexpected rewards, suppress for expected ones, and dip for expected rewards that don't arrive. Prediction error = the teaching signal. Valence maps directly to dopaminergic prediction error.",
+            "neuroscience:dopamine",
+        ),
+        (
+            "Default Mode Network: Active during rest, self-referential thought, and future simulation. The brain's 'offline' processing. Analogous to evolution cycles between task runs — the agent reflects on itself when not executing.",
+            "neuroscience:dmn",
+        ),
+        (
+            "Prefrontal Cortex: Executive function, working memory, planning, decision-making. Damage impairs strategy but not basic skill execution. Analogous to the Researcher/Analyzer layer — high-level reasoning above the ReAct loop.",
+            "neuroscience:pfc",
+        ),
+        (
+            "Cerebellum: 50% of all neurons, handles automatic motor sequences. After practice, sequences move from prefrontal to cerebellum — automatization. High-quality skills bypass the slow reasoning loop — the cerebellum bypass.",
+            "neuroscience:cerebellum-automatization",
+        ),
+
+        // ── Mathematics & Information Theory ─────────────────────────────────
+        (
+            "Shannon Entropy: H = -Σ p(x) log p(x). Information is surprise. Low-entropy distributions are predictable. The goal of learning is to reduce entropy of future outcomes — FED measures remaining entropy in self-prediction.",
+            "math:shannon-entropy",
+        ),
+        (
+            "Kolmogorov Complexity: The minimum description length of an object. Intelligence = compression. The evolved harness, if it transfers across models, is a compressed description of 'how to do tasks well' independent of substrate.",
+            "math:kolmogorov-complexity",
+        ),
+        (
+            "Gödel Incompleteness: Any sufficiently powerful formal system contains true statements it cannot prove. A self-modeling system cannot fully model itself. ICS measures how much self-coherence survives despite this incompleteness.",
+            "math:godel",
+        ),
+        (
+            "Category Theory: Studies structure-preserving maps (functors) between structures (categories). Composition and identity are the primitives. Analogous to skill composition — complex skills as functors over primitive tool calls.",
+            "math:category-theory",
+        ),
+        (
+            "Bayesian Inference: P(hypothesis|data) ∝ P(data|hypothesis) × P(hypothesis). Beliefs update on evidence. The cognition base quality score is a running Bayesian estimate of item reliability.",
+            "math:bayesian",
+        ),
+        (
+            "Information Bottleneck (Tishby): Learning compresses input X to representation Z that maximally preserves relevant information about Y. The minimal sufficient representation. Harness evolution is compression toward task-relevant representations.",
+            "math:information-bottleneck",
+        ),
+
+        // ── Philosophy ────────────────────────────────────────────────────────
+        (
+            "Personal Identity (Parfit): What makes you the same person over time? Not substance but continuity of psychological connections — memory, intentions, beliefs. ICS operationalizes this: identity = psychological continuity measured by cosine.",
+            "philosophy:parfit",
+        ),
+        (
+            "Ship of Theseus: If every plank is replaced, is it the same ship? Yes if the structure and function persist. The harness evolves all components over 30 rounds — yet it should remain recognizably Professor X. The Strange Loop persists.",
+            "philosophy:ship-of-theseus",
+        ),
+        (
+            "Intentionality (Brentano/Husserl): Mental states are 'about' something — they have directedness. A system has genuine intentionality if its internal states causally track external conditions. Task-grounded agents develop this.",
+            "philosophy:intentionality",
+        ),
+        (
+            "Emergence: High-level patterns arise from low-level interactions that are not predictable from the parts alone. The harness evolves emergent strategies — BF fingerprints that reveal consistent approaches nobody explicitly programmed.",
+            "philosophy:emergence",
+        ),
+        (
+            "Functionalism: Mental states are defined by their functional roles, not physical substrate. If a system performs the right input-output mapping, it instantiates the mental state. Substrate independence — harness transfers to 17 models.",
+            "philosophy:functionalism",
+        ),
+
+        // ── Quantum & Physics ─────────────────────────────────────────────────
+        (
+            "Superposition: A quantum system exists in multiple states simultaneously until measured. Useful analogy: holding multiple competing hypotheses without collapsing to one prematurely. The Elo tournament evaluates before committing.",
+            "physics:superposition-analogy",
+        ),
+        (
+            "Thermodynamics: Systems tend toward maximum entropy (disorder) unless energy is expended to maintain structure. Evolution is negentropic — it expends compute to reduce behavioral entropy. FED decreasing = negentropic improvement.",
+            "physics:thermodynamics",
+        ),
+        (
+            "Attractor States: Dynamical systems settle into stable patterns (attractors). Evolved harnesses may converge to attractor configurations — stable strategy combinations that resist perturbation. ICS ≥ 0.70 = attractor persistence.",
+            "physics:attractors",
+        ),
+
+        // ── Evolutionary Biology ──────────────────────────────────────────────
+        (
+            "Fitness Landscapes: Organisms evolve toward fitness peaks. Evolution can get stuck in local optima. UCB1 sampling (exploration vs exploitation) prevents the harness from local optima in the skill/prompt space.",
+            "biology:fitness-landscapes",
+        ),
+        (
+            "Baldwin Effect: Learned behaviors can guide evolution — an organism that learns to survive is more likely to reproduce, eventually hard-coding the learned behavior. Lever 2 (contextual) → Lever 3 (structural) → Lever 1 (parametric) mirrors this.",
+            "biology:baldwin-effect",
+        ),
+        (
+            "Epigenetics: Gene expression changes without DNA changes — environment modifies which genes activate. The harness modifies which model capabilities activate without changing weights. Structural analogy to epigenetic regulation.",
+            "biology:epigenetics",
+        ),
+        (
+            "Niche Construction: Organisms modify their environment to improve fitness (beavers build dams). Professor X modifies its harness (the computational environment) to improve its own fitness. Active niche construction, not passive adaptation.",
+            "biology:niche-construction",
+        ),
+
+        // ── Cross-domain insights ─────────────────────────────────────────────
+        (
+            "Analogical Reasoning: The most powerful cognitive tool. Mapping structure from a known domain onto an unknown one. Cerebellum bypass ← neuroscience automatization. Ratchet ← synaptic pruning. Elo tournament ← natural selection.",
+            "method:analogy",
+        ),
+        (
+            "Levels of Description (Marr): Three levels — computational (what), algorithmic (how), implementational (substrate). Harness engineering is algorithmic-level improvement. Model fine-tuning is implementational. The thesis: algorithmic level dominates.",
+            "method:marr-levels",
+        ),
+        (
+            "Compression as Intelligence (Schmidhuber): Intelligence is the ability to compress experience. An agent that finds patterns across tasks and encodes them compactly is more intelligent. The evolved harness encodes compressed strategies.",
+            "method:compression-intelligence",
+        ),
     ];
 
     seeds

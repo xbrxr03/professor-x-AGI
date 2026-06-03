@@ -1,5 +1,6 @@
 pub mod affect;
 pub mod autonomy_queue;
+pub mod self_authored_tests;
 pub mod coding_sessions;
 pub mod coding_smoke;
 pub mod events;
@@ -23,6 +24,7 @@ use std::sync::{Arc, Mutex};
 use tracing::info;
 
 use crate::embeddings::EmbeddingStore;
+use crate::memd::self_authored_tests::SelfAuthoredTestStore;
 use crate::memd::affect::AffectStore;
 use crate::memd::episodic::EpisodicStore;
 use crate::memd::free_energy::FreeEnergyStore;
@@ -419,6 +421,23 @@ CREATE TABLE IF NOT EXISTS fed_records (
 );
 CREATE INDEX IF NOT EXISTS idx_fed_round ON fed_records(round);
 
+-- self_authored_tests: tests written by the Researcher to catch its own failure classes.
+-- The agent-authored benchmark — nobody specified these tasks, the agent discovered them.
+CREATE TABLE IF NOT EXISTS self_authored_tests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    origin_round INTEGER NOT NULL,
+    origin_layer INTEGER NOT NULL,
+    failure_pattern TEXT NOT NULL,
+    description TEXT NOT NULL,
+    evaluator TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT 'other',
+    times_run INTEGER NOT NULL DEFAULT 0,
+    times_passed INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    last_run_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_self_authored_last_run ON self_authored_tests(last_run_at);
+
 -- embeddings: dense vector store for semantic retrieval.
 -- Keyed by (source_table, source_id). Brute-force cosine at query time.
 -- Populated by Ollama nomic-embed-text (768-dim). Falls back to FTS5 if empty.
@@ -446,6 +465,8 @@ pub struct MemoryManager {
     /// Dense vector store for semantic retrieval (nomic-embed-text, 768-dim).
     /// Populated lazily at task write-time; falls back to FTS5 when empty.
     pub embeddings: EmbeddingStore,
+    /// Agent-authored benchmark: tests the Researcher writes to catch its own failure classes.
+    pub self_authored_tests: SelfAuthoredTestStore,
 }
 
 impl MemoryManager {
@@ -528,6 +549,7 @@ impl MemoryManager {
             affect: AffectStore::new(Arc::clone(&db)),
             free_energy: FreeEnergyStore::new(Arc::clone(&db)),
             embeddings: EmbeddingStore::new(Arc::clone(&db)),
+            self_authored_tests: SelfAuthoredTestStore::new(Arc::clone(&db)),
             db,
         })
     }
