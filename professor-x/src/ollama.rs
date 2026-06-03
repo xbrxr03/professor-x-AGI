@@ -34,9 +34,14 @@ pub struct GenerateRequest {
     pub options: Option<ModelOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<Vec<i64>>,
-    /// Base64-encoded images for multimodal models (e.g. llama4:scout).
+    /// Base64-encoded images for multimodal models.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub images: Option<Vec<String>>,
+    /// Qwen3 thinking mode — TOP-LEVEL request field (NOT an option). Ollama
+    /// rejects `think` inside `options`. false = no <think> block (faster,
+    /// better ReAct format compliance).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub think: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -49,8 +54,11 @@ pub struct ModelOptions {
     pub top_p: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop: Option<Vec<String>>,
-    /// Qwen3 thinking mode — emits <think>...</think> before answer
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Qwen3 thinking-mode carrier. NEVER serialized into `options` — Ollama
+    /// rejects it there ("invalid option provided"). The request builders lift
+    /// this to the top-level `think` field of the request. Kept here so call
+    /// sites can express intent in one place (e.g. `for_react` disables it).
+    #[serde(skip_serializing)]
     pub think: Option<bool>,
 }
 
@@ -162,6 +170,9 @@ pub struct ChatRequest {
     pub stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<ModelOptions>,
+    /// Top-level thinking-mode field (see GenerateRequest::think).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub think: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -270,6 +281,7 @@ impl OllamaClient {
         system: Option<&str>,
         options: Option<ModelOptions>,
     ) -> Result<GenerateResponse> {
+        let think = options.as_ref().and_then(|o| o.think);
         let req = GenerateRequest {
             model: self.model.clone(),
             prompt: prompt.to_string(),
@@ -278,6 +290,7 @@ impl OllamaClient {
             options,
             context: None,
             images: None,
+            think,
         };
 
         self.generate_with_retry(&req).await
@@ -289,11 +302,13 @@ impl OllamaClient {
         messages: Vec<ChatMessage>,
         options: Option<ModelOptions>,
     ) -> Result<ChatResponse> {
+        let think = options.as_ref().and_then(|o| o.think);
         let req = ChatRequest {
             model: self.model.clone(),
             messages,
             stream: false,
             options,
+            think,
         };
         self.chat_with_retry(&req).await
     }
@@ -385,6 +400,7 @@ impl OllamaClient {
             }),
             context: None,
             images: Some(images),
+            think: Some(false),
         };
         self.generate_with_retry(&req).await
     }

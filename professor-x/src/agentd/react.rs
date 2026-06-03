@@ -245,12 +245,21 @@ impl ReactLoop {
             ];
             let pred_prompt =
                 self_prediction::build_prediction_prompt(&task.description, &tool_names);
+            // Fast, non-thinking — this is a structured 4-field prediction,
+            // not deliberation. Thinking here would add a full generation per task.
+            let pred_opts = ModelOptions {
+                temperature: Some(0.2),
+                num_ctx: Some(2048),
+                top_p: Some(0.9),
+                stop: None,
+                think: Some(false),
+            };
             let prediction = match self
                 .ollama
                 .generate(
                     &pred_prompt,
                     Some("You are predicting your own behaviour honestly. Output only the requested fields."),
-                    Some(ModelOptions::for_reflection()),
+                    Some(pred_opts),
                 )
                 .await
             {
