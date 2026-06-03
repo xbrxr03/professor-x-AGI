@@ -4,9 +4,13 @@ ram_gb = 32
 gpu = "rtx3060"
 
 [model]
-primary  = "llama4:scout"         # 17B active / 109B MoE, ~10GB VRAM, best available locally
-fallback = "qwen3:8b-q4_k_m"     # if llama4:scout OOMs; 5.2GB VRAM, 42 tok/s
-embed    = "nomic-embed-text"     # 768-dim, CPU-only; run: ollama pull nomic-embed-text
+# qwen3:8b is the primary — it fits the 3060's 12GB VRAM and IS what the
+# binary runs (DEFAULT_MODEL in ollama.rs). The thesis is small-model +
+# great-harness, so this is on-message, not a compromise. NOTE: llama4:scout
+# (109B MoE, ~55GB quantized) does NOT fit a 12GB GPU — do not use it here.
+primary  = "qwen3:8b-q4_k_m"     # 5.2GB VRAM, ~42 tok/s, 32K ctx, thinking mode
+upgrade  = "qwen3:14b-q4_k_m"    # ~8.5GB VRAM if more headroom is wanted
+embed    = "nomic-embed-text"     # 768-dim, CPU-only, ~274MB
 inference = "ollama"
 ollama_url = "http://localhost:11434"
 
