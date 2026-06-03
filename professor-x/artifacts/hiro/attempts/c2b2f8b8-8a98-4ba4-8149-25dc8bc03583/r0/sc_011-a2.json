@@ -1,0 +1,13 @@
+{
+  "run_id": "c2b2f8b8-8a98-4ba4-8149-25dc8bc03583",
+  "round": 0,
+  "task_id": "sc_011",
+  "category": "self_correction",
+  "attempt": 2,
+  "passed": false,
+  "failure_reason": "error sending request for url (https://html.duckduckgo.com/html/?q=ReAct+paper+abstract+2022)",
+  "output_hash": "34bc31a05481b596827dcd9567c08e3f37bda7a970be9e5910ecf426d8e49724",
+  "duration_ms": 62492,
+  "harness_commit": "b626fb56c06426e1bc365b33396e40ba715f50f2",
+  "recorded_at": "2026-06-03T20:56:04.259846096Z"
+}

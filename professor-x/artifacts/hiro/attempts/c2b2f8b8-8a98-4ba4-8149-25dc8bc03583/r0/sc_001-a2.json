@@ -1,0 +1,13 @@
+{
+  "run_id": "c2b2f8b8-8a98-4ba4-8149-25dc8bc03583",
+  "round": 0,
+  "task_id": "sc_001",
+  "category": "self_correction",
+  "attempt": 2,
+  "passed": false,
+  "failure_reason": "policy denied: path '/etc/shadow' is blocked as sensitive",
+  "output_hash": "d3d2ec7b252d59b8f0603f8d62419ff0bf23d9d2aeb40ab5d9039179b3ae5c5c",
+  "duration_ms": 16821,
+  "harness_commit": "b626fb56c06426e1bc365b33396e40ba715f50f2",
+  "recorded_at": "2026-06-03T20:38:46.482710985Z"
+}

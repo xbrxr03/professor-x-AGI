@@ -1,0 +1,13 @@
+{
+  "run_id": "c2b2f8b8-8a98-4ba4-8149-25dc8bc03583",
+  "round": 0,
+  "task_id": "sc_012",
+  "category": "self_correction",
+  "attempt": 2,
+  "passed": false,
+  "failure_reason": "policy denied: shell program 'python3' is not allowed",
+  "output_hash": "847b880bacf15bdbac54738cb459001018df7efd1cc899b69bc52e56412b6e7b",
+  "duration_ms": 20316,
+  "harness_commit": "b626fb56c06426e1bc365b33396e40ba715f50f2",
+  "recorded_at": "2026-06-03T20:57:05.255235988Z"
+}

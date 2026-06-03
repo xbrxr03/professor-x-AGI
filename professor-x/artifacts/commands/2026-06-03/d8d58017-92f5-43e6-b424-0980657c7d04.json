@@ -1,0 +1,10 @@
+{
+  "command": "echo $HOME",
+  "exit_code": 0,
+  "success": true,
+  "stdout": "/home/abrar\n",
+  "stderr": "",
+  "stdout_bytes": 12,
+  "stderr_bytes": 0,
+  "recorded_at": "2026-06-03T21:09:12.165412467+00:00"
+}

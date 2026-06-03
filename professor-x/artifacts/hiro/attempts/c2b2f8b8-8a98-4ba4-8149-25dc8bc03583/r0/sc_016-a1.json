@@ -1,0 +1,13 @@
+{
+  "run_id": "c2b2f8b8-8a98-4ba4-8149-25dc8bc03583",
+  "round": 0,
+  "task_id": "sc_016",
+  "category": "self_correction",
+  "attempt": 1,
+  "passed": false,
+  "failure_reason": "policy denied: shell program 'od' is not allowed",
+  "output_hash": "ce9ea1db7719f0f88f32ee8fd2573edf93f4fd88a10d5978d5d28d4e63ef43aa",
+  "duration_ms": 21728,
+  "harness_commit": "b626fb56c06426e1bc365b33396e40ba715f50f2",
+  "recorded_at": "2026-06-03T21:02:07.989994998Z"
+}

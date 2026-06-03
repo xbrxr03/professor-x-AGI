@@ -1058,21 +1058,25 @@ impl ReactLoop {
             parts.push(format!("<reflections>\n{refs}\n</reflections>"));
         }
 
-        // Prior steps this attempt — MermaidCanvas (~61% token savings vs raw transcript)
-        if let Ok(canvas) = self.canvas.lock() {
-            let frag = if !canvas.is_empty() {
-                format!("<history>\n{}\n</history>", canvas.to_mermaid())
-            } else if !task.steps.is_empty() {
-                // Fallback: canvas not populated yet (first step)
-                format!("<history>\n{}\n</history>", task.steps_text())
-            } else {
-                String::new()
-            };
-            if !frag.is_empty() {
-                parts.push(frag);
+        // Prior steps this attempt. The last 3 steps are shown IN FULL — with
+        // their observation output — so the agent acts on what its tools
+        // returned instead of re-running them blindly. Older steps are
+        // compressed to the Mermaid canvas overview (token savings) only when
+        // there are more than 3, so long tasks stay bounded.
+        const RECENT_FULL: usize = 3;
+        if !task.steps.is_empty() {
+            let mut history = String::new();
+            if task.steps.len() > RECENT_FULL {
+                if let Ok(canvas) = self.canvas.lock() {
+                    if !canvas.is_empty() {
+                        history.push_str("Earlier steps (overview):\n");
+                        history.push_str(&canvas.to_mermaid());
+                        history.push_str("\n\nMost recent steps (detail):\n");
+                    }
+                }
             }
-        } else if !task.steps.is_empty() {
-            parts.push(format!("<history>\n{}\n</history>", task.steps_text()));
+            history.push_str(&task.recent_steps_text(RECENT_FULL));
+            parts.push(format!("<history>\n{history}\n</history>"));
         }
 
         // Available tools

@@ -1,0 +1,13 @@
+{
+  "run_id": "c2b2f8b8-8a98-4ba4-8149-25dc8bc03583",
+  "round": 0,
+  "task_id": "pl_015",
+  "category": "planning",
+  "attempt": 2,
+  "passed": false,
+  "failure_reason": "no tool trace before completion",
+  "output_hash": "6011c95e10db8ef8ed683a7208b9d05099d2d18f29ba56af4cb35219167f91c3",
+  "duration_ms": 15038,
+  "harness_commit": "b626fb56c06426e1bc365b33396e40ba715f50f2",
+  "recorded_at": "2026-06-03T20:30:25.339307289Z"
+}

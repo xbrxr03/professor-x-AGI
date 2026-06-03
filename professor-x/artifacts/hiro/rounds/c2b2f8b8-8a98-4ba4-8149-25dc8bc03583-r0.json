@@ -1,0 +1,14 @@
+{
+  "run_id": "c2b2f8b8-8a98-4ba4-8149-25dc8bc03583",
+  "round": 0,
+  "harness_commit": "b626fb56c06426e1bc365b33396e40ba715f50f2",
+  "p_tool": 0.1,
+  "p_plan": 0.2,
+  "p_correct": 0.0,
+  "pass_at_3": 0.1,
+  "task_count": 60,
+  "successes": 6,
+  "frozen_harness": false,
+  "component_modified": null,
+  "recorded_at": "2026-06-03T21:09:36.126223381Z"
+}
