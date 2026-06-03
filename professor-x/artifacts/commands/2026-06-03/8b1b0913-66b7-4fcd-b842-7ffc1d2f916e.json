@@ -1,0 +1,10 @@
+{
+  "command": "date -u +%Y-%m-%dT%H:%M:%SZ",
+  "exit_code": 0,
+  "success": true,
+  "stdout": "2026-06-03T18:43:32Z\n",
+  "stderr": "",
+  "stdout_bytes": 21,
+  "stderr_bytes": 0,
+  "recorded_at": "2026-06-03T18:43:32.287275616+00:00"
+}

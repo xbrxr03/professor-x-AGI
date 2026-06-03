@@ -600,6 +600,11 @@ impl HiroRunner {
         if let Some(budget) = self.memory_budget_override {
             react = react.with_memory_budget_override(budget);
         }
+        // Stream every thought / tool call / observation to the event store so
+        // the run is watchable live in the observer (--observe / --observe-work).
+        if let Some(events) = &self.events {
+            react = react.with_events(Arc::clone(events));
+        }
 
         let mut task = TaskNode::new(hiro_task.description.clone(), TaskType::Research, 50);
         task.max_attempts = 3; // pass@3

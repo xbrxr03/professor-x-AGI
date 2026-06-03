@@ -1,0 +1,10 @@
+{
+  "command": "find src -name \"*.rs\" -not -path \"*/target/*\"",
+  "exit_code": 1,
+  "success": false,
+  "stdout": "",
+  "stderr": "find: ‘src’: No such file or directory\n",
+  "stdout_bytes": 0,
+  "stderr_bytes": 43,
+  "recorded_at": "2026-06-03T18:41:25.998626778+00:00"
+}
