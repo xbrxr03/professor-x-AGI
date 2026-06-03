@@ -765,6 +765,55 @@ impl ReactLoop {
                         return Ok(false);
                     }
 
+                    // Duplicate-action breaker: if the agent re-issues an action
+                    // it already ran this attempt (same tool + same params), do
+                    // NOT re-execute. Hand back the prior result with a firm
+                    // nudge. This kills the re-read/re-list loops at the source —
+                    // the model is told it already has the answer and must use it
+                    // or change approach.
+                    if let Some(prior) = task.steps.iter().find(|s| {
+                        s.action.tool_name == parsed.tool_name && s.action.params == parsed.params
+                    }) {
+                        let prior_out = if prior.observation.success {
+                            prior.observation.output.chars().take(800).collect::<String>()
+                        } else {
+                            format!("(it failed: {})", prior.observation.error.as_deref().unwrap_or("unknown"))
+                        };
+                        let nudge = format!(
+                            "DUPLICATE ACTION — you already ran `{}` with these exact inputs. \
+                             Its result was:\n{}\n\nDo NOT run it again. Use this result to make \
+                             progress, or take a DIFFERENT action. If the task is complete, call finish.",
+                            parsed.tool_name, prior_out
+                        );
+                        self.emit_event(
+                            Some(session_id),
+                            Some(task.id),
+                            "react.duplicate_action",
+                            format!("blocked duplicate '{}' — returned prior result with nudge", parsed.tool_name),
+                            json!({"step": step_idx + 1, "tool": parsed.tool_name}),
+                        );
+                        let step = ExecutionStep {
+                            index: (step_idx + 1) as u32,
+                            thought: parsed.thought,
+                            action: Action {
+                                tool_name: parsed.tool_name,
+                                params: parsed.params,
+                                risk_score: 0,
+                            },
+                            observation: Observation {
+                                success: false,
+                                output: nudge,
+                                error: Some("duplicate action blocked".to_string()),
+                                tokens_used: 0,
+                                execution_ms: 0,
+                                artifacts: Vec::new(),
+                            },
+                            timestamp: Utc::now(),
+                        };
+                        task.steps.push(step);
+                        continue;
+                    }
+
                     // Gate the action through policyd
                     let gate = self
                         .policy
@@ -1013,6 +1062,12 @@ impl ReactLoop {
         if !ctx_prefix.is_empty() {
             parts.push(ctx_prefix);
         }
+
+        // Workspace grounding: tell the agent where it is and what's there, so
+        // it forms correct relative paths instead of guessing (the root cause
+        // of the round-0 path-confusion loops). Relative tool paths resolve
+        // against this directory.
+        parts.push(workspace_context());
 
         // Affect (H16): inject emotional state when non-trivial so the model
         // can condition on its own performance trajectory
@@ -1532,6 +1587,32 @@ const REACT_SUFFIX: &str = "Now complete the task. Follow the ReAct format.\n\nT
 /// Predict task success probability from ICE example outcomes.
 /// Laplace-smoothed so no ICE → 0.5 uninformative prior; all-success → ~0.9.
 /// Used to seed the FED sample (H15) before task execution begins.
+/// Build the `<workspace>` grounding block: the directory relative tool paths
+/// resolve against, plus its top-level entries. Without this the agent guesses
+/// paths (e.g. assumes `src/` exists when the cwd already is that level) and
+/// loops trying to reconcile. Directories are suffixed with `/`.
+fn workspace_context() -> String {
+    let root = PermissionScope::default_autonomous().workspace_root;
+    let mut entries: Vec<String> = std::fs::read_dir(&root)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+                .map(|e| {
+                    let name = e.file_name().to_string_lossy().to_string();
+                    if e.path().is_dir() { format!("{name}/") } else { name }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    entries.sort();
+    entries.truncate(50);
+    format!(
+        "<workspace>\nWorking directory (relative paths resolve here): {}\nTop-level entries: {}\n</workspace>",
+        root.display(),
+        if entries.is_empty() { "(empty or unreadable)".to_string() } else { entries.join(", ") }
+    )
+}
+
 fn predict_success_from_ice(examples: &[String]) -> f32 {
     if examples.is_empty() {
         return 0.5;

@@ -1,0 +1,10 @@
+{
+  "command": "grep -r \"uuid\" /home/abrar/professor-x-AGI/professor-x/src/ --include=\"*.rs\" -l",
+  "exit_code": 0,
+  "success": true,
+  "stdout": "/home/abrar/professor-x-AGI/professor-x/src/memd/transcripts.rs\n/home/abrar/professor-x-AGI/professor-x/src/memd/affect.rs\n/home/abrar/professor-x-AGI/professor-x/src/memd/episodic.rs\n/home/abrar/professor-x-AGI/professor-x/src/memd/autonomy_queue.rs\n/home/abrar/professor-x-AGI/professor-x/src/memd/events.rs\n/home/abrar/professor-x-AGI/professor-x/src/memd/semantic.rs\n/home/abrar/professor-x-AGI/professor-x/src/memd/working.rs\n/home/abrar/professor-x-AGI/professor-x/src/memd/procedural.rs\n/home/abrar/professor-x-AGI/professor-x/src/agentd/graph.rs\n/home/abrar/professor-x-AGI/professor-x/src/agentd/react.rs\n/home/abrar/professor-x-AGI/professor-x/src/agentd/queue.rs\n/home/abrar/professor-x-AGI/professor-x/src/policyd/gating.rs\n/home/abrar/professor-x-AGI/professor-x/src/policyd/audit.rs\n/home/abrar/professor-x-AGI/professor-x/src/main.rs\n/home/abrar/professor-x-AGI/professor-x/src/artifacts.rs\n/home/abrar/professor-x-AGI/professor-x/src/toolbridge/skill_loader.rs\n/home/abrar/professor-x-AGI/professor-x/src/toolbridge/executor.rs\n/home/abrar/professor-x-AGI/professor-x/src/evolved/hiro.rs\n/home/abrar/professor-x-AGI/professor-x/src/evolved/cognition_base.rs\n/home/abrar/professor-x-AGI/professor-x/src/evolved/loop_runner.rs\n/home/abrar/professor-x-AGI/professor-x/src/evolved/tracker.rs\n/home/abrar/professor-x-AGI/professor-x/src/evolved/sleep.rs\n",
+  "stderr": "",
+  "stdout_bytes": 1365,
+  "stderr_bytes": 0,
+  "recorded_at": "2026-06-03T21:29:50.810645591+00:00"
+}
