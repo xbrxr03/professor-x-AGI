@@ -86,6 +86,8 @@ struct CliArgs {
     run_log_limit: Option<usize>,
     /// Print one compact Prof X operator brief and exit.
     brief: bool,
+    /// Print the consciousness measurement report (phi, interoception, self-prediction, ICS, ...) and exit.
+    consciousness_report: bool,
     /// Print a detailed autonomous/work-loop run review by run id prefix, report path, or 'latest'.
     run_review: Option<String>,
     /// Replay a work/operator run timeline by run id prefix, report path, or 'latest'.
@@ -245,6 +247,7 @@ fn parse_args() -> CliArgs {
     let args: Vec<String> = std::env::args().collect();
     let mut cli = CliArgs {
         operator_help: false,
+        consciousness_report: false,
         task: None,
         chat: false,
         run_now: false,
@@ -404,6 +407,10 @@ fn parse_args() -> CliArgs {
                     .and_then(|next| next.parse::<usize>().ok());
                 cli.run_log_limit = Some(limit.unwrap_or(10));
                 i += if limit.is_some() { 2 } else { 1 };
+            }
+            "--consciousness-report" | "--phi" | "--prof-x-mind" => {
+                cli.consciousness_report = true;
+                i += 1;
             }
             "--brief" | "--prof-x-brief" | "--now-brief" => {
                 cli.brief = true;
@@ -779,6 +786,7 @@ async fn main() -> Result<()> {
         || cli.work_loops_limit.is_some()
         || cli.run_log_limit.is_some()
         || cli.brief
+        || cli.consciousness_report
         || cli.run_review.is_some()
         || cli.task_review.is_some()
         || cli.run_replay.is_some()
@@ -907,6 +915,10 @@ async fn main() -> Result<()> {
 
     if cli.brief {
         return print_prof_x_brief(Arc::clone(&memory), Arc::clone(&events));
+    }
+
+    if cli.consciousness_report {
+        return print_consciousness_report(Arc::clone(&memory));
     }
 
     if let Some(run_ref) = cli.run_review {
@@ -7148,6 +7160,7 @@ fn format_operator_help() -> String {
         "  cargo run -- --observe-work",
         "  cargo run -- --cockpit",
         "  cargo run -- --watch-work",
+        "  cargo run -- --consciousness-report",
         "",
         "Give him a bounded coding-agent task",
         "  cargo run -- --prof-x-code-live \"update one safe local fixture\"",
@@ -7747,6 +7760,190 @@ fn print_run_log(memory: Arc<MemoryManager>, limit: usize) -> Result<()> {
         println!("{}", format_run_log_entry(&run, ledger.as_deref()));
     }
     Ok(())
+}
+
+/// Consciousness measurement report — turns the seven scattered trajectory
+/// tables into the five empirical questions the thesis rests on. Each question
+/// gets a number and a verdict: supported / inconclusive / not-supported /
+/// no-data-yet. This is the instrument that makes the architecture legible.
+fn print_consciousness_report(memory: Arc<MemoryManager>) -> Result<()> {
+    println!("Professor X — consciousness measurement report");
+    println!("================================================");
+    println!(
+        "The thesis: an agent that knows itself, and grows more integrated as"
+    );
+    println!(
+        "it evolves, improves in ways a frozen one cannot. Five questions:\n"
+    );
+
+    // ── Q1: Integrated information (phi) rising? ──────────────────────────
+    let phi_traj = memory.phi.trajectory()?;
+    let phi_slope = memory.phi.slope()?;
+    println!("Q1. Does integrated information (phi) rise as the harness evolves?");
+    if phi_traj.is_empty() {
+        println!("    no data yet — run HIRO rounds to populate phi_rounds\n");
+    } else {
+        let first = phi_traj.first().map(|(_, p)| *p).unwrap_or(0.0);
+        let last = phi_traj.last().map(|(_, p)| *p).unwrap_or(0.0);
+        println!(
+            "    rounds={}  phi: {:.3} → {:.3}  slope={}",
+            phi_traj.len(),
+            first,
+            last,
+            phi_slope.map(|s| format!("{s:+.4}/round")).unwrap_or_else(|| "n/a".into()),
+        );
+        println!("    {}\n", verdict_slope(phi_slope, 0.0, "phi rising (integration growing)", "phi flat/falling"));
+    }
+
+    // ── Q2: Interoceptive prediction error falling? ───────────────────────
+    println!("Q2. Is the body-model sharpening (interoceptive error falling)?");
+    let intero_traj = round_bucketed_mean(
+        &memory.db,
+        "SELECT round, AVG(interoceptive_error) FROM computational_vitals \
+         WHERE interoceptive_error IS NOT NULL GROUP BY round ORDER BY round ASC",
+    )?;
+    if intero_traj.is_empty() {
+        println!("    no data yet\n");
+    } else {
+        let slope = least_squares_slope(&intero_traj);
+        let first = intero_traj.first().map(|(_, v)| *v).unwrap_or(0.0);
+        let last = intero_traj.last().map(|(_, v)| *v).unwrap_or(0.0);
+        println!("    error: {first:.3} → {last:.3}  slope={}",
+            slope.map(|s| format!("{s:+.4}/round")).unwrap_or_else(|| "n/a".into()));
+        // falling error = negative slope is good
+        println!("    {}\n", verdict_slope(slope.map(|s| -s), 0.0, "body-model sharpening", "body-model not improving"));
+    }
+
+    // ── Q3: Self-prediction error converging? ─────────────────────────────
+    println!("Q3. Is self-knowledge converging (self-prediction error falling)?");
+    let n_pred = memory.self_prediction.count()?;
+    if n_pred == 0 {
+        println!("    no data yet\n");
+    } else {
+        let mean = memory.self_prediction.mean_error(200)?.unwrap_or(0.0);
+        let dims = memory.self_prediction.mean_error_by_dimension(200)?;
+        print!("    n={n_pred}  mean self-prediction error={mean:.3}");
+        if let Some(d) = dims {
+            let (blind, val) = [("tools", d.tool_err), ("steps", d.step_err), ("success", d.success_err)]
+                .into_iter()
+                .fold(("", 0.0), |acc, x| if x.1 > acc.1 { x } else { acc });
+            println!("  | blind spot: {blind} ({val:.3})");
+        } else {
+            println!();
+        }
+        println!("    (trajectory needs ≥2 rounds; lower mean = better self-knowledge)\n");
+    }
+
+    // ── Q4: Does default-mode wandering produce insight? ──────────────────
+    println!("Q4. Does mind-wandering (DMN) produce insight that feeds evolution?");
+    let dmn_insights: i64 = memory.db.lock().unwrap().query_row(
+        "SELECT COUNT(*) FROM cognition WHERE source LIKE 'dmn:%'",
+        [],
+        |r| r.get(0),
+    ).unwrap_or(0);
+    let narrative_chapters = memory.narrative.count()?;
+    println!(
+        "    DMN insights stored={dmn_insights}  narrative chapters={narrative_chapters}"
+    );
+    if dmn_insights == 0 {
+        println!("    no data yet (DMN runs between evolution cycles)\n");
+    } else {
+        println!("    insights are accumulating; acceptance-correlation needs evolution runs\n");
+    }
+
+    // ── Q5: Identity coherence holding under self-modification? ───────────
+    println!("Q5. Does identity hold (ICS ≥ 0.70) while the harness transforms?");
+    let ics_traj = memory.ics.trajectory_vs_seed()?;
+    if ics_traj.is_empty() {
+        println!("    no data yet (ICS computed at each self-model update, every 10 rounds)\n");
+    } else {
+        let latest = ics_traj.last().map(|(_, s)| *s).unwrap_or(0.0);
+        let latest_round = ics_traj.last().map(|(r, _)| *r).unwrap_or(0);
+        let verdict = if latest >= 0.70 {
+            "✓ identity coherent (≥0.70)"
+        } else if latest >= 0.50 {
+            "— drifting (alert: <0.70)"
+        } else {
+            "✗ identity incoherent (halt: <0.50)"
+        };
+        println!("    round {latest_round} ICS vs seed={latest:.3}  {verdict}\n");
+    }
+
+    // ── Supporting metrics ────────────────────────────────────────────────
+    println!("Supporting metrics");
+    println!("------------------");
+    // FED — world model
+    match memory.free_energy.slope_per_round()? {
+        Some(s) => println!("  FED (world-model error) slope: {s:+.4}/round  {}",
+            if s < 0.0 { "✓ world model improving" } else { "— not improving" }),
+        None => println!("  FED: no data yet"),
+    }
+    // Self-authored tests — the invention
+    let sat_count = memory.self_authored_tests.count()?;
+    let sat_rate = memory.self_authored_tests.mean_pass_rate()?;
+    println!(
+        "  Self-authored tests: {sat_count} authored, mean pass-rate {}",
+        sat_rate.map(|r| format!("{r:.2}")).unwrap_or_else(|| "n/a".into())
+    );
+    // Causal traces — STDP
+    println!("  Causal traces recorded: {}", memory.causal_traces.count()?);
+    // MCA — metacognitive calibration (if any rounds)
+    if let Some((round, _)) = phi_traj.last() {
+        let metacog = memd::metacognitive::MetacognitiveStore::new(Arc::clone(&memory.db));
+        let (mca, n) = metacog.mca_rolling(*round, 10)?;
+        if n > 0 {
+            println!("  MCA (metacognitive calibration, last 10 rounds): {mca:.2} over {n} attributions");
+        }
+    }
+
+    println!("\nReading: 2+ of Q1-Q5 supported across 30 rounds → the thesis holds.");
+    println!("Right now this is the instrument; the HIRO + evolution runs are the experiment.");
+    Ok(())
+}
+
+/// Verdict helper: given a slope and a threshold, render a supported/not line.
+fn verdict_slope(slope: Option<f32>, threshold: f32, yes: &str, no: &str) -> String {
+    match slope {
+        Some(s) if s > threshold + 1e-6 => format!("✓ {yes}"),
+        Some(s) if s < threshold - 1e-6 => format!("✗ {no}"),
+        Some(_) => format!("— inconclusive (flat)"),
+        None => "— inconclusive (need ≥2 rounds)".to_string(),
+    }
+}
+
+/// Run a `SELECT round, AVG(x) ... GROUP BY round` query into a trajectory.
+fn round_bucketed_mean(
+    db: &Arc<std::sync::Mutex<rusqlite::Connection>>,
+    sql: &str,
+) -> Result<Vec<(u32, f32)>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map([], |r| {
+        Ok((r.get::<_, i64>(0)? as u32, r.get::<_, Option<f64>>(1)?.unwrap_or(0.0) as f32))
+    })?;
+    rows.map(|r| r.map_err(Into::into)).collect()
+}
+
+/// Least-squares slope over a (round, value) trajectory.
+fn least_squares_slope(traj: &[(u32, f32)]) -> Option<f32> {
+    if traj.len() < 2 {
+        return None;
+    }
+    let n = traj.len() as f32;
+    let mean_x = traj.iter().map(|(x, _)| *x as f32).sum::<f32>() / n;
+    let mean_y = traj.iter().map(|(_, y)| *y).sum::<f32>() / n;
+    let mut num = 0.0;
+    let mut den = 0.0;
+    for (x, y) in traj {
+        let dx = *x as f32 - mean_x;
+        num += dx * (*y - mean_y);
+        den += dx * dx;
+    }
+    if den == 0.0 {
+        None
+    } else {
+        Some(num / den)
+    }
 }
 
 fn print_prof_x_brief(memory: Arc<MemoryManager>, events: Arc<EventStore>) -> Result<()> {
