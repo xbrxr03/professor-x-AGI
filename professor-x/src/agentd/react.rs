@@ -35,6 +35,7 @@ use crate::evolved::tracker::TaskOutcome;
 use crate::memd::affect::{arousal_from_load, state_label, valence_from_outcome, AffectState};
 use crate::memd::causal_traces::{CausalTrace, TimedAction};
 use crate::memd::computational_body::ComputationalVitals;
+use crate::memd::self_prediction::{self, SelfPrediction};
 use crate::memd::working::MermaidCanvas;
 use crate::memd::episodic::EpisodicEntry;
 use crate::memd::events::EventStore;
@@ -84,6 +85,10 @@ pub struct ReactLoop {
     /// current task, set at task start from recent vitals history and injected
     /// into every prompt as `<body .../>`. Actual vitals recorded at task end.
     body_prediction: std::sync::Mutex<ComputationalVitals>,
+    /// Seed 7 (predictive self-model): the agent's prediction about its own
+    /// behaviour for the current task, made before execution. Error against the
+    /// actual run is recorded at task end.
+    self_prediction: std::sync::Mutex<SelfPrediction>,
 }
 
 impl ReactLoop {
@@ -110,6 +115,7 @@ impl ReactLoop {
             fed_samples: std::sync::Mutex::new(Vec::new()),
             canvas: std::sync::Mutex::new(MermaidCanvas::default()),
             body_prediction: std::sync::Mutex::new(ComputationalVitals::neutral()),
+            self_prediction: std::sync::Mutex::new(SelfPrediction::uninformed()),
             session_id,
         }
     }
@@ -216,6 +222,41 @@ impl ReactLoop {
             };
             if let Ok(mut bp) = self.body_prediction.lock() {
                 *bp = predicted;
+            }
+        }
+
+        // Seed 7 (predictive self-model): before acting, the agent predicts its
+        // OWN behaviour — which tools, how many steps, success odds, failure
+        // mode. The "I" is the perspective from which predictions are made.
+        // Error is measured at task end; persistent error = genuine self-ignorance.
+        {
+            let tool_names: Vec<&str> = vec![
+                "fs.read", "fs.list", "fs.write", "fs.replace", "web.search",
+                "web.fetch", "vision.analyze", "shell.restricted", "patch.apply",
+                "memory.read", "memory.write", "finish", "fail",
+            ];
+            let pred_prompt =
+                self_prediction::build_prediction_prompt(&task.description, &tool_names);
+            let prediction = match self
+                .ollama
+                .generate(
+                    &pred_prompt,
+                    Some("You are predicting your own behaviour honestly. Output only the requested fields."),
+                    Some(ModelOptions::for_reflection()),
+                )
+                .await
+            {
+                Ok(resp) => {
+                    let (_, answer) = resp.split_thinking();
+                    self_prediction::parse_prediction(&answer)
+                }
+                Err(e) => {
+                    debug!("react: self-prediction skipped: {e}");
+                    SelfPrediction::uninformed()
+                }
+            };
+            if let Ok(mut sp) = self.self_prediction.lock() {
+                *sp = prediction;
             }
         }
 
@@ -460,7 +501,7 @@ impl ReactLoop {
             let trace = CausalTrace::new(
                 self.session_id.clone(),
                 task.id.to_string(),
-                category_name,
+                category_name.clone(),
                 actions,
                 outcome,
                 score,
@@ -500,6 +541,28 @@ impl ReactLoop {
             Some(intero_err),
         ) {
             warn!("react: failed to record computational vitals: {e}");
+        }
+
+        // ── Seed 7: self-prediction error (predictive self-model) ────────
+        {
+            let actual_tools: Vec<String> = task
+                .steps
+                .iter()
+                .map(|s| s.action.tool_name.clone())
+                .collect();
+            let actual_steps = task.steps.len() as u32;
+            if let Ok(pred) = self.self_prediction.lock() {
+                let err = pred.error_against(&actual_tools, actual_steps, outcome);
+                if let Err(e) = self.memory.self_prediction.record(
+                    &self.session_id,
+                    self.current_round,
+                    &category_name,
+                    &pred,
+                    &err,
+                ) {
+                    warn!("react: failed to record self-prediction: {e}");
+                }
+            }
         }
     }
 

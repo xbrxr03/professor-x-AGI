@@ -883,6 +883,30 @@ impl EvolvedLoop {
             Err(e) => warn!("evolved: sleep consolidation failed: {e}"),
         }
 
+        // ── Default Mode Network (Seed 5) ────────────────────────────────
+        // Between cycles, the agent wanders: free-associates across disparate
+        // memories for unexpected insight, and simulates its own near future.
+        // Insights become cognition items the Researcher draws on next cycle.
+        match crate::evolved::dmn::wander(&self.memory, &self.ollama, current_round).await {
+            Ok(report) => {
+                if report.insights_kept > 0 || report.simulations > 0 {
+                    self.emit_event(
+                        "evolution.dmn_wander",
+                        format!(
+                            "default mode: {} insight(s), {} simulation(s)",
+                            report.insights_kept, report.simulations
+                        ),
+                        serde_json::json!({
+                            "fragments": report.fragments_sampled,
+                            "insights": report.insights_kept,
+                            "simulations": report.simulations,
+                        }),
+                    );
+                }
+            }
+            Err(e) => warn!("evolved: default mode wander failed: {e}"),
+        }
+
         Ok(true)
     }
 
@@ -1404,8 +1428,78 @@ impl EvolvedLoop {
 
                 // ── ICS: measure drift from round-0 baseline (H14) ──────────
                 self.compute_and_record_ics(round, &snap.text).await;
+
+                // ── Narrative self (Seed 6): add the next chapter ───────────
+                self.append_narrative_chapter(round, &behavior_summary).await;
             }
             Err(e) => warn!("evolved: failed to persist self-model update: {e}"),
+        }
+    }
+
+    /// Seed 6 — narrative self: every self-model update also adds a chapter to
+    /// Professor X's autobiographical story, connected to prior chapters by
+    /// theme. The agent checks whether its last anticipated arc came true (FED
+    /// at the narrative level) and projects where the story heads next.
+    async fn append_narrative_chapter(&self, round: u32, behavior_summary: &str) {
+        let prior_recap = self
+            .memory
+            .narrative
+            .story_recap(5)
+            .unwrap_or_default();
+        let prior_arc = self
+            .memory
+            .narrative
+            .latest()
+            .ok()
+            .flatten()
+            .map(|e| e.anticipated_arc)
+            .unwrap_or_default();
+
+        let prompt = crate::memd::narrative::build_narrative_prompt(
+            &prior_recap,
+            &prior_arc,
+            round,
+            behavior_summary,
+        );
+
+        let resp = match self
+            .ollama
+            .generate(
+                &prompt,
+                Some("You are Professor X narrating your own research journey. Be honest and reflective."),
+                Some(ModelOptions::for_reflection()),
+            )
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("evolved: narrative chapter LLM call failed: {e}");
+                return;
+            }
+        };
+
+        let (_, text) = resp.split_thinking();
+        match crate::memd::narrative::parse_episode(&text, round) {
+            Some(episode) => match self.memory.narrative.append(&episode) {
+                Ok(id) => {
+                    info!(
+                        "evolved: narrative chapter {round} added — '{}'",
+                        episode.chapter
+                    );
+                    self.emit_event(
+                        "evolution.narrative_chapter",
+                        format!("new life-story chapter at round {round}: {}", episode.chapter),
+                        serde_json::json!({
+                            "round": round,
+                            "episode_id": id,
+                            "chapter": episode.chapter,
+                            "anticipated_arc": episode.anticipated_arc,
+                        }),
+                    );
+                }
+                Err(e) => warn!("evolved: failed to persist narrative chapter: {e}"),
+            },
+            None => warn!("evolved: narrative response unparseable at round {round}"),
         }
     }
 

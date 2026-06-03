@@ -2,7 +2,9 @@ pub mod affect;
 pub mod autonomy_queue;
 pub mod causal_traces;
 pub mod computational_body;
+pub mod narrative;
 pub mod self_authored_tests;
+pub mod self_prediction;
 pub mod coding_sessions;
 pub mod coding_smoke;
 pub mod events;
@@ -28,7 +30,9 @@ use tracing::info;
 use crate::embeddings::EmbeddingStore;
 use crate::memd::causal_traces::CausalTraceStore;
 use crate::memd::computational_body::ComputationalBodyStore;
+use crate::memd::narrative::NarrativeStore;
 use crate::memd::self_authored_tests::SelfAuthoredTestStore;
+use crate::memd::self_prediction::SelfPredictionStore;
 use crate::memd::affect::AffectStore;
 use crate::memd::episodic::EpisodicStore;
 use crate::memd::free_energy::FreeEnergyStore;
@@ -483,6 +487,38 @@ CREATE TABLE IF NOT EXISTS computational_vitals (
     recorded_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_vitals_session ON computational_vitals(session_id);
+
+-- narrative_episodes (Seed 6): the autobiographical self as a story.
+-- Each self-model update adds a connected chapter, not a flat description.
+CREATE TABLE IF NOT EXISTS narrative_episodes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    round INTEGER NOT NULL,
+    chapter TEXT NOT NULL,
+    inciting_incident TEXT NOT NULL,
+    turning_point TEXT NOT NULL,
+    lesson TEXT NOT NULL,
+    anticipated_arc TEXT NOT NULL,
+    recorded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_narrative_round ON narrative_episodes(round);
+
+-- self_predictions (Seed 7): the agent predicts its own behaviour before tasks.
+-- Per-dimension error tracks developing self-knowledge; persistent error = blind spot.
+CREATE TABLE IF NOT EXISTS self_predictions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    round INTEGER NOT NULL,
+    task_category TEXT NOT NULL,
+    expected_tools TEXT NOT NULL,
+    expected_steps INTEGER NOT NULL,
+    expected_success REAL NOT NULL,
+    expected_failure_mode TEXT,
+    tool_err REAL NOT NULL,
+    step_err REAL NOT NULL,
+    success_err REAL NOT NULL,
+    recorded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_self_pred_session ON self_predictions(session_id);
 "#;
 
 pub struct MemoryManager {
@@ -505,6 +541,10 @@ pub struct MemoryManager {
     pub causal_traces: CausalTraceStore,
     /// Seed 4 (interoception): the agent's computational "body" signals.
     pub computational_body: ComputationalBodyStore,
+    /// Seed 6 (narrative self): the autobiographical story, chapter by chapter.
+    pub narrative: NarrativeStore,
+    /// Seed 7 (predictive self-model): the agent's predictions about itself.
+    pub self_prediction: SelfPredictionStore,
 }
 
 impl MemoryManager {
@@ -590,6 +630,8 @@ impl MemoryManager {
             self_authored_tests: SelfAuthoredTestStore::new(Arc::clone(&db)),
             causal_traces: CausalTraceStore::new(Arc::clone(&db)),
             computational_body: ComputationalBodyStore::new(Arc::clone(&db)),
+            narrative: NarrativeStore::new(Arc::clone(&db)),
+            self_prediction: SelfPredictionStore::new(Arc::clone(&db)),
             db,
         })
     }

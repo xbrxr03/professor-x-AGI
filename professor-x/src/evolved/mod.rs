@@ -2,6 +2,7 @@ pub mod analyzer;
 pub mod bf;
 pub mod cognition_base;
 pub mod dhe;
+pub mod dmn;
 pub mod hiro;
 pub mod lcap;
 pub mod loop_runner;
