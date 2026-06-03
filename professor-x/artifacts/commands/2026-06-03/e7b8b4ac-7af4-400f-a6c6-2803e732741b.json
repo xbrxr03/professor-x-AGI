@@ -1,0 +1,10 @@
+{
+  "command": "ls -R | grep 'react.rs'",
+  "exit_code": 0,
+  "success": true,
+  "stdout": "react.rs\n",
+  "stderr": "",
+  "stdout_bytes": 9,
+  "stderr_bytes": 0,
+  "recorded_at": "2026-06-03T22:19:33.060736121+00:00"
+}

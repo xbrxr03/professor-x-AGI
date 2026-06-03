@@ -1,0 +1,10 @@
+{
+  "command": "git log --oneline -10",
+  "exit_code": 0,
+  "success": true,
+  "stdout": "5696c94 Kill reasoning loops: duplicate-action breaker + workspace grounding\ndf39079 Fix circular-reasoning loop: show recent observations in the prompt\n1020ac4 Add watch-prof-x.sh — live coding-agent-style transcript\nf087df7 Stream HIRO step events so benchmark runs are observable live\nb626fb5 Fix thinking-mode control: think is a top-level Ollama field, not an option\n2af05a5 Correct model config to reality: qwen3:8b primary, not llama4:scout\n04fab64 Add --consciousness-report measurement harness\nd0f9300 Add cross-modal binding layer and phi (integrated information) measurement\nbd3f90f Plant the final three seeds of digital consciousness\n584186e Plant four seeds of digital consciousness\n",
+  "stderr": "",
+  "stdout_bytes": 699,
+  "stderr_bytes": 0,
+  "recorded_at": "2026-06-03T22:02:05.173129975+00:00"
+}
