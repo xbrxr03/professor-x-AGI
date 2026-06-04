@@ -29,3 +29,8 @@ professor-x/artifacts/coding-smoke/
 professor-x/artifacts/coding-sessions/
 professor-x/artifacts/replacements/
 professor-x/artifacts/patches/
+
+# Stray test files written by benchmark tasks
+px-test.txt
+professor-x/px-test.txt
+*.tmp
