@@ -7916,6 +7916,84 @@ fn print_run_log(memory: Arc<MemoryManager>, limit: usize) -> Result<()> {
 /// tables into the five empirical questions the thesis rests on. Each question
 /// gets a number and a verdict: supported / inconclusive / not-supported /
 /// no-data-yet. This is the instrument that makes the architecture legible.
+/// HIRO pass@3 trajectory across rounds, with mean, σ, and the minimum
+/// detectable effect — the noise floor any evolution gain must beat to be real.
+fn print_hiro_trajectory(memory: &Arc<MemoryManager>) -> Result<()> {
+    let rows: Vec<(u32, f32, String)> = {
+        let db = memory.db.lock().unwrap();
+        let mut stmt = db.prepare(
+            "SELECT round, pass_at_3, COALESCE(harness_commit,'') \
+             FROM hiro_rounds ORDER BY round ASC",
+        )?;
+        let r = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)? as u32,
+                row.get::<_, f64>(1)? as f32,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        r.filter_map(|x| x.ok()).collect()
+    };
+
+    println!("HIRO performance (pass@3) — the measurement floor");
+    println!("--------------------------------------------------");
+    if rows.is_empty() {
+        println!("  no rounds recorded yet\n");
+        return Ok(());
+    }
+    for (round, p, commit) in &rows {
+        let bar = "#".repeat((p * 40.0).round() as usize);
+        println!("  r{round:<2} {p:.3} |{bar:<40}| {}", &commit[..commit.len().min(7)]);
+    }
+
+    // σ is only meaningful over a FROZEN harness — rounds sharing one commit.
+    // Mixing commits measures harness changes, not run-to-run noise. Use the
+    // largest group of rounds that share a harness_commit (the baseline set).
+    use std::collections::HashMap;
+    let mut by_commit: HashMap<&str, Vec<f32>> = HashMap::new();
+    for (_, p, commit) in &rows {
+        by_commit.entry(commit.as_str()).or_default().push(*p);
+    }
+    let frozen = by_commit
+        .iter()
+        .filter(|(c, _)| !c.is_empty())
+        .max_by_key(|(_, v)| v.len());
+
+    match frozen {
+        Some((commit, vals)) if vals.len() >= 2 => {
+            let n = vals.len() as f32;
+            let mean = vals.iter().sum::<f32>() / n;
+            let var = vals.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / (n - 1.0);
+            let sd = var.sqrt();
+            let mde = 1.96 * sd;
+            println!(
+                "\n  frozen-harness baseline ({}): n={} rounds  mean={:.3}  σ={:.3}",
+                &commit[..commit.len().min(7)],
+                vals.len(),
+                mean,
+                sd
+            );
+            println!(
+                "  minimum detectable effect ≈ {:.3} (1.96σ) — an evolution change must",
+                mde
+            );
+            println!(
+                "  move pass@3 above {:.3} to count as real, not run-to-run noise.\n",
+                mean + mde
+            );
+        }
+        _ => {
+            let mean = rows.iter().map(|(_, p, _)| *p).sum::<f32>() / rows.len() as f32;
+            println!(
+                "\n  mean={mean:.3} across {} round(s); need ≥2 rounds on ONE frozen \
+                 harness commit for σ. (baseline in progress)\n",
+                rows.len()
+            );
+        }
+    }
+    Ok(())
+}
+
 fn print_consciousness_report(memory: Arc<MemoryManager>) -> Result<()> {
     println!("Professor X — consciousness measurement report");
     println!("================================================");
@@ -7925,6 +8003,9 @@ fn print_consciousness_report(memory: Arc<MemoryManager>) -> Result<()> {
     println!(
         "it evolves, improves in ways a frozen one cannot. Five questions:\n"
     );
+
+    // ── HIRO performance trajectory + variance (the measurement floor) ────
+    print_hiro_trajectory(&memory)?;
 
     // ── Q1: Integrated information (phi) rising? ──────────────────────────
     let phi_traj = memory.phi.trajectory()?;
