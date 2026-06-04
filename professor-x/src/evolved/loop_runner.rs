@@ -317,15 +317,28 @@ fn apply_node_change_at(root: &Path, node: &EvolutionNode) -> Result<bool> {
         HarnessComponent::SystemPrompt => {
             let path = component_relative_path(root, node)
                 .unwrap_or_else(|| PathBuf::from("personas/professor_x.md"));
-            let content = sanitize_generated_content(&node.diff);
-            // Identity-preservation gate. The first autonomous evolution replaced
-            // the entire persona (41 lines → 1) and cargo-check happily passed,
-            // because compilation says nothing about selfhood. ICS is meant to
-            // protect identity but ran only at round boundaries — too late. So
-            // we gate at mutation time: a persona rewrite must keep most of the
-            // file and retain the identity anchor, or it is refused.
-            preservation_guard(root, &path, &content, 0.6, &["Professor X"])?;
-            write_workspace_file(root, &path, &content)?;
+            // ADDITIVE evolution. The persona grows by accretion, never by
+            // overwrite — exactly how a self-concept actually develops (you add
+            // experience, you don't wipe and rewrite who you are). This also
+            // makes identity destruction structurally impossible: the original
+            // is always retained. The 8B model kept trying to "replace" the
+            // whole persona with a short stub; appending instead of overwriting
+            // turns that failure mode into a safe, useful accretion.
+            let addition = sanitize_generated_content(&node.diff);
+            if addition.trim().len() < 15 {
+                anyhow::bail!("system-prompt addition too short to be meaningful");
+            }
+            let target = root.join(&path);
+            let existing = std::fs::read_to_string(&target).unwrap_or_default();
+            // Avoid unbounded growth: keep at most the last 8 evolved sections.
+            let trimmed = trim_evolved_sections(&existing, 8);
+            let stamp = chrono::Utc::now().format("%Y-%m-%d %H:%M");
+            let combined = format!(
+                "{}\n\n## Evolved guidance ({stamp})\n{}\n",
+                trimmed.trim_end(),
+                addition.trim()
+            );
+            write_workspace_file(root, &path, &combined)?;
             Ok(true)
         }
         HarnessComponent::HarnessConfig => {
@@ -349,6 +362,27 @@ fn apply_node_change_at(root: &Path, node: &EvolutionNode) -> Result<bool> {
         HarnessComponent::ProceduralMemory => Ok(false),
         HarnessComponent::Middleware => Ok(false),
     }
+}
+
+/// Keep at most `max` "## Evolved guidance" sections in the persona so it grows
+/// bounded. The original persona (everything before the first evolved section)
+/// is always preserved in full; only the oldest evolved sections are dropped.
+fn trim_evolved_sections(content: &str, max: usize) -> String {
+    const MARKER: &str = "## Evolved guidance";
+    let mut parts: Vec<&str> = content.split(MARKER).collect();
+    // parts[0] = original persona; parts[1..] = evolved sections (sans marker)
+    if parts.len().saturating_sub(1) <= max {
+        return content.to_string();
+    }
+    let base = parts.remove(0);
+    let keep: Vec<&str> = parts.iter().rev().take(max).rev().cloned().collect();
+    let mut out = base.trim_end().to_string();
+    for sec in keep {
+        out.push_str("\n\n");
+        out.push_str(MARKER);
+        out.push_str(sec.trim_end());
+    }
+    out
 }
 
 /// Refuse a destructive overwrite. When the target file already exists, the
@@ -1231,8 +1265,12 @@ impl EvolvedLoop {
              MOTIVATION: <one sentence why this change will help>\n\
              ROOT_CAUSE: <which failure mode this addresses>\n\
              FIX:\n\
-             <complete replacement file content for SystemPrompt, HarnessConfig, or SkillDefinition. \
-             For SkillDefinition, write a complete markdown skill with '# <name>', Purpose, Workflow, and Output Contract.>\n\
+             <For SystemPrompt: write ONLY the new guidance to ADD (2-5 sentences of \
+             concrete instruction addressing the failure pattern) — do NOT rewrite or \
+             restate your identity; it is preserved automatically and your addition is \
+             appended. For HarnessConfig: the complete replacement config file. For \
+             SkillDefinition: a complete markdown skill with '# <name>', Purpose, \
+             Workflow, and Output Contract.>\n\
              PREDICTS_FIX: <what task type should improve>\n\
              PREDICTS_REGRESSION: <what might get worse, or 'none'>\n\n\
              Also propose a NEW TEST that would catch the failure class you just diagnosed.\n\

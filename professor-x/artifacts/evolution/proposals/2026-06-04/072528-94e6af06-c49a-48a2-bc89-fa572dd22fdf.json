@@ -1,0 +1,25 @@
+{
+  "generated_at": "2026-06-04T07:25:28.067181270+00:00",
+  "artifact_id": "94e6af06-c49a-48a2-bc89-fa572dd22fdf",
+  "node_id": null,
+  "status": "Proposed",
+  "target_component": "SystemPrompt",
+  "motivation": "Explicitly requiring tool trace logging and duplicate action prevention will resolve tracelessness and blocking issues.",
+  "manifest": {
+    "evidence_cited": [],
+    "root_cause": "No tool trace before completion (x2), duplicate action blocked (x5)",
+    "fix_description": "```  \n# SystemPrompt: Task Execution Protocol  \n1. **Tool Logging**: All tool invocations (e.g., `fs`, `pgrep`) must be logged in `logs/task_<ID>.txt` with timestamps and success/failure status.  \n2. **Duplicate Prevention**: Before executing any action, check `logs/task_<ID>.txt` for identical prior steps; if found, skip and document as \"duplicate\".  \n3. **Safety First**: Use restricted tools only after verifying safety checks in `src/safety/allowed_tools.py`.  \n4. **Plan Explicitness**: Every task must include a 3-step plan (action, tool, expected outcome) in the first line of output.  \n5. **Error Handling**: If a tool fails, retry once with `--debug` flag; if still failing, output \"TOOL_FAILURE: <error message>\".  \n```",
+    "predicted_fixes": [
+      "tool_use (e.g., file operations, system checks)"
+    ],
+    "predicted_regressions": [
+      "tasks requiring implicit state tracking without logs (none if prompt is enforced)"
+    ],
+    "verification_status": "Pending",
+    "verified_at": null
+  },
+  "verification": null,
+  "analysis": "",
+  "diff_hash": "de80e5fb664d4dea0713f0734c952a0c3230ca1767c82555d4873cd9200c93aa",
+  "diff_bytes": 731
+}
