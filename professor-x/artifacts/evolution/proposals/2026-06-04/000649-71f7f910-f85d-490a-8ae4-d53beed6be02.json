@@ -1,0 +1,25 @@
+{
+  "generated_at": "2026-06-04T00:06:49.797460378+00:00",
+  "artifact_id": "71f7f910-f85d-490a-8ae4-d53beed6be02",
+  "node_id": null,
+  "status": "Proposed",
+  "target_component": "ToolDescription(\"DHE\")",
+  "motivation": "Explicitly defining lever=3 in DHE's description ensures parameter compatibility with failure-prone layers.",
+  "manifest": {
+    "evidence_cited": [],
+    "root_cause": "[DHE:layer=4,lever=3] and [DHE:layer=0,lever=3] failures stem from ambiguous tool parameter handling.",
+    "fix_description": "```toml  \n[tool_description]  \nname = \"DHE\"  \npurpose = \"Data Handling Engine for layered processing with leveraged resource allocation\"  \nparameters = { layer: \"int\", lever: \"int\" }  \nconstraints = { \"layer >= 0\", \"lever >= 3\" }  \n```",
+    "predicted_fixes": [
+      "Layered DHE operations with lever=3 (e.g., network routing, data compression)"
+    ],
+    "predicted_regressions": [
+      "Tasks requiring lever < 3 or unregistered layer parameters"
+    ],
+    "verification_status": "Pending",
+    "verified_at": null
+  },
+  "verification": null,
+  "analysis": "",
+  "diff_hash": "91027e036a2571def34bb26d08cf1cf802ce9d8b993880b7d35f299c194bf130",
+  "diff_bytes": 235
+}

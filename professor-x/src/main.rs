@@ -6166,26 +6166,87 @@ fn outcomes_from_recent_runs(memory: &Arc<MemoryManager>, limit: usize) -> Vec<T
         .collect()
 }
 
-/// Run one evolution cycle that learns from REAL recent outcomes. Falls back to
-/// seeded calibration outcomes only if no finished runs exist yet.
+/// Load REAL HIRO outcomes (correctness, not did-finish) from the latest round's
+/// `hiro_attempts`. A task passes if ANY of its attempts passed (pass@3); the
+/// failure_mode of a failed attempt is carried through so DHE-tagged patterns
+/// reach the Researcher. This is the correct learning signal — task_runs only
+/// records whether the agent called finish, not whether it was right.
+fn outcomes_from_hiro_attempts(memory: &Arc<MemoryManager>) -> Vec<TaskOutcome> {
+    use std::collections::HashMap;
+    let db = memory.db.lock().unwrap();
+    let latest: Option<i64> = db
+        .query_row("SELECT MAX(round) FROM hiro_attempts", [], |r| r.get(0))
+        .ok()
+        .flatten();
+    let Some(round) = latest else { return Vec::new() };
+
+    let mut stmt = match db.prepare(
+        "SELECT task_id, category, passed, failure_reason, duration_ms
+         FROM hiro_attempts WHERE round = ?1",
+    ) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let rows = stmt.query_map([round], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, i64>(2)? != 0,
+            r.get::<_, Option<String>>(3)?,
+            r.get::<_, i64>(4)?,
+        ))
+    });
+    let Ok(rows) = rows else { return Vec::new() };
+
+    // Aggregate attempts per task: passed if any attempt passed.
+    let mut agg: HashMap<String, (String, bool, Option<String>, i64)> = HashMap::new();
+    for row in rows.flatten() {
+        let (task_id, category, passed, failure_reason, dur) = row;
+        let e = agg
+            .entry(task_id)
+            .or_insert((category.clone(), false, None, 0));
+        e.1 |= passed;
+        if !passed && e.2.is_none() {
+            e.2 = failure_reason;
+        }
+        e.3 += dur;
+    }
+
+    agg.into_iter()
+        .map(|(task_id, (category, passed, failure_reason, dur))| TaskOutcome {
+            task_id: uuid::Uuid::new_v4(),
+            description: format!("HIRO {category} task {task_id}"),
+            success: passed,
+            score: if passed { 1.0 } else { 0.0 },
+            failure_mode: if passed { None } else { failure_reason },
+            steps_taken: 0,
+            timestamp: chrono::Utc::now() - chrono::Duration::milliseconds(dur),
+        })
+        .collect()
+}
+
+/// Run one evolution cycle that learns from REAL recent outcomes. Prefers HIRO
+/// correctness; falls back to task_runs, then seeded calibration.
 async fn run_live_evolution_cycle(
     ollama: Arc<ollama::OllamaClient>,
     memory: Arc<MemoryManager>,
     events: Arc<EventStore>,
 ) -> Result<()> {
     let mut tracker = OutcomeTracker::new();
-    let real = outcomes_from_recent_runs(&memory, 40);
-    let source = if real.is_empty() {
-        for outcome in seeded_evolution_outcomes() {
-            tracker.record(outcome);
-        }
-        "seeded (no finished runs yet)"
+    let hiro = outcomes_from_hiro_attempts(&memory);
+    let (outcomes, source) = if !hiro.is_empty() {
+        (hiro, "real HIRO outcomes (correctness)")
     } else {
-        for outcome in real {
-            tracker.record(outcome);
+        let runs = outcomes_from_recent_runs(&memory, 40);
+        if runs.is_empty() {
+            (seeded_evolution_outcomes(), "seeded (no runs yet)")
+        } else {
+            (runs, "task_runs (did-finish)")
         }
-        "real task outcomes"
     };
+    for outcome in outcomes {
+        tracker.record(outcome);
+    }
 
     println!("Evolution cycle (live) — learning from {source}");
     println!(

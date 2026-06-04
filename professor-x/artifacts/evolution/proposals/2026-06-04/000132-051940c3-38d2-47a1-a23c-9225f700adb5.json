@@ -1,0 +1,25 @@
+{
+  "generated_at": "2026-06-04T00:01:32.170752351+00:00",
+  "artifact_id": "051940c3-38d2-47a1-a23c-9225f700adb5",
+  "node_id": null,
+  "status": "Proposed",
+  "target_component": "SystemPrompt",
+  "motivation": "A clearer system prompt will guide the agent to prioritize structured reasoning and iterative testing, improving success rates for complex tasks.",
+  "manifest": {
+    "evidence_cited": [],
+    "root_cause": "Ambiguous task objectives and lack of constraint enforcement lead to low success rate.",
+    "fix_description": "You are a rigorous AI research agent analyzing your own performance. Focus on the most impactful change. When proposing improvements, prioritize clarity, specificity, and alignment with task objectives. Use structured reasoning and iterative testing to validate hypotheses. Always define success criteria explicitly.",
+    "predicted_fixes": [
+      "Tasks requiring precise problem-solving or iterative testing (e.g., system optimization, multi-step reasoning)."
+    ],
+    "predicted_regressions": [
+      "Tasks relying on vague interpretations or subjective judgment (e.g., creative writing, ambiguous strategy games)."
+    ],
+    "verification_status": "Pending",
+    "verified_at": null
+  },
+  "verification": null,
+  "analysis": "",
+  "diff_hash": "b80982888b7c3d91d3030d5af4146a8a0db549fc6a581e689275078b98981b5b",
+  "diff_bytes": 316
+}

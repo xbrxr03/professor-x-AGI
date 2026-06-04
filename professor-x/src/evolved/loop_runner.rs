@@ -299,6 +299,19 @@ async fn verify_diff_inside_worktree(worktree: &Path, diff: &str) -> Result<Sand
     })
 }
 
+/// Whether a proposal's component can be applied autonomously by the Engineer.
+/// Mirrors the match in `apply_node_change_at`. ToolDescription, ProceduralMemory
+/// and Middleware are not yet autonomously mutable, so proposals targeting them
+/// are dropped before the tournament (they would otherwise win and no-op).
+fn is_autonomously_applyable(component: &HarnessComponent) -> bool {
+    matches!(
+        component,
+        HarnessComponent::SystemPrompt
+            | HarnessComponent::HarnessConfig
+            | HarnessComponent::SkillDefinition(_)
+    )
+}
+
 fn apply_node_change_at(root: &Path, node: &EvolutionNode) -> Result<bool> {
     match &node.target_component {
         HarnessComponent::SystemPrompt => {
@@ -730,11 +743,20 @@ impl EvolvedLoop {
         let proposals = self
             .researcher_propose_tournament(&failure_patterns, &candidates, success_rate)
             .await?;
+        // Keep only proposals whose component can actually be applied
+        // autonomously (SystemPrompt / HarnessConfig / SkillDefinition). A
+        // ToolDescription / ProceduralMemory / Middleware winner is a no-op —
+        // filtering before the tournament guarantees the winner is applyable.
+        let proposals: Vec<EvolutionNode> = proposals
+            .into_iter()
+            .filter(|n| is_autonomously_applyable(&n.target_component))
+            .collect();
         if proposals.is_empty() {
-            info!("evolved: Researcher produced no actionable proposals");
+            info!("evolved: no applyable proposals (all targeted non-mutable components)");
             return Ok(false);
         }
         let mut node = if proposals.len() == 1 {
+            info!("evolved: single applyable proposal — skipping tournament");
             proposals.into_iter().next().unwrap()
         } else {
             self.elo_tournament(proposals).await?
