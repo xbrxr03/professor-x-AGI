@@ -288,12 +288,30 @@ impl ToolExecutor {
             "shell.restricted" => {
                 let cmd = req_str(&action.params, "command")?;
                 debug!("shell.restricted: {cmd}");
-                let out = tokio::process::Command::new("sh")
+                // stdin = /dev/null so commands that read stdin (awk/sort/cat
+                // with no file arg) get immediate EOF instead of blocking
+                // forever — this hung a 14h baseline run on bare `awk '...'`.
+                // Hard 30s timeout so NO command can ever freeze the agent.
+                let child = tokio::process::Command::new("sh")
                     .arg("-c")
                     .arg(cmd)
                     .current_dir(&self.workspace_root)
-                    .output()
-                    .await?;
+                    .stdin(std::process::Stdio::null())
+                    .output();
+                let out = match tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    child,
+                )
+                .await
+                {
+                    Ok(result) => result?,
+                    Err(_) => {
+                        anyhow::bail!(
+                            "shell command timed out after 30s (did it wait on stdin or block?): {}",
+                            truncate_text(cmd, 200)
+                        );
+                    }
+                };
                 let stdout = String::from_utf8_lossy(&out.stdout).to_string();
                 let stderr = String::from_utf8_lossy(&out.stderr).to_string();
                 let artifact_path = self.write_command_artifact(
