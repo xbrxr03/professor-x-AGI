@@ -670,7 +670,15 @@ async fn git_worktree_clean_at(repo_root: &Path) -> Result<bool> {
             String::from_utf8_lossy(&out.stderr)
         );
     }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().is_empty())
+    // Only MODIFICATIONS TO TRACKED files block autonomous mutation — they'd
+    // corrupt the commit. Untracked files ("??") are almost always stray
+    // outputs a benchmark task wrote into the workspace; they are harmless to
+    // the mutation and must not block it. Count only non-"??" status lines.
+    let dirty_tracked = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("??"))
+        .any(|line| !line.trim().is_empty());
+    Ok(!dirty_tracked)
 }
 
 async fn cleanup_worktree(repo_root: &Path, worktree: &Path) -> Result<()> {
