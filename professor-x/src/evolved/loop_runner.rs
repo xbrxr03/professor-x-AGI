@@ -317,25 +317,77 @@ fn apply_node_change_at(root: &Path, node: &EvolutionNode) -> Result<bool> {
         HarnessComponent::SystemPrompt => {
             let path = component_relative_path(root, node)
                 .unwrap_or_else(|| PathBuf::from("personas/professor_x.md"));
-            write_workspace_file(root, &path, &sanitize_generated_content(&node.diff))?;
+            let content = sanitize_generated_content(&node.diff);
+            // Identity-preservation gate. The first autonomous evolution replaced
+            // the entire persona (41 lines → 1) and cargo-check happily passed,
+            // because compilation says nothing about selfhood. ICS is meant to
+            // protect identity but ran only at round boundaries — too late. So
+            // we gate at mutation time: a persona rewrite must keep most of the
+            // file and retain the identity anchor, or it is refused.
+            preservation_guard(root, &path, &content, 0.6, &["Professor X"])?;
+            write_workspace_file(root, &path, &content)?;
             Ok(true)
         }
         HarnessComponent::HarnessConfig => {
             let path = component_relative_path(root, node)
                 .unwrap_or_else(|| PathBuf::from("config/hardware.toml"));
-            write_workspace_file(root, &path, &sanitize_generated_content(&node.diff))?;
+            let content = sanitize_generated_content(&node.diff);
+            preservation_guard(root, &path, &content, 0.5, &[])?;
+            write_workspace_file(root, &path, &content)?;
             Ok(true)
         }
         HarnessComponent::SkillDefinition(name) => {
             let path = component_relative_path(root, node)
                 .unwrap_or_else(|| PathBuf::from("skills").join(format!("{name}.md")));
-            write_workspace_file(root, &path, &sanitize_generated_content(&node.diff))?;
+            let content = sanitize_generated_content(&node.diff);
+            // Existing skills may be revised but not gutted; new skills are free.
+            preservation_guard(root, &path, &content, 0.4, &[])?;
+            write_workspace_file(root, &path, &content)?;
             Ok(true)
         }
         HarnessComponent::ToolDescription(_) => Ok(false),
         HarnessComponent::ProceduralMemory => Ok(false),
         HarnessComponent::Middleware => Ok(false),
     }
+}
+
+/// Refuse a destructive overwrite. When the target file already exists, the
+/// replacement must keep at least `min_ratio` of its length and retain every
+/// required anchor substring. New files (no existing target) are unconstrained.
+/// This is the active identity/content gate the first evolution proved necessary.
+fn preservation_guard(
+    root: &Path,
+    relative: &Path,
+    new_content: &str,
+    min_ratio: f32,
+    required_anchors: &[&str],
+) -> Result<()> {
+    let path = root.join(relative);
+    let Ok(existing) = std::fs::read_to_string(&path) else {
+        return Ok(()); // new file — nothing to preserve
+    };
+    let old_len = existing.trim().len().max(1);
+    let new_len = new_content.trim().len();
+    if (new_len as f32) < min_ratio * (old_len as f32) {
+        anyhow::bail!(
+            "preservation guard: replacement for {} is {} chars vs existing {} ({:.0}% < {:.0}% floor) — refusing to gut the file",
+            relative.display(),
+            new_len,
+            old_len,
+            100.0 * new_len as f32 / old_len as f32,
+            100.0 * min_ratio,
+        );
+    }
+    for anchor in required_anchors {
+        if !new_content.contains(anchor) {
+            anyhow::bail!(
+                "preservation guard: replacement for {} drops required identity anchor '{}' — refusing to erase identity",
+                relative.display(),
+                anchor,
+            );
+        }
+    }
+    Ok(())
 }
 
 fn write_workspace_file(root: &Path, relative: &Path, content: &str) -> Result<()> {
