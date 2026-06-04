@@ -195,6 +195,8 @@ struct CliArgs {
     /// Continuous evolution mining: evolve → measure → keep-if-better → rollback,
     /// repeated. Some(0) = unbounded; Some(n) = n blocks.
     evolve_forever: Option<u32>,
+    /// Run up to N of the agent's own self-authored tests and score them.
+    run_self_tests: Option<usize>,
     /// Phase B truth gate one-shot: scan brain/, artifacts/, ops/daily/ against
     /// the artifact schemas and report. Exit 1 on any failure.
     validate_artifacts: bool,
@@ -322,6 +324,7 @@ fn parse_args() -> CliArgs {
         evolution_cycle: false,
         evolve_live: false,
         evolve_forever: None,
+        run_self_tests: None,
         validate_artifacts: false,
     };
     let mut i = 1;
@@ -765,6 +768,15 @@ fn parse_args() -> CliArgs {
                     .and_then(|n| n.parse::<u32>().ok());
                 let has_value = iters.is_some();
                 cli.evolve_forever = Some(iters.unwrap_or(0)); // 0 = unbounded
+                i += if has_value { 2 } else { 1 };
+            }
+            "--run-self-tests" | "--self-tests" => {
+                let n = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .and_then(|v| v.parse::<usize>().ok());
+                let has_value = n.is_some();
+                cli.run_self_tests = Some(n.unwrap_or(10));
                 i += if has_value { 2 } else { 1 };
             }
             "--evolution-cycle" => {
@@ -1359,6 +1371,19 @@ async fn main() -> Result<()> {
             cancel.clone(),
             iters,
             15, // tasks per measurement block — fast iteration; raise for precision
+        )
+        .await;
+    }
+
+    if let Some(limit) = cli.run_self_tests {
+        return run_self_authored_tests(
+            Arc::clone(&ollama),
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            cancel.clone(),
+            limit,
         )
         .await;
     }
@@ -6413,6 +6438,110 @@ async fn measure_block(
         .run_benchmark_labeled_with_limit(round, Some("evolve_forever"), Some(limit))
         .await?;
     Ok(result.pass_at_3)
+}
+
+/// Run the agent's own self-authored tests — the agent-authored benchmark.
+/// Each test (description + the agent's own pass criterion) is run through the
+/// ReAct loop and judged by an LLM-as-evaluator against that criterion. The
+/// pass rate is the signal for the central invention: does the agent's
+/// self-diagnosis of what it should be able to do track real capability?
+#[allow(clippy::too_many_arguments)]
+async fn run_self_authored_tests(
+    ollama: Arc<ollama::OllamaClient>,
+    registry: Arc<std::sync::RwLock<ToolRegistry>>,
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    cancel: CancellationToken,
+    limit: usize,
+) -> Result<()> {
+    let tests = memory.self_authored_tests.pending_for_round(limit)?;
+    if tests.is_empty() {
+        println!("No self-authored tests yet — they accrue as Professor X evolves.");
+        return Ok(());
+    }
+    println!("Running {} self-authored test(s) — the agent-authored benchmark\n", tests.len());
+
+    let mut passed = 0usize;
+    for test in &tests {
+        let Some(id) = test.id else { continue };
+        let react = ReactLoop::new(
+            Arc::clone(&ollama),
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            cancel.clone(),
+        )
+        .with_events(Arc::clone(&events));
+        let mut task = TaskNode::new(test.description.clone(), TaskType::Research, 50);
+        task.max_attempts = 2;
+        let _ = react.run(&mut task).await;
+
+        let evidence = task.recent_steps_text(4);
+        let pass = judge_self_test(&ollama, &test.description, &test.evaluator, &evidence).await;
+        let _ = memory.self_authored_tests.record_outcome(id, pass);
+        if pass {
+            passed += 1;
+        }
+        println!(
+            "  test #{id} [{}]  {}  — {}",
+            test.category,
+            if pass { "PASS" } else { "FAIL" },
+            test.description.chars().take(70).collect::<String>()
+        );
+    }
+
+    let rate = passed as f32 / tests.len() as f32;
+    println!(
+        "\nself-authored: {passed}/{} passed ({:.0}%) this run",
+        tests.len(),
+        rate * 100.0
+    );
+    if let Some(overall) = memory.self_authored_tests.mean_pass_rate()? {
+        println!("mean pass-rate across all self-authored tests: {overall:.2}");
+    }
+    println!(
+        "(the thesis test: does this track HIRO pass@3 over rounds? — see --consciousness-report)"
+    );
+    Ok(())
+}
+
+/// LLM-as-judge: given the test goal, the agent's own pass criterion, and the
+/// evidence from its attempt, decide PASS/FAIL.
+async fn judge_self_test(
+    ollama: &Arc<ollama::OllamaClient>,
+    description: &str,
+    evaluator: &str,
+    evidence: &str,
+) -> bool {
+    let prompt = format!(
+        "Judge whether an agent passed a test.\n\n\
+         Test goal: {description}\n\
+         Pass criterion: {evaluator}\n\n\
+         What the agent actually did (its last steps and observations):\n{}\n\n\
+         Did the agent satisfy the pass criterion? Answer with exactly one word: PASS or FAIL.",
+        evidence.chars().take(1500).collect::<String>(),
+    );
+    match ollama
+        .generate(
+            &prompt,
+            Some("You are a strict, fair test evaluator. Answer PASS or FAIL only."),
+            Some(ollama::ModelOptions {
+                temperature: Some(0.0),
+                num_ctx: Some(4096),
+                top_p: None,
+                stop: None,
+                think: Some(false),
+            }),
+        )
+        .await
+    {
+        Ok(resp) => {
+            let (_, answer) = resp.split_thinking();
+            answer.trim().to_uppercase().starts_with("PASS")
+        }
+        Err(_) => false,
+    }
 }
 
 /// Next unused HIRO round number (max recorded + 1, or 0).
