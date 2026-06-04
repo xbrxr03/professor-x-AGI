@@ -996,11 +996,18 @@ impl EvolvedLoop {
         let mut proposals = Vec::with_capacity(N);
 
         for i in 0..N {
-            // Each call adds a diversity instruction so proposals diverge
+            // Steer each proposal toward a DIFFERENT applyable component. Without
+            // this the Researcher fixates on ToolDescription (not applyable), and
+            // every proposal gets filtered, yielding no change. Assigning a
+            // distinct applyable component per proposal guarantees the tournament
+            // always has real, applyable candidates.
             let diversity_hint = match i {
-                0 => "Focus on the most impactful change.",
-                1 => "Propose a different target component than you might usually choose.",
-                2 => "Propose a minimal, surgical change — smallest diff that could fix the failure.",
+                0 => "Target COMPONENT: SystemPrompt. Improve the system prompt that guides every task — \
+                      add concrete guidance that addresses the failure patterns above.",
+                1 => "Target COMPONENT: SkillDefinition. Define a NEW reusable skill (a markdown SKILL file) \
+                      that captures the correct procedure for the failing task class.",
+                2 => "Target COMPONENT: HarnessConfig. Adjust a config setting (e.g. context budget, max steps) \
+                      that would reduce the failure patterns above.",
                 _ => "",
             };
             match self
@@ -1203,16 +1210,16 @@ impl EvolvedLoop {
              Prior evolution nodes (UCB1 sampled):\n{candidates_text}\n\n\
              Knowledge base:\n{cognition_context}\n\
              {diversity_section}\n\
-             Propose ONE specific harness improvement. The improvement must target one of:\n\
+             Propose ONE specific harness improvement. It MUST target one of these\n\
+             three applyable components (any other component cannot be applied and\n\
+             will be discarded):\n\
              - SystemPrompt: the system prompt injected before every task\n\
-             - ToolDescription(name): a tool's description in the registry\n\
-             - SkillDefinition(name): a skill in skills/\n\
+             - SkillDefinition(name): a reusable skill in skills/ (new or revised)\n\
              - HarnessConfig: the config/hardware.toml settings\n\n\
-             Do NOT propose changes to:\n\
-             - policyd gate logic (requires human approval)\n\
-             - memd core internals (requires human approval)\n\n\
+             Do NOT propose ToolDescription changes (not applyable yet), nor changes\n\
+             to policyd gate logic or memd internals (require human approval).\n\n\
              Respond in this exact format:\n\
-             COMPONENT: <SystemPrompt|ToolDescription:<name>|SkillDefinition:<name>|HarnessConfig>\n\
+             COMPONENT: <SystemPrompt|SkillDefinition:<name>|HarnessConfig>\n\
              MOTIVATION: <one sentence why this change will help>\n\
              ROOT_CAUSE: <which failure mode this addresses>\n\
              FIX:\n\
