@@ -1571,7 +1571,8 @@ Complete tasks precisely and efficiently using the available tools.\n\n\
 - On tool failure: read the full error, identify root cause, make one targeted correction.\n\
 - After 3 consecutive failures on the same subproblem: use fail{} — do not loop.\n\
 - On policy denied: you used a tool outside your permission scope; choose a lower-risk alternative.\n\
-- On wrong output: acknowledge in Thought, change approach, do not repeat the identical action.\n\n\
+- On wrong output: acknowledge in Thought, change approach, do not repeat the identical action.\n\
+- When stuck or unsure if you are making progress: call meta.observe to look at your own recent behavior, then decide differently based on what you see yourself doing.\n\n\
 ## Affect context\n\
 If a <affect> tag appears in context, use it: negative valence signals accumulated failures — \
 be more conservative and diagnostic; positive valence signals momentum — continue the current approach.\n\n\
@@ -1603,6 +1604,7 @@ const TOOLS_DESCRIPTION: &str = "Available tools:
 - vision.analyze   {\"path\": \"<image_path>\", \"prompt\": \"<question>\"} — describe or reason about an image; also accepts {\"url\": \"<image_url>\"}
 - shell.restricted {\"command\": \"<cmd>\"} — run a shell command (sandboxed)
 - patch.apply      {\"mode\": \"check|apply\", \"patch\": \"<unified diff>\"} — check or apply a reviewable git-style patch
+- meta.observe     {} — look at YOUR OWN recent processing (thoughts, tool calls, results) and notice patterns: are you looping, stalling, making progress?
 - memory.read      {\"query\": \"<q>\", \"layer\": \"episodic|semantic|procedural\"} — search memory
 - memory.write     {\"content\": \"<text>\", \"layer\": \"semantic\", \"source\": \"<src>\"} — store knowledge
 - git.commit       {\"message\": \"<msg>\"} — commit current changes

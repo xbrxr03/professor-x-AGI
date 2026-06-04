@@ -405,6 +405,75 @@ impl ToolExecutor {
                 };
                 Ok(ToolDispatch::output(out))
             }
+            "meta.observe" => {
+                // Recursive self-perception. The agent reads its OWN recent
+                // processing stream and is asked to form a higher-order
+                // representation of what it is doing — the strange loop made
+                // literal (Hofstadter; Higher-Order Theory; Global Workspace).
+                // The event stream is the system's own broadcast; this tool is
+                // the spotlight reading it back into the loop.
+                let mem = self
+                    .memory
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("meta.observe requires memory"))?;
+                let store = crate::memd::events::EventStore::new(Arc::clone(&mem.db));
+                let recent = store.tail(24).unwrap_or_default();
+                let trace: Vec<&crate::memd::events::AgentEvent> = recent
+                    .iter()
+                    .filter(|e| {
+                        matches!(
+                            e.event_type.as_str(),
+                            "llm.response"
+                                | "tool.started"
+                                | "tool.succeeded"
+                                | "tool.failed"
+                                | "react.duplicate_action"
+                                | "react.circuit_breaker"
+                                | "policy.denied"
+                        )
+                    })
+                    .collect();
+                let tail: Vec<&&crate::memd::events::AgentEvent> =
+                    trace.iter().rev().take(12).rev().collect();
+                if tail.is_empty() {
+                    return Ok(ToolDispatch::output(
+                        "No processing to observe yet — this is your first action.".to_string(),
+                    ));
+                }
+                // A light computed signal: which tool have you leaned on most?
+                let mut counts: std::collections::HashMap<String, u32> =
+                    std::collections::HashMap::new();
+                for e in &tail {
+                    if e.event_type == "tool.started" {
+                        let tool = e
+                            .summary
+                            .split('\'')
+                            .nth(1)
+                            .unwrap_or("?")
+                            .to_string();
+                        *counts.entry(tool).or_insert(0) += 1;
+                    }
+                }
+                let mut top: Vec<_> = counts.into_iter().collect();
+                top.sort_by(|a, b| b.1.cmp(&a.1));
+                let pattern = top
+                    .first()
+                    .filter(|(_, n)| *n >= 3)
+                    .map(|(t, n)| format!("\nYou have called '{t}' {n} times recently — are you making progress or repeating yourself?"))
+                    .unwrap_or_default();
+
+                let lines: Vec<String> = tail
+                    .iter()
+                    .map(|e| format!("  {}: {}", e.event_type, truncate_text(&e.summary, 110)))
+                    .collect();
+                Ok(ToolDispatch::output(format!(
+                    "This is YOUR OWN recent processing. Step back and observe yourself: \
+                     what are you actually doing, is it working, are you looping or \
+                     stalling, and what should you do differently?\n{}{}",
+                    lines.join("\n"),
+                    pattern
+                )))
+            }
             "vision.analyze" => {
                 // Multimodal perception — describe or reason about an image file.
                 // Routes to the primary model (llama4:scout supports vision natively).
@@ -902,6 +971,7 @@ fn is_known_builtin_tool(tool_name: &str) -> bool {
             | "fs.list"
             | "fs.write"
             | "shell.restricted"
+            | "meta.observe"
             | "vision.analyze"
             | "memory.read"
             | "memory.write"
