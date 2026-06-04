@@ -192,6 +192,9 @@ struct CliArgs {
     evolution_cycle: bool,
     /// Run one evolution cycle learning from REAL recent task outcomes.
     evolve_live: bool,
+    /// Continuous evolution mining: evolve → measure → keep-if-better → rollback,
+    /// repeated. Some(0) = unbounded; Some(n) = n blocks.
+    evolve_forever: Option<u32>,
     /// Phase B truth gate one-shot: scan brain/, artifacts/, ops/daily/ against
     /// the artifact schemas and report. Exit 1 on any failure.
     validate_artifacts: bool,
@@ -318,6 +321,7 @@ fn parse_args() -> CliArgs {
         operator_commit_smoke: false,
         evolution_cycle: false,
         evolve_live: false,
+        evolve_forever: None,
         validate_artifacts: false,
     };
     let mut i = 1;
@@ -753,6 +757,15 @@ fn parse_args() -> CliArgs {
             "--evolve" | "--evolve-live" => {
                 cli.evolve_live = true;
                 i += 1;
+            }
+            "--evolve-forever" | "--mine" => {
+                let iters = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .and_then(|n| n.parse::<u32>().ok());
+                let has_value = iters.is_some();
+                cli.evolve_forever = Some(iters.unwrap_or(0)); // 0 = unbounded
+                i += if has_value { 2 } else { 1 };
             }
             "--evolution-cycle" => {
                 cli.evolution_cycle = true;
@@ -1332,6 +1345,20 @@ async fn main() -> Result<()> {
             Arc::clone(&ollama),
             Arc::clone(&memory),
             Arc::clone(&events),
+        )
+        .await;
+    }
+
+    if let Some(iters) = cli.evolve_forever {
+        return run_evolve_forever(
+            Arc::clone(&ollama),
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            cancel.clone(),
+            iters,
+            15, // tasks per measurement block — fast iteration; raise for precision
         )
         .await;
     }
@@ -6274,6 +6301,142 @@ async fn run_live_evolution_cycle(
         if applied { "APPLIED a harness change" } else { "no change this cycle" }
     );
     println!("  watch: ./prof-x-stream.py     artifacts: find artifacts/evolution -type f | sort");
+    Ok(())
+}
+
+/// Continuous evolution mining (the "inference-mining" loop). Each block:
+///   1. evolve from real outcomes (may commit a harness change)
+///   2. if a change committed, MEASURE it on a fixed task subset
+///   3. KEEP if pass@3 beats the best so far, else ROLL BACK (git reset)
+/// Runs `max_iters` blocks (0 = until interrupted). The harness only keeps
+/// changes that demonstrably help — selection pressure for self-improvement.
+#[allow(clippy::too_many_arguments)]
+async fn run_evolve_forever(
+    ollama: Arc<ollama::OllamaClient>,
+    registry: Arc<std::sync::RwLock<ToolRegistry>>,
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    cancel: CancellationToken,
+    max_iters: u32,
+    measure_limit: usize,
+) -> Result<()> {
+    let repo_root = default_repo_root();
+    let mut round = next_hiro_round(&memory);
+
+    println!("evolve-forever: establishing baseline on {measure_limit} tasks (frozen harness)...");
+    let mut best = measure_block(
+        &ollama, &registry, &policy, &memory, &events, &cancel, round, measure_limit,
+    )
+    .await?;
+    round += 1;
+    println!("evolve-forever: baseline pass@3 = {best:.3}\n");
+
+    let mut iter = 0u32;
+    let mut kept = 0u32;
+    loop {
+        iter += 1;
+        if max_iters != 0 && iter > max_iters {
+            break;
+        }
+        if cancel.is_cancelled() {
+            println!("evolve-forever: cancelled.");
+            break;
+        }
+        println!("── mining block {iter} ──");
+
+        let head_before = git_head(&repo_root)?;
+        // 1. evolve (commits a verified, identity-safe change if one wins)
+        run_live_evolution_cycle(Arc::clone(&ollama), Arc::clone(&memory), Arc::clone(&events))
+            .await?;
+        let head_after = git_head(&repo_root)?;
+        if head_after == head_before {
+            println!("  no change applied this block — continuing\n");
+            continue;
+        }
+        println!("  applied {head_after}; measuring on {measure_limit} tasks...");
+
+        // 2. measure
+        let p = measure_block(
+            &ollama, &registry, &policy, &memory, &events, &cancel, round, measure_limit,
+        )
+        .await?;
+        round += 1;
+
+        // 3. keep or roll back
+        let verdict = if p > best + 0.001 {
+            best = p;
+            kept += 1;
+            "KEEP ✓"
+        } else {
+            git_reset_hard(&repo_root, &head_before)?;
+            "ROLLBACK ✗"
+        };
+        println!("  block {iter}: pass@3={p:.3}  best={best:.3}  → {verdict}\n");
+        let _ = events.append(
+            None,
+            None,
+            "evolve.forever.block",
+            format!("block {iter}: pass@3={p:.3} best={best:.3} {verdict}"),
+            serde_json::json!({"block": iter, "pass_at_3": p, "best": best, "verdict": verdict}),
+        );
+    }
+
+    println!(
+        "evolve-forever stopped after {} block(s); {kept} change(s) kept. best pass@3 = {best:.3}",
+        iter.saturating_sub(1)
+    );
+    Ok(())
+}
+
+/// Run one measurement block: a HIRO round limited to `limit` tasks. Returns pass@3.
+#[allow(clippy::too_many_arguments)]
+async fn measure_block(
+    ollama: &Arc<ollama::OllamaClient>,
+    registry: &Arc<std::sync::RwLock<ToolRegistry>>,
+    policy: &Arc<PolicyEngine>,
+    memory: &Arc<MemoryManager>,
+    events: &Arc<EventStore>,
+    cancel: &CancellationToken,
+    round: u32,
+    limit: usize,
+) -> Result<f32> {
+    let runner = HiroRunner::new(
+        Arc::clone(ollama),
+        Arc::clone(registry),
+        Arc::clone(policy),
+        Arc::clone(memory),
+        cancel.clone(),
+    )
+    .with_events(Arc::clone(events));
+    let result = runner
+        .run_benchmark_labeled_with_limit(round, Some("evolve_forever"), Some(limit))
+        .await?;
+    Ok(result.pass_at_3)
+}
+
+/// Next unused HIRO round number (max recorded + 1, or 0).
+fn next_hiro_round(memory: &Arc<MemoryManager>) -> u32 {
+    let db = memory.db.lock().unwrap();
+    let max: Option<i64> = db
+        .query_row("SELECT MAX(round) FROM hiro_rounds", [], |r| r.get(0))
+        .ok()
+        .flatten();
+    max.map(|m| (m + 1) as u32).unwrap_or(0)
+}
+
+/// Roll the harness back to a prior commit (discards a rejected evolution).
+fn git_reset_hard(repo_root: &std::path::Path, commit: &str) -> Result<()> {
+    let out = std::process::Command::new("git")
+        .args(["reset", "--hard", commit])
+        .current_dir(repo_root)
+        .output()?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "git reset --hard {commit} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
     Ok(())
 }
 
