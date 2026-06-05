@@ -431,6 +431,16 @@ impl ReactLoop {
         // Cognition context: relevant items from cognition base
         let cognition_context = self.retrieve_cognition(&task.description);
 
+        // Module-engagement signals for phi, captured BEFORE binding. The
+        // episodic/cognition modules are "engaged" when recall surfaced
+        // something relevant to THIS task — not whether it survived binding
+        // (binding suppression made the cognition flag a constant 0, which is a
+        // measurement bug: a module that never registers carries no integrated
+        // information). These vary task-to-task with what memory actually
+        // matched, which is the faithful integration signal.
+        let episodic_engaged = !ice_examples.is_empty();
+        let cognition_engaged = !cognition_context.is_empty();
+
         // Binding: keep only context that resonates ACROSS modalities. A memory
         // echoed in both episodic and cognition is grounded; one standing alone
         // is suppressed. Reduces confabulation, raises integration. Best-effort —
@@ -627,7 +637,7 @@ impl ReactLoop {
                     // Seeds 2 + 4: record causal trace and computational vitals
                     self.record_body_and_causal(
                         task, &category, num_ctx, true, 1.0,
-                        !ice_examples.is_empty(), !cognition_context.is_empty(),
+                        episodic_engaged, cognition_engaged,
                     );
 
                     return Ok(TaskOutcome {
@@ -738,7 +748,7 @@ impl ReactLoop {
         // Seeds 2 + 4: record causal trace and computational vitals
         self.record_body_and_causal(
             task, &category, num_ctx, false, 0.0,
-            !ice_examples.is_empty(), !cognition_context.is_empty(),
+            episodic_engaged, cognition_engaged,
         );
 
         Ok(TaskOutcome {
@@ -861,15 +871,22 @@ impl ReactLoop {
                 .steps
                 .iter()
                 .any(|s| s.action.tool_name.starts_with("memory."));
+            // Affect/body are continuous interoceptive signals: in a living
+            // system they are always present, so "non-zero" (the old 0.05/0.35
+            // thresholds) made affect a constant 1 and body a constant 0 — both
+            // carry zero integrated information. The faithful flag is SALIENCE:
+            // the module registers when its signal is ELEVATED, which varies
+            // task-to-task with cognitive load. Thresholds at the signals'
+            // mid-range, not tuned to move phi — reported faithfully either way.
             let affect_active = self
                 .affect
                 .lock()
-                .map(|a| a.valence.abs() > 0.05 || a.arousal > 0.05)
+                .map(|a| a.valence.abs() > 0.2 || a.arousal > 0.2)
                 .unwrap_or(false);
             let body_active = self
                 .body_prediction
                 .lock()
-                .map(|b| b.stress() > 0.35)
+                .map(|b| b.stress() > 0.2)
                 .unwrap_or(false);
             let causal_active = self
                 .memory
@@ -877,14 +894,21 @@ impl ReactLoop {
                 .extract_patterns(Some(&category_name), 3, 0.6, 10_000)
                 .map(|p| !p.is_empty())
                 .unwrap_or(false);
-            let self_model_active = self
-                .memory
-                .self_model
-                .latest()
-                .ok()
-                .flatten()
-                .map(|s| s.round > 0)
-                .unwrap_or(false);
+            // Self-model is "active" for a decision when the agent actually
+            // ENGAGED in self-reflection this task — used meta.observe (looks at
+            // its own processing) or the mirror critic (a second self reviewing
+            // the first). The old flag (`self_model exists at all`) was constant
+            // -true once any self-model existed, which collapses phi: total
+            // correlation needs a module to VARY to contribute integration. A
+            // self-model that is always nominally "on" but never differentially
+            // engaged carries no integrated information — measuring engagement,
+            // not mere existence, is the faithful signal.
+            let self_model_active = task.steps.iter().any(|s| {
+                matches!(
+                    s.action.tool_name.as_str(),
+                    "meta.observe" | "agent.critic" | "mirror.review"
+                )
+            });
 
             let activation = ModuleActivation {
                 episodic: ice_hit,
