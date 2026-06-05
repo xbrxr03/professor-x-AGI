@@ -350,9 +350,12 @@ impl ReactLoop {
                     task.outcome_score = Some(1.0);
 
                     self.write_episodic(task, true, predicted_success).await;
-                    // Self-distillation corpus: a verified-correct trajectory is
-                    // a lesson the model can internalize (harness → weights).
-                    self.collect_trajectory(task);
+                    // NOTE: trajectory collection for the self-distillation corpus
+                    // is NOT done here. The agent declaring `finish` is not proof
+                    // the answer is correct. Collection is judge-gated by the
+                    // caller (HIRO post-evaluate, --run-self-tests post-judge) via
+                    // ReactLoop::collect_trajectory, so the corpus holds only
+                    // verified-correct lessons, not merely agent-finished ones.
                     let transcript_path =
                         self.record_transcript(task, "succeeded", "task completed successfully");
                     let _ = task_runs.finished(task, None, transcript_path.as_deref());
@@ -1397,7 +1400,12 @@ impl ReactLoop {
     /// lesson it can internalize via overnight QLoRA (harness → weights). Stores
     /// the metacognitive moves (thoughts) too, not just answers — distilling
     /// THIS harness distills disposition, not just task completion.
-    fn collect_trajectory(&self, task: &TaskNode) {
+    /// Append a VERIFIED-correct trajectory to the self-distillation corpus.
+    /// Caller-gated: only invoke this once an independent verdict (HIRO
+    /// evaluator, or the LLM judge in --run-self-tests) has confirmed the task
+    /// was actually solved correctly — not merely that the agent declared
+    /// `finish`. No `self` state is used, so it is an associated function.
+    pub(crate) fn collect_trajectory(task: &TaskNode) {
         if task.steps.is_empty() {
             return;
         }

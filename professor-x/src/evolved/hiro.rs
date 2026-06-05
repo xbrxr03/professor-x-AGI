@@ -615,6 +615,12 @@ impl HiroRunner {
         // H15 — Free Energy Delta: flush (predicted, actual) pairs to DB
         flush_fed_to_memory(&react, &self.memory, round, &self.run_id);
         let evaluation = evaluate_task(hiro_task, &task, outcome.success);
+        // Self-distillation corpus: collect ONLY judge-verified-correct
+        // trajectories. The HIRO evaluator is the verdict — agent-finish alone
+        // (outcome.success) is not proof the answer was right.
+        if evaluation.passed {
+            crate::agentd::react::ReactLoop::collect_trajectory(&task);
+        }
         let attempts = summarize_attempts(
             hiro_task,
             &task,

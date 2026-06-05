@@ -6717,6 +6717,9 @@ async fn run_self_authored_tests(
         let _ = memory.self_authored_tests.record_outcome(id, pass);
         if pass {
             passed += 1;
+            // Judge-gated self-distillation corpus: only the LLM-judge-verified
+            // trajectory becomes a lesson, never a merely agent-finished run.
+            ReactLoop::collect_trajectory(&task);
         }
         println!(
             "  test #{id} [{}]  {}  — {}",
