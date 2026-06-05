@@ -1,0 +1,15 @@
+# Serve the distilled Professor X model via Ollama.
+# After train_qlora.py writes distill/out/gguf/, copy this to distill/Modelfile,
+# point ADAPTER/FROM at the produced file, then:
+#   ollama create professor-x-distilled -f distill/Modelfile
+#
+# Option A — base + LoRA adapter (smaller artifact):
+FROM qwen3:8b-q4_K_M
+ADAPTER ./out/gguf/adapter.gguf
+
+# Option B — merged GGUF (replace the two lines above with):
+# FROM ./out/gguf/professor-x-distilled.Q4_K_M.gguf
+
+PARAMETER temperature 0.3
+PARAMETER num_ctx 16384
+# Thinking is controlled per-request by the harness (top-level `think` field).
