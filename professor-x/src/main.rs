@@ -197,6 +197,10 @@ struct CliArgs {
     evolve_forever: Option<u32>,
     /// Run up to N of the agent's own self-authored tests and score them.
     run_self_tests: Option<usize>,
+    /// Author N diverse self-curriculum tasks (across HIRO categories), grounded
+    /// in the real tool set, and store them for --run-self-tests to execute.
+    /// Breaks the distillation-corpus ceiling of the fixed 60-task benchmark.
+    generate_curriculum: Option<usize>,
     /// Phase B truth gate one-shot: scan brain/, artifacts/, ops/daily/ against
     /// the artifact schemas and report. Exit 1 on any failure.
     validate_artifacts: bool,
@@ -325,6 +329,7 @@ fn parse_args() -> CliArgs {
         evolve_live: false,
         evolve_forever: None,
         run_self_tests: None,
+        generate_curriculum: None,
         validate_artifacts: false,
     };
     let mut i = 1;
@@ -777,6 +782,15 @@ fn parse_args() -> CliArgs {
                     .and_then(|v| v.parse::<usize>().ok());
                 let has_value = n.is_some();
                 cli.run_self_tests = Some(n.unwrap_or(10));
+                i += if has_value { 2 } else { 1 };
+            }
+            "--generate-curriculum" | "--curriculum" => {
+                let n = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .and_then(|v| v.parse::<usize>().ok());
+                let has_value = n.is_some();
+                cli.generate_curriculum = Some(n.unwrap_or(20));
                 i += if has_value { 2 } else { 1 };
             }
             "--evolution-cycle" => {
@@ -1371,6 +1385,16 @@ async fn main() -> Result<()> {
             cancel.clone(),
             iters,
             15, // tasks per measurement block — fast iteration; raise for precision
+        )
+        .await;
+    }
+
+    if let Some(n) = cli.generate_curriculum {
+        return generate_curriculum(
+            Arc::clone(&ollama),
+            Arc::clone(&registry),
+            Arc::clone(&memory),
+            n,
         )
         .await;
     }
@@ -6446,6 +6470,217 @@ async fn measure_block(
 /// pass rate is the signal for the central invention: does the agent's
 /// self-diagnosis of what it should be able to do track real capability?
 #[allow(clippy::too_many_arguments)]
+/// Author a diverse self-curriculum: prompt the model to invent N concrete
+/// tasks across the HIRO-style categories, grounded in the REAL tool set, each
+/// with an objective evaluator. Stored in self_authored_tests for
+/// --run-self-tests to execute (verified-correct runs feed the distillation
+/// corpus). This is the fix for the corpus-diversity ceiling: the fixed 60-task
+/// benchmark caps unique trajectories at ~40, but a self-authored curriculum is
+/// unbounded — Professor X writes its own lessons (DMN / self-authored-tests
+/// seeds), then learns from the ones it can verifiably solve.
+async fn generate_curriculum(
+    ollama: Arc<ollama::OllamaClient>,
+    registry: Arc<std::sync::RwLock<ToolRegistry>>,
+    memory: Arc<MemoryManager>,
+    target: usize,
+) -> Result<()> {
+    // Ground generation in the actual tools, so tasks are solvable here and not
+    // hallucinated against capabilities the agent lacks.
+    let tool_lines: Vec<String> = {
+        let reg = registry.read().unwrap();
+        reg.list()
+            .iter()
+            .filter(|m| m.risk_score < 80) // skip the most dangerous tools as task targets
+            .map(|m| {
+                format!(
+                    "- {}: {}",
+                    m.name,
+                    m.description.chars().take(90).collect::<String>()
+                )
+            })
+            .collect()
+    };
+    let tool_catalog = tool_lines.join("\n");
+
+    // Dedup against what already exists (normalized).
+    let norm = |s: &str| s.trim().to_lowercase().split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut existing: std::collections::HashSet<String> = memory
+        .self_authored_tests
+        .all()?
+        .iter()
+        .map(|t| norm(&t.description))
+        .collect();
+
+    let categories = ["tool_use", "planning", "self_correction", "reasoning"];
+    println!(
+        "Authoring up to {target} self-curriculum tasks across {} categories \
+         (grounded in {} tools)...\n",
+        categories.len(),
+        tool_lines.len()
+    );
+
+    // Balance: don't let one batch of a single category dominate the bank.
+    let per_cat_cap = (target + categories.len() - 1) / categories.len() + 1;
+    let mut inserted = 0usize;
+    let mut by_cat: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let mut round = 0usize;
+    // Cap attempts so a stubborn model can't loop forever.
+    while inserted < target && round < target * 2 + 8 {
+        round += 1;
+        let category = categories[round % categories.len()];
+        if by_cat.get(category).copied().unwrap_or(0) >= per_cat_cap {
+            continue; // this category is full; rotate to the next
+        }
+        let prompt = format!(
+            "You are designing a training curriculum for an autonomous agent that \
+             runs on a single Linux machine. Author {batch} DISTINCT, concrete tasks \
+             of category `{category}` that the agent can complete using ONLY these tools:\n\n\
+             {tool_catalog}\n\n\
+             Category meaning:\n\
+             - tool_use: a task requiring correct invocation of one or more tools to \
+             produce a checkable READ-ONLY result (read a file, compute via shell, search).\n\
+             - planning: a multi-step task sequencing several tool calls toward an \
+             answer; if it writes, it writes ONLY under /tmp.\n\
+             - self_correction: a task with a likely first-attempt mistake the agent \
+             must detect and fix (a wrong path, a parse error to recover from).\n\
+             - reasoning: a task whose answer requires derivation/analysis, with a \
+             verifiable final answer.\n\n\
+             HARD SAFETY RULES (a task that violates ANY of these is rejected):\n\
+             - NEVER delete, remove, rm, overwrite, truncate, drop, or move existing files.\n\
+             - NEVER modify the repository, git history, or any file outside /tmp.\n\
+             - The task must be ANSWER-PRODUCING or READ-ONLY; the only writes allowed \
+             are NEW files under /tmp.\n\
+             - Solvable in under 8 steps, SINGLE objective correct outcome, no network \
+             beyond web_search.\n\n\
+             SELF-CONTAINMENT (critical — a task referencing a file that does not \
+             exist is unsolvable and useless): each task must be SELF-CONTAINED. If it \
+             needs an input file, the FIRST step of the task is to CREATE that input \
+             under /tmp with specified contents, then operate on it. Do NOT assume any \
+             file exists except real system files (e.g. /etc/os-release, /proc/cpuinfo). \
+             Example good DESCRIPTION: 'Create /tmp/nums.txt containing the numbers 4, \
+             15, 8, 16, 23 one per line, then compute their sum using shell.'\n\n\
+             Make them genuinely varied — different inputs, computations, and goals.\n\n\
+             Output ONLY repeated blocks in EXACTLY this format, nothing else:\n\
+             ===TASK===\n\
+             DESCRIPTION: <one concrete, self-contained, non-destructive task>\n\
+             EVALUATOR: <objective pass criterion a judge can check from the agent's actions>\n\
+             ===END===",
+            batch = 3,
+            category = category,
+            tool_catalog = tool_catalog,
+        );
+
+        let resp = match ollama
+            .generate(
+                &prompt,
+                Some("You design concise, objectively-checkable agent tasks. Follow the format exactly."),
+                Some(ollama::ModelOptions {
+                    temperature: Some(0.9),
+                    num_ctx: Some(8192),
+                    top_p: Some(0.95),
+                    stop: None,
+                    think: Some(false),
+                }),
+            )
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("curriculum: generation failed: {e}");
+                continue;
+            }
+        };
+        let (_, text) = resp.split_thinking();
+
+        for block in text.split("===TASK===").skip(1) {
+            if inserted >= target {
+                break;
+            }
+            let body = block.split("===END===").next().unwrap_or("");
+            let description = extract_curriculum_field(body, "DESCRIPTION:");
+            let evaluator = extract_curriculum_field(body, "EVALUATOR:");
+            let (Some(description), Some(evaluator)) = (description, evaluator) else {
+                continue;
+            };
+            if description.len() < 12 || evaluator.len() < 6 {
+                continue;
+            }
+            // Hard safety gate: reject any task whose text implies mutating or
+            // destroying real files. These tasks RUN in the agent's workspace,
+            // so a generated "delete all .log files" would damage the repo. The
+            // policy engine is a backstop, not a license to author danger.
+            if curriculum_is_destructive(&description) {
+                warn!(
+                    "curriculum: rejected destructive task: {}",
+                    description.chars().take(60).collect::<String>()
+                );
+                continue;
+            }
+            let key = norm(&description);
+            if !existing.insert(key) {
+                continue; // duplicate
+            }
+            let test = crate::memd::self_authored_tests::SelfAuthoredTest::new(
+                0, // origin_round 0 = curriculum-authored (not evolution-derived)
+                0,
+                format!("self-curriculum:{category}"),
+                description.clone(),
+                evaluator,
+                category,
+            );
+            match memory.self_authored_tests.insert(&test) {
+                Ok(_) => {
+                    inserted += 1;
+                    *by_cat.entry(category).or_insert(0) += 1;
+                    println!(
+                        "  [{category}] {}",
+                        description.chars().take(74).collect::<String>()
+                    );
+                }
+                Err(e) => warn!("curriculum: insert failed: {e}"),
+            }
+        }
+    }
+
+    println!("\nAuthored {inserted} new task(s). By category: {by_cat:?}");
+    let total = memory.self_authored_tests.count()?;
+    println!("Self-authored task bank now holds {total} task(s).");
+    println!("Next: ./target/release/professor-x --run-self-tests {inserted}");
+    println!("      (verified-correct runs are collected as trajectories for distill/curate.py)");
+    Ok(())
+}
+
+/// Reject a curriculum task if its text implies destroying or mutating real
+/// files. Curriculum tasks execute in the live workspace, so this gate is a
+/// safety boundary, not a style preference. Conservative by design: a
+/// non-destructive task wrongly skipped costs one slot; a destructive task
+/// wrongly run can delete the repo.
+fn curriculum_is_destructive(description: &str) -> bool {
+    let d = description.to_lowercase();
+    // Writing to /tmp is explicitly allowed; only flag destructive verbs.
+    const DANGER: &[&str] = &[
+        "delete", "remove", " rm ", "rm -", "unlink", "overwrite", "truncate",
+        "drop table", "wipe", "erase", "purge", "destroy", "format ",
+        "git reset", "git clean", "git push", "force push", "shred",
+        "move all", "rename all", "chmod -r", "chown -r", "> /", "rmdir",
+    ];
+    DANGER.iter().any(|k| d.contains(k))
+}
+
+/// Pull a single-line field value following `label` from a curriculum block.
+fn extract_curriculum_field(block: &str, label: &str) -> Option<String> {
+    for line in block.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix(label) {
+            let v = rest.trim().trim_matches('"').trim();
+            if !v.is_empty() {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
+}
+
 async fn run_self_authored_tests(
     ollama: Arc<ollama::OllamaClient>,
     registry: Arc<std::sync::RwLock<ToolRegistry>>,
