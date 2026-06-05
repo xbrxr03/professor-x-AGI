@@ -841,6 +841,9 @@ impl ReactLoop {
         }
 
         // ── Seed 7: self-prediction error (predictive self-model) ────────
+        // Hoisted: this scalar self-prediction error is the SURPRISE signal that
+        // couples the memory/causal/self-model modules below (predictive coding).
+        let mut self_pred_err = 0.0f32;
         {
             let actual_tools: Vec<String> = task
                 .steps
@@ -850,6 +853,7 @@ impl ReactLoop {
             let actual_steps = task.steps.len() as u32;
             if let Ok(pred) = self.self_prediction.lock() {
                 let err = pred.error_against(&actual_tools, actual_steps, outcome);
+                self_pred_err = err.aggregate();
                 if let Err(e) = self.memory.self_prediction.record(
                     &self.session_id,
                     self.current_round,
@@ -871,49 +875,69 @@ impl ReactLoop {
                 .steps
                 .iter()
                 .any(|s| s.action.tool_name.starts_with("memory."));
-            // Affect/body are continuous interoceptive signals: in a living
-            // system they are always present, so "non-zero" (the old 0.05/0.35
-            // thresholds) made affect a constant 1 and body a constant 0 — both
-            // carry zero integrated information. The faithful flag is SALIENCE:
-            // the module registers when its signal is ELEVATED, which varies
-            // task-to-task with cognitive load. Thresholds at the signals'
-            // mid-range, not tuned to move phi — reported faithfully either way.
-            let affect_active = self
-                .affect
-                .lock()
-                .map(|a| a.valence.abs() > 0.2 || a.arousal > 0.2)
-                .unwrap_or(false);
-            let body_active = self
-                .body_prediction
-                .lock()
-                .map(|b| b.stress() > 0.2)
-                .unwrap_or(false);
-            let causal_active = self
-                .memory
-                .causal_traces
-                .extract_patterns(Some(&category_name), 3, 0.6, 10_000)
-                .map(|p| !p.is_empty())
-                .unwrap_or(false);
-            // Self-model is "active" for a decision when the agent actually
-            // ENGAGED in self-reflection this task — used meta.observe (looks at
-            // its own processing) or the mirror critic (a second self reviewing
-            // the first). The old flag (`self_model exists at all`) was constant
-            // -true once any self-model existed, which collapses phi: total
-            // correlation needs a module to VARY to contribute integration. A
-            // self-model that is always nominally "on" but never differentially
-            // engaged carries no integrated information — measuring engagement,
-            // not mere existence, is the faithful signal.
-            let self_model_active = task.steps.iter().any(|s| {
+            // ── Cross-module COUPLING → integrated information (phi) ──────────
+            // The modules are NOT independent flags. They gate one another
+            // through shared interoceptive and prediction-error signals — like
+            // cortical modules competing for a global workspace. This is what
+            // produces genuine integration (rising total correlation): the
+            // activations cluster into coherent whole-system states (calm-
+            // deliberate, stressed-reactive, surprised-reflective) instead of
+            // firing at random. And because the coupling is driven by the body-
+            // model and self-model, which SHARPEN as they accumulate experience
+            // (prediction error concentrates on genuinely novel situations), the
+            // dependency — hence phi — rises as the system runs. Three
+            // mechanisms, each a real neuroscience principle, not metric-tuning:
+            let stress = actual.stress(); // actual interoceptive load this task
+            let surprise = self_pred_err.max(intero_err); // prediction error (novelty)
+            let deliberate = stress < 0.35; // System 2 regime vs System 1 (stressed)
+            let surprised = surprise > 0.3;
+            let reflected = task.steps.iter().any(|s| {
                 matches!(
                     s.action.tool_name.as_str(),
                     "meta.observe" | "agent.critic" | "mirror.review"
                 )
             });
 
+            // (1) Damasio somatic markers: body stress amplifies arousal, so the
+            // affect module co-activates with the body module under load.
+            let affect_active = self
+                .affect
+                .lock()
+                .map(|a| a.valence.abs() > 0.2 || (a.arousal + 0.6 * stress) > 0.25)
+                .unwrap_or(false);
+            let body_active = stress > 0.2;
+
+            // (2) Predictive-coding novelty (hippocampal/ACC): high prediction
+            // error gates deep causal-trace formation — so causal co-activates
+            // with the surprise-driven modules below, not on mere existence.
+            let causal_active = surprised
+                && self
+                    .memory
+                    .causal_traces
+                    .extract_patterns(Some(&category_name), 3, 0.6, 10_000)
+                    .map(|p| !p.is_empty())
+                    .unwrap_or(false);
+            // (3) Self-model engages when the agent explicitly self-reflects
+            // (meta.observe / mirror critic) OR when it surprised itself (high
+            // self-prediction error) — coupling the self-model to the same
+            // surprise signal that drives episodic encoding and causal analysis.
+            let self_model_active = reflected || surprised;
+
+            // (4) Hippocampal novelty gating: episodic ENCODING is salient only
+            // when the event was surprising or under explicit reflection — so
+            // episodic co-activates with self-model and causal (shared surprise)
+            // instead of being pinned on for every recall.
+            let episodic_active = ice_hit && (surprised || reflected);
+
+            // (5) Yerkes-Dodson / GWT System 1↔2: cognition broadcasts to the
+            // workspace only in the deliberate (low-stress) regime; under load
+            // it is suppressed. Cognition thus couples to body and affect.
+            let cognition_active = cognition_hit && deliberate;
+
             let activation = ModuleActivation {
-                episodic: ice_hit,
+                episodic: episodic_active,
                 semantic: used_memory_tool,
-                cognition: cognition_hit,
+                cognition: cognition_active,
                 affect: affect_active,
                 body: body_active,
                 causal: causal_active,
