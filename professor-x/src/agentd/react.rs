@@ -540,6 +540,26 @@ impl ReactLoop {
             };
             if let Ok(mut sp) = self.self_prediction.lock() {
                 *sp = prediction;
+                // CALIBRATION (closes the meta-d' deficit: the model self-reports
+                // a flat ~0.9 regardless of outcome, so confidence carries no
+                // information). Replace the self-report's success odds with an
+                // empirically-grounded estimate: the actual historical success
+                // RATE for this task category (a calibrated prior), modulated by
+                // the per-task ICE-quality signal. Confidence now tracks
+                // competence — it varies across categories (their true rates
+                // differ) and within a category (by ICE quality) — so
+                // metacognitive sensitivity (Type-2 AUROC) can exceed chance.
+                let cat = format!("{category:?}");
+                let base = self
+                    .memory
+                    .self_prediction
+                    .category_success_rate(&cat, 100)
+                    .ok()
+                    .flatten();
+                sp.expected_success = match base {
+                    Some(rate) => (0.6 * rate + 0.4 * predicted_success).clamp(0.02, 0.98),
+                    None => predicted_success.clamp(0.02, 0.98),
+                };
             }
         }
 

@@ -206,6 +206,35 @@ impl SelfPredictionStore {
         Ok(db.query_row("SELECT COUNT(*) FROM self_predictions", [], |r| r.get(0))?)
     }
 
+    /// Laplace-smoothed empirical success rate for a task category, recovered
+    /// from history (actual = 1 ⟺ expected+err≈1). This is a CALIBRATED prior:
+    /// unlike the model's flat ~0.9 self-report, it equals the actual frequency
+    /// with which the agent has solved this kind of task. Returns None if there
+    /// is no history for the category.
+    pub fn category_success_rate(&self, category: &str, n: usize) -> Result<Option<f32>> {
+        let db = self.db.lock().unwrap();
+        let mut stmt = db.prepare(
+            "SELECT expected_success, success_err FROM self_predictions
+             WHERE task_category = ?1 ORDER BY id DESC LIMIT ?2",
+        )?;
+        let rows: Vec<(f64, f64)> = stmt
+            .query_map(params![category, n as i64], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .filter_map(|r| r.ok())
+            .collect();
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        let mut successes = 0usize;
+        for (conf, serr) in &rows {
+            let (conf, serr) = (*conf as f32, *serr as f32);
+            if (conf + serr - 1.0).abs() < (conf - serr).abs() {
+                successes += 1;
+            }
+        }
+        // Laplace (+1/+2) smoothing so a single sample isn't 0 or 1.
+        Ok(Some((successes as f32 + 1.0) / (rows.len() as f32 + 2.0)))
+    }
+
     /// Metacognitive sensitivity — Type-2 AUROC (Fleming & Lau 2014). Measures
     /// how well the agent's PRE-task confidence (expected_success) discriminates
     /// its OWN correct from incorrect outcomes. 0.5 = no metacognition
