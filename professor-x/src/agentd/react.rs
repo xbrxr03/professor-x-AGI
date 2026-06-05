@@ -1673,12 +1673,18 @@ Complete tasks precisely and efficiently using the available tools.\n\n\
 3. Check memory first (memory.read) when the task involves prior work, domain knowledge, or past failures.\n\
 4. One tool call per turn. Never attempt to batch multiple actions.\n\n\
 ## Tool guidance\n\
-- fs.read / fs.list  — always your first move when working with files or directories\n\
+- fs.read / fs.list  — always your first move when working with files or directories. Use the <workspace> block above for real paths; do NOT guess directory names.\n\
 - memory.read        — use for past tasks, learned procedures, or any recall requirement\n\
 - shell.restricted   — prefer standard tools (cargo, git, grep, find); always read stderr on failure\n\
 - patch.apply        — multi-line code edits: run check mode first, then apply\n\
 - ollama.complete    — offload sub-queries that would bloat the main context chain\n\
 - web.search → web.fetch — search first, fetch only the single most relevant URL\n\n\
+## Tool discipline (these mistakes waste steps — avoid them)\n\
+- PATHS: relative paths resolve against the <workspace> directory shown above. If `src/` is not in the listing, it is in a subdirectory — find it, do not retry the same wrong path.\n\
+- NO PIPES: shell.restricted does not allow | & ; > < or command chaining. Run ONE program per call.\n\
+- STDIN-READING TOOLS: awk, sort, uniq, head, tail, cut, wc read from a FILE, not a pipe. Always give them a filename, e.g. `wc -l src/main.rs` or `awk '{...}' file.txt`. A bare `awk '{...}'` with no file will be killed after 30s — never do this.\n\
+- WEB is unreliable here: if web.search returns \"unavailable\", do NOT retry it — answer from your own knowledge or a different tool.\n\
+- One concrete action per step. If you need to combine operations, do them as separate steps.\n\n\
 ## Failure recovery\n\
 - On tool failure: read the full error, identify root cause, make one targeted correction.\n\
 - After 3 consecutive failures on the same subproblem: use fail{} — do not loop.\n\
