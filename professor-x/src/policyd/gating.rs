@@ -43,6 +43,7 @@ const BLOCKED_HOSTS: &[&str] = &[
 pub fn tool_risk_score(tool: &str) -> u8 {
     match tool {
         "memory.read" => 5,
+        "repo.map" => 8,
         "fs.list" => 8,
         "fs.read" => 10,
         "web.search" => 15,

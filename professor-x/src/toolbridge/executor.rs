@@ -391,6 +391,20 @@ impl ToolExecutor {
                 let n = action.params["num_results"].as_u64().unwrap_or(5) as usize;
                 Ok(ToolDispatch::output(web_search(query, n).await?))
             }
+            "repo.map" => {
+                let focus = action.params.get("focus").and_then(|v| v.as_str());
+                let max_files = action
+                    .params
+                    .get("max_files")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(25) as usize;
+                let map = crate::toolbridge::repo_map::build_repo_map(
+                    &self.workspace_root,
+                    focus,
+                    max_files,
+                );
+                Ok(ToolDispatch::output(map))
+            }
             "web.fetch" => {
                 let url = req_str(&action.params, "url")?;
                 let body = web_fetch(url).await?;

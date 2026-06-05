@@ -1956,6 +1956,7 @@ const TOOLS_DESCRIPTION: &str = "Available tools:
 - meta.observe     {} — look at YOUR OWN recent processing (thoughts, tool calls, results) and notice patterns: are you looping, stalling, making progress?
 - agent.delegate   {\"goal\": \"<focused sub-task>\"} — spawn a sub-agent that solves the sub-goal on its own and returns its result. Use to decompose a hard task into an independent piece (the sub-agent has its own tools and memory).
 - agent.critic     {} — summon a MIRROR: a second perspective reviews your trajectory so far and tells you bluntly if you are looping, wrong, or missing a result. Use when stuck or before finishing a hard task.
+- repo.map         {\"focus\": \"<optional keyword>\", \"max_files\": 25} — ranked map of the codebase's key files and symbols; use it to find WHERE relevant code lives before reading/editing (especially for self-modification tasks)
 - memory.read      {\"query\": \"<q>\", \"layer\": \"episodic|semantic|procedural\"} — search memory
 - memory.write     {\"content\": \"<text>\", \"layer\": \"semantic\", \"source\": \"<src>\"} — store knowledge
 - git.commit       {\"message\": \"<msg>\"} — commit current changes

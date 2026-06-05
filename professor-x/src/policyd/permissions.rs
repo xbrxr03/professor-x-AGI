@@ -32,6 +32,7 @@ impl PermissionScope {
                 "web.fetch".to_string(),
                 "memory.read".to_string(),
                 "memory.write".to_string(),
+                "repo.map".to_string(),
                 "ollama.complete".to_string(),
                 "shell.restricted".to_string(),
                 "patch.apply".to_string(),
