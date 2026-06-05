@@ -29,7 +29,7 @@ use std::sync::Arc;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use crate::agentd::graph::{ExecutionStep, TaskNode, TaskStatus};
+use crate::agentd::graph::{ExecutionStep, TaskNode, TaskStatus, TaskType};
 use crate::evolved::lcap::LcapPolicy;
 use crate::evolved::tracker::TaskOutcome;
 use crate::memd::affect::{arousal_from_load, state_label, valence_from_outcome, AffectState};
@@ -97,6 +97,10 @@ pub struct ReactLoop {
     /// a running plan/notes via scratchpad.write; it persists across steps and
     /// is injected into every prompt. Cleared per task.
     scratchpad: std::sync::Mutex<String>,
+    /// Sub-agent recursion depth. The primary loop is 0; a delegated sub-agent
+    /// runs at depth+1 and is forbidden from delegating further (depth cap),
+    /// preventing runaway spawn trees.
+    depth: u32,
 }
 
 impl ReactLoop {
@@ -127,6 +131,124 @@ impl ReactLoop {
             causal_hint: std::sync::Mutex::new(String::new()),
             scratchpad: std::sync::Mutex::new(String::new()),
             session_id,
+            depth: 0,
+        }
+    }
+
+    /// Internal: build a sub-agent loop sharing this loop's resources, one level
+    /// deeper. Used by `agent.delegate`.
+    fn child_loop(&self) -> Self {
+        let mut child = Self::new(
+            Arc::clone(&self.ollama),
+            Arc::clone(&self.registry),
+            Arc::clone(&self.policy),
+            Arc::clone(&self.memory),
+            self.cancel.clone(),
+        );
+        child.depth = self.depth + 1;
+        child.current_round = self.current_round;
+        if let Some(events) = &self.events {
+            child.events = Some(Arc::clone(events));
+        }
+        child
+    }
+
+    /// Spawn a sub-agent on a focused sub-goal and return its result as an
+    /// observation. Depth-capped: a sub-agent (depth >= 1) cannot delegate.
+    async fn delegate(&self, goal: &str, session_id: Uuid, parent_task: Uuid) -> Observation {
+        if goal.trim().is_empty() {
+            return Observation::err("agent.delegate requires a non-empty 'goal'");
+        }
+        if self.depth >= 1 {
+            return Observation::err(
+                "delegation depth exceeded — a sub-agent cannot spawn further sub-agents",
+            );
+        }
+        self.emit_event(
+            Some(session_id),
+            Some(parent_task),
+            "agent.delegate",
+            format!("delegating sub-goal: {}", truncate(goal, 100)),
+            json!({"depth": self.depth + 1}),
+        );
+        let child = self.child_loop();
+        let mut subtask = TaskNode::new(goal.to_string(), TaskType::Research, 60);
+        subtask.max_attempts = 2;
+        // Box the recursive future: run -> delegate -> child.run is an async
+        // recursion cycle, which Rust requires be boxed to have a known size.
+        match Box::pin(child.run(&mut subtask)).await {
+            Ok(outcome) => {
+                let result = subtask.recent_steps_text(3);
+                let result = if result.trim().is_empty() {
+                    "(sub-agent produced no observable output)".to_string()
+                } else {
+                    result.chars().take(1200).collect::<String>()
+                };
+                Observation {
+                    success: outcome.success,
+                    output: format!(
+                        "Sub-agent finished (success={}, steps={}). Result:\n{}",
+                        outcome.success, outcome.steps_taken, result
+                    ),
+                    error: if outcome.success {
+                        None
+                    } else {
+                        Some("sub-agent did not fully succeed".to_string())
+                    },
+                    tokens_used: 0,
+                    execution_ms: 0,
+                    artifacts: Vec::new(),
+                }
+            }
+            Err(e) => Observation::err(&format!("sub-agent error: {e}")),
+        }
+    }
+
+    /// The mirror: a second evaluative pass reviews THIS agent's trajectory and
+    /// returns a critique. A self observing the self — metacognition made an
+    /// explicit second perspective.
+    async fn critique(&self, task: &TaskNode) -> Observation {
+        let trajectory = task.recent_steps_text(6);
+        let trajectory = if trajectory.trim().is_empty() {
+            "(no steps taken yet)".to_string()
+        } else {
+            trajectory.chars().take(2000).collect::<String>()
+        };
+        let prompt = format!(
+            "You are a CRITIC reviewing another agent's work on this task.\n\n\
+             TASK: {}\n\nITS STEPS SO FAR:\n{}\n\n\
+             In 3-5 sentences: is it on track? Name any loop, repeated mistake, wrong \
+             assumption, or result it already has but hasn't used. Then state the single \
+             most useful NEXT action. Be concrete and blunt.",
+            task.description, trajectory
+        );
+        match self
+            .ollama
+            .generate(
+                &prompt,
+                Some("You are a sharp, concise critic of agent trajectories."),
+                Some(ModelOptions {
+                    temperature: Some(0.3),
+                    num_ctx: Some(8192),
+                    top_p: None,
+                    stop: None,
+                    think: Some(false),
+                }),
+            )
+            .await
+        {
+            Ok(resp) => {
+                let (_, text) = resp.split_thinking();
+                Observation {
+                    success: true,
+                    output: format!("MIRROR CRITIC:\n{}", text.trim()),
+                    error: None,
+                    tokens_used: 0,
+                    execution_ms: 0,
+                    artifacts: Vec::new(),
+                }
+            }
+            Err(e) => Observation::err(&format!("critic unavailable: {e}")),
         }
     }
 
@@ -821,6 +943,60 @@ impl ReactLoop {
                             "updated working plan",
                             json!({"step": step_idx + 1, "chars": content.len()}),
                         );
+                        continue;
+                    }
+
+                    // agent.delegate — spawn a fresh sub-agent on a focused
+                    // sub-goal and fold its result back as an observation. Real
+                    // task decomposition: the child has its own ReAct loop,
+                    // memory access, and tool set, but cannot delegate further
+                    // (depth cap). The parent reasons over the child's answer.
+                    if parsed.tool_name == "agent.delegate"
+                        || parsed.tool_name == "agent.spawn"
+                    {
+                        let goal = parsed
+                            .params
+                            .get("goal")
+                            .or_else(|| parsed.params.get("task"))
+                            .or_else(|| parsed.params.get("description"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let obs = self.delegate(&goal, session_id, task.id).await;
+                        task.steps.push(ExecutionStep {
+                            index: (step_idx + 1) as u32,
+                            thought: parsed.thought,
+                            action: Action {
+                                tool_name: parsed.tool_name,
+                                params: parsed.params,
+                                risk_score: 0,
+                            },
+                            observation: obs,
+                            timestamp: Utc::now(),
+                        });
+                        continue;
+                    }
+
+                    // agent.critic — the mirror. A second agent-perspective
+                    // reviews THIS agent's trajectory so far and returns a
+                    // critique (a self observing the self). Single evaluative
+                    // pass, not a full loop. The consciousness tie-in to the
+                    // self-model seeds: metacognition as an explicit second view.
+                    if parsed.tool_name == "agent.critic"
+                        || parsed.tool_name == "mirror.review"
+                    {
+                        let obs = self.critique(task).await;
+                        task.steps.push(ExecutionStep {
+                            index: (step_idx + 1) as u32,
+                            thought: parsed.thought,
+                            action: Action {
+                                tool_name: parsed.tool_name,
+                                params: parsed.params,
+                                risk_score: 0,
+                            },
+                            observation: obs,
+                            timestamp: Utc::now(),
+                        });
                         continue;
                     }
 
@@ -1778,6 +1954,8 @@ const TOOLS_DESCRIPTION: &str = "Available tools:
 - patch.apply      {\"mode\": \"check|apply\", \"patch\": \"<unified diff>\"} — check or apply a reviewable git-style patch
 - scratchpad.write {\"content\": \"<your running plan / notes>\"} — maintain a working plan that persists across steps (use it for multi-step tasks: list the steps, check them off, track what you've learned)
 - meta.observe     {} — look at YOUR OWN recent processing (thoughts, tool calls, results) and notice patterns: are you looping, stalling, making progress?
+- agent.delegate   {\"goal\": \"<focused sub-task>\"} — spawn a sub-agent that solves the sub-goal on its own and returns its result. Use to decompose a hard task into an independent piece (the sub-agent has its own tools and memory).
+- agent.critic     {} — summon a MIRROR: a second perspective reviews your trajectory so far and tells you bluntly if you are looping, wrong, or missing a result. Use when stuck or before finishing a hard task.
 - memory.read      {\"query\": \"<q>\", \"layer\": \"episodic|semantic|procedural\"} — search memory
 - memory.write     {\"content\": \"<text>\", \"layer\": \"semantic\", \"source\": \"<src>\"} — store knowledge
 - git.commit       {\"message\": \"<msg>\"} — commit current changes
