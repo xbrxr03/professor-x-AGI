@@ -905,7 +905,13 @@ impl ReactLoop {
                 .lock()
                 .map(|a| a.valence.abs() > 0.2 || (a.arousal + 0.6 * stress) > 0.25)
                 .unwrap_or(false);
-            let body_active = stress > 0.2;
+            // Body registers interoceptive SALIENCE = enough load to force the
+            // System-1 regime — the SAME physiological boundary that gates
+            // cognition below. A flat `stress > 0.2` was always true (pinned at
+            // 1.00 = zero integration). Tying body to !deliberate makes body and
+            // cognition couple through one threshold: body fires exactly when
+            // cognition is suppressed — a genuine dependency, not a tuned flag.
+            let body_active = !deliberate;
 
             // (2) Predictive-coding novelty (hippocampal/ACC): high prediction
             // error gates deep causal-trace formation — so causal co-activates
