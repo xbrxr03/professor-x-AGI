@@ -630,6 +630,15 @@ impl ToolExecutor {
                 let (_, answer) = resp.split_thinking();
                 Ok(ToolDispatch::with_tokens(answer, resp.tokens_used()))
             }
+            name if crate::toolbridge::mcp::is_mcp_tool(name) => {
+                // External MCP server tool. Routed to the spawned server over
+                // the stdio JSON-RPC transport; the manager enforces a timeout.
+                let Some(manager) = crate::toolbridge::mcp::global() else {
+                    anyhow::bail!("MCP tool '{name}' called but no MCP servers are connected");
+                };
+                let out = manager.call(name, &action.params).await?;
+                Ok(ToolDispatch::output(out))
+            }
             _ => {
                 // Cerebellum bypass (Voyager arXiv:2305.16291):
                 // If this is a known procedural skill, serve it without a

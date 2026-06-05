@@ -1028,6 +1028,24 @@ async fn main() -> Result<()> {
         )?;
     }
 
+    // Model Context Protocol: connect any configured external servers and
+    // register their tools alongside the built-ins. Non-fatal if absent.
+    {
+        let repo_root = PermissionScope::default_autonomous().workspace_root;
+        let (mcp_servers, mcp_tools) =
+            toolbridge::mcp::init_global_mcp(&repo_root, &registry).await;
+        if mcp_servers > 0 {
+            info!("mcp: {mcp_servers} server(s), {mcp_tools} tool(s) registered");
+            let _ = events.append(
+                None,
+                None,
+                "mcp.connected",
+                format!("{mcp_servers} MCP server(s), {mcp_tools} tool(s)"),
+                serde_json::json!({"servers": mcp_servers, "tools": mcp_tools}),
+            );
+        }
+    }
+
     if cli.dry_run_daily {
         events.append(
             None,

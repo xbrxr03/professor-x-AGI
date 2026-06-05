@@ -1209,13 +1209,53 @@ impl ReactLoop {
             parts.push(format!("<history>\n{history}\n</history>"));
         }
 
-        // Available tools
+        // Available tools — built-ins plus any dynamically registered MCP tools.
         parts.push(TOOLS_DESCRIPTION.to_string());
+        if let Some(mcp) = self.mcp_tools_description() {
+            parts.push(mcp);
+        }
 
         // ReAct prompt suffix
         parts.push(REACT_SUFFIX.to_string());
 
         parts.join("\n\n")
+    }
+
+    /// List tools from connected MCP servers so the LLM knows it can call them.
+    /// Without this, registered MCP tools dispatch fine but the model never
+    /// tries them — it only sees the hardcoded built-in list.
+    fn mcp_tools_description(&self) -> Option<String> {
+        let reg = self.registry.read().ok()?;
+        let mut lines = Vec::new();
+        for m in reg.list() {
+            if !m.name.starts_with("mcp.") {
+                continue;
+            }
+            let params = m
+                .input_schema
+                .get("properties")
+                .and_then(|p| p.as_object())
+                .map(|o| {
+                    o.keys()
+                        .map(|k| format!("\"{k}\": <...>"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            lines.push(format!(
+                "- {} {{{}}} — {}",
+                m.name,
+                params,
+                m.description.chars().take(110).collect::<String>()
+            ));
+        }
+        if lines.is_empty() {
+            return None;
+        }
+        Some(format!(
+            "Tools from connected MCP servers (call them by their exact name):\n{}",
+            lines.join("\n")
+        ))
     }
 
     /// Cross-modal binding: embed ICE (episodic) and cognition candidates,
