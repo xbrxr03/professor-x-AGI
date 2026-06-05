@@ -340,6 +340,9 @@ impl ReactLoop {
                     task.outcome_score = Some(1.0);
 
                     self.write_episodic(task, true, predicted_success).await;
+                    // Self-distillation corpus: a verified-correct trajectory is
+                    // a lesson the model can internalize (harness → weights).
+                    self.collect_trajectory(task);
                     let transcript_path =
                         self.record_transcript(task, "succeeded", "task completed successfully");
                     let _ = task_runs.finished(task, None, transcript_path.as_deref());
@@ -1345,6 +1348,74 @@ impl ReactLoop {
             principle.as_deref().unwrap_or("none"),
             procedure.as_deref().unwrap_or("none"),
         )
+    }
+
+    /// Self-distillation collector. Serializes a verified-correct trajectory as
+    /// an instruction-tuning example to artifacts/trajectories/<date>.jsonl. The
+    /// model's OWN good outputs, produced under harness scaffolding, become the
+    /// lesson it can internalize via overnight QLoRA (harness → weights). Stores
+    /// the metacognitive moves (thoughts) too, not just answers — distilling
+    /// THIS harness distills disposition, not just task completion.
+    fn collect_trajectory(&self, task: &TaskNode) {
+        if task.steps.is_empty() {
+            return;
+        }
+        // messages: system, user(task), then alternating assistant(thought+action)
+        // and tool(observation). Standard agent-trajectory SFT format.
+        let mut messages = vec![
+            json!({"role": "system", "content": SYSTEM_PROMPT}),
+            json!({"role": "user", "content": task.description}),
+        ];
+        for s in &task.steps {
+            let assistant = format!(
+                "Thought: {}\nAction: {}\nAction Input: {}",
+                s.thought,
+                s.action.tool_name,
+                serde_json::to_string(&s.action.params).unwrap_or_default()
+            );
+            messages.push(json!({"role": "assistant", "content": assistant}));
+            let obs = if s.observation.success {
+                s.observation.output.chars().take(1200).collect::<String>()
+            } else {
+                format!("ERROR: {}", s.observation.error.as_deref().unwrap_or("unknown"))
+            };
+            messages.push(json!({"role": "tool", "content": obs}));
+        }
+        messages.push(json!({
+            "role": "assistant",
+            "content": "Thought: The task is complete.\nAction: finish\nAction Input: {}"
+        }));
+
+        let record = json!({
+            "task": task.description,
+            "task_type": format!("{:?}", task.task_type),
+            "verified": true,
+            "steps": task.steps.len(),
+            "attempts": task.attempt_count,
+            "recorded_at": Utc::now().to_rfc3339(),
+            "messages": messages,
+        });
+
+        let root = {
+            let nested = std::path::Path::new("professor-x/artifacts/trajectories");
+            if std::path::Path::new("professor-x").exists() {
+                nested.to_path_buf()
+            } else {
+                std::path::PathBuf::from("artifacts/trajectories")
+            }
+        };
+        let dir = root.join(Utc::now().format("%Y-%m-%d").to_string());
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            warn!("trajectories: mkdir failed: {e}");
+            return;
+        }
+        let path = dir.join("trajectories.jsonl");
+        if let Ok(line) = serde_json::to_string(&record) {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+                let _ = writeln!(f, "{line}");
+            }
+        }
     }
 
     async fn write_episodic(&self, task: &TaskNode, success: bool, predicted_success: f32) {
