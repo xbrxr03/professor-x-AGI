@@ -252,6 +252,111 @@ impl ReactLoop {
         }
     }
 
+    /// Tree-of-Thoughts (arXiv:2305.10601): deliberate branching search over
+    /// approaches. PROPOSE k distinct candidate plans, VALUE each, then SELECT
+    /// the most promising — instead of greedily committing to the first idea.
+    /// Two LLM calls (propose, then evaluate+select); the winning plan is
+    /// returned as an observation the agent then executes. For hard tasks where
+    /// the first approach often dead-ends.
+    async fn tot_search(&self, task: &TaskNode, branches: usize) -> Observation {
+        let k = branches.clamp(2, 5);
+        let context = task.recent_steps_text(4);
+        let context = if context.trim().is_empty() {
+            String::new()
+        } else {
+            format!("\n\nWork so far:\n{}", context.chars().take(1200).collect::<String>())
+        };
+
+        // 1) PROPOSE k distinct approaches.
+        let propose = format!(
+            "Task: {}{}\n\nPropose {k} DISTINCT, concrete approaches to solve this task. \
+             They must differ in strategy, not just wording. Each in 1-2 sentences with \
+             the first tool/step it would take.\n\n\
+             Output ONLY {k} blocks in this exact format:\n\
+             ===OPTION===\n<approach>\n===OPTION===\n<approach>",
+            task.description, context
+        );
+        let proposed = match self
+            .ollama
+            .generate(
+                &propose,
+                Some("You generate diverse, concrete solution strategies."),
+                Some(ModelOptions {
+                    temperature: Some(0.9),
+                    num_ctx: Some(8192),
+                    top_p: Some(0.95),
+                    stop: None,
+                    think: Some(false),
+                }),
+            )
+            .await
+        {
+            Ok(resp) => {
+                let (_, text) = resp.split_thinking();
+                text.split("===OPTION===")
+                    .map(|s| s.trim())
+                    .filter(|s| s.len() > 8)
+                    .map(|s| s.chars().take(400).collect::<String>())
+                    .collect::<Vec<_>>()
+            }
+            Err(e) => return Observation::err(&format!("tot propose failed: {e}")),
+        };
+        if proposed.is_empty() {
+            return Observation::err("tot: model proposed no usable approaches");
+        }
+
+        let options_block = proposed
+            .iter()
+            .enumerate()
+            .map(|(i, o)| format!("OPTION {}: {}", i + 1, o))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        // 2) VALUE each + SELECT the best.
+        let evaluate = format!(
+            "Task: {}\n\nCandidate approaches:\n{}\n\n\
+             Score each approach 0-10 for how likely it is to solve the task efficiently \
+             and correctly. Then pick the single best.\n\n\
+             Reply in EXACTLY this format:\n\
+             SCORES: 1=<n> 2=<n> ...\n\
+             BEST: <option number>\n\
+             PLAN: <the winning approach restated as 2-4 concrete numbered steps>",
+            task.description, options_block
+        );
+        match self
+            .ollama
+            .generate(
+                &evaluate,
+                Some("You are a rigorous evaluator of solution strategies."),
+                Some(ModelOptions {
+                    temperature: Some(0.2),
+                    num_ctx: Some(8192),
+                    top_p: None,
+                    stop: None,
+                    think: Some(false),
+                }),
+            )
+            .await
+        {
+            Ok(resp) => {
+                let (_, text) = resp.split_thinking();
+                Observation {
+                    success: true,
+                    output: format!(
+                        "TREE-OF-THOUGHTS — evaluated {} approaches:\n{}\n\nFollow the selected PLAN.",
+                        proposed.len(),
+                        text.trim()
+                    ),
+                    error: None,
+                    tokens_used: 0,
+                    execution_ms: 0,
+                    artifacts: Vec::new(),
+                }
+            }
+            Err(e) => Observation::err(&format!("tot evaluate failed: {e}")),
+        }
+    }
+
     pub fn with_lcap(mut self, lcap: Arc<std::sync::Mutex<LcapPolicy>>, round: u32) -> Self {
         self.lcap = lcap;
         self.current_round = round;
@@ -963,17 +1068,7 @@ impl ReactLoop {
                             .unwrap_or("")
                             .to_string();
                         let obs = self.delegate(&goal, session_id, task.id).await;
-                        task.steps.push(ExecutionStep {
-                            index: (step_idx + 1) as u32,
-                            thought: parsed.thought,
-                            action: Action {
-                                tool_name: parsed.tool_name,
-                                params: parsed.params,
-                                risk_score: 0,
-                            },
-                            observation: obs,
-                            timestamp: Utc::now(),
-                        });
+                        self.record_local_step(task, step_idx, session_id, parsed, obs);
                         continue;
                     }
 
@@ -986,17 +1081,23 @@ impl ReactLoop {
                         || parsed.tool_name == "mirror.review"
                     {
                         let obs = self.critique(task).await;
-                        task.steps.push(ExecutionStep {
-                            index: (step_idx + 1) as u32,
-                            thought: parsed.thought,
-                            action: Action {
-                                tool_name: parsed.tool_name,
-                                params: parsed.params,
-                                risk_score: 0,
-                            },
-                            observation: obs,
-                            timestamp: Utc::now(),
-                        });
+                        self.record_local_step(task, step_idx, session_id, parsed, obs);
+                        continue;
+                    }
+
+                    // tot.search — Tree-of-Thoughts deliberate branching. Propose
+                    // several approaches, value them, commit to the best. For hard
+                    // tasks where greedily following the first idea dead-ends.
+                    if parsed.tool_name == "tot.search"
+                        || parsed.tool_name == "deliberate"
+                    {
+                        let branches = parsed
+                            .params
+                            .get("branches")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(3) as usize;
+                        let obs = self.tot_search(task, branches).await;
+                        self.record_local_step(task, step_idx, session_id, parsed, obs);
                         continue;
                     }
 
@@ -1248,6 +1349,50 @@ impl ReactLoop {
                 warn!("agent event write failed: {e}");
             }
         }
+    }
+
+    /// Record a step produced by a loop-intercepted tool (delegate/critic/tot)
+    /// AND emit a `tool.succeeded` event with an output preview, so these tools
+    /// are visible in the live stream and persisted like executor-dispatched
+    /// ones — they bypass the executor, so without this their results are
+    /// invisible to the event log and transcripts.
+    fn record_local_step(
+        &self,
+        task: &mut TaskNode,
+        step_idx: usize,
+        session_id: Uuid,
+        parsed: ParsedStep,
+        obs: Observation,
+    ) {
+        let preview: String = obs.output.chars().take(240).collect();
+        let tool = parsed.tool_name.clone();
+        self.emit_event(
+            Some(session_id),
+            Some(task.id),
+            "tool.succeeded",
+            format!(
+                "{tool}: {}",
+                preview.replace('\n', " ").chars().take(80).collect::<String>()
+            ),
+            json!({
+                "step": step_idx + 1,
+                "tool": tool,
+                "intercepted": true,
+                "success": obs.success,
+                "output_preview": preview,
+            }),
+        );
+        task.steps.push(ExecutionStep {
+            index: (step_idx + 1) as u32,
+            thought: parsed.thought,
+            action: Action {
+                tool_name: parsed.tool_name,
+                params: parsed.params,
+                risk_score: 0,
+            },
+            observation: obs,
+            timestamp: Utc::now(),
+        });
     }
 
     fn record_transcript(
@@ -1956,6 +2101,7 @@ const TOOLS_DESCRIPTION: &str = "Available tools:
 - meta.observe     {} — look at YOUR OWN recent processing (thoughts, tool calls, results) and notice patterns: are you looping, stalling, making progress?
 - agent.delegate   {\"goal\": \"<focused sub-task>\"} — spawn a sub-agent that solves the sub-goal on its own and returns its result. Use to decompose a hard task into an independent piece (the sub-agent has its own tools and memory).
 - agent.critic     {} — summon a MIRROR: a second perspective reviews your trajectory so far and tells you bluntly if you are looping, wrong, or missing a result. Use when stuck or before finishing a hard task.
+- tot.search        {\"branches\": 3} — Tree-of-Thoughts: for a HARD task with several possible strategies, propose several approaches, score them, and commit to the best BEFORE acting. Use it once at the start of a hard task instead of greedily trying the first idea.
 - repo.map         {\"focus\": \"<optional keyword>\", \"max_files\": 25} — ranked map of the codebase's key files and symbols; use it to find WHERE relevant code lives before reading/editing (especially for self-modification tasks)
 - memory.read      {\"query\": \"<q>\", \"layer\": \"episodic|semantic|procedural\"} — search memory
 - memory.write     {\"content\": \"<text>\", \"layer\": \"semantic\", \"source\": \"<src>\"} — store knowledge
