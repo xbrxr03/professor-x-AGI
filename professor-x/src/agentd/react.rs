@@ -429,7 +429,7 @@ impl ReactLoop {
         let predicted_success = predict_success_from_ice(&ice_examples);
 
         // Cognition context: relevant items from cognition base
-        let cognition_context = self.retrieve_cognition(&task.description);
+        let cognition_context = self.retrieve_cognition(&task.description).await;
 
         // Module-engagement signals for phi, captured BEFORE binding. The
         // episodic/cognition modules are "engaged" when recall surfaced
@@ -1687,17 +1687,56 @@ impl ReactLoop {
             .collect()
     }
 
-    fn retrieve_cognition(&self, query: &str) -> Vec<String> {
+    /// Retrieve task-relevant cognition by EMBEDDING similarity. The old version
+    /// did `content LIKE '%<entire task description>%'`, which never matched —
+    /// no concept contains a whole task sentence — so the cognition module was a
+    /// dead channel (phi activation rate 0.00 every round). Now: embed the query,
+    /// cosine against the cognition base, and surface items above a relevance
+    /// threshold. Cognition fires when the task is genuinely related to a stored
+    /// concept and stays quiet otherwise — a live, VARYING signal that can
+    /// actually contribute to integration. One-time lazy backfill embeds the
+    /// base (it was never embedded: every row had embedding_id NULL).
+    async fn retrieve_cognition(&self, query: &str) -> Vec<String> {
         use crate::evolved::CognitionStore;
+        const RELEVANCE: f32 = 0.5;
         let store = CognitionStore::new(Arc::clone(&self.memory.db));
-        match store.query_top_k(query, 5) {
-            Ok(items) => items
-                .iter()
-                .filter(|i| i.quality > 0.4)
-                .map(|i| i.content.clone())
-                .collect(),
-            Err(_) => Vec::new(),
+        let emb = crate::embeddings::EmbeddingStore::new(Arc::clone(&self.memory.db));
+        let all = match store.all() {
+            Ok(a) if !a.is_empty() => a,
+            _ => return Vec::new(),
+        };
+        // Lazy backfill: embed any cognition item missing a stored vector.
+        let have: std::collections::HashSet<String> = emb
+            .all_for("cognition")
+            .map(|v| v.into_iter().map(|(id, _)| id).collect())
+            .unwrap_or_default();
+        for item in &all {
+            let id = item.id.to_string();
+            if !have.contains(&id) {
+                let _ = crate::embeddings::embed_and_store(
+                    &self.ollama,
+                    &emb,
+                    "cognition",
+                    &id,
+                    &item.content,
+                )
+                .await;
+            }
         }
+        let qvec = match self.ollama.embed(query).await {
+            Ok(v) => v,
+            Err(_) => return Vec::new(),
+        };
+        let top = match emb.top_k("cognition", &qvec, 5) {
+            Ok(t) => t,
+            Err(_) => return Vec::new(),
+        };
+        let id_to_content: std::collections::HashMap<String, String> =
+            all.into_iter().map(|i| (i.id.to_string(), i.content)).collect();
+        top.into_iter()
+            .filter(|(_, sim)| *sim >= RELEVANCE)
+            .filter_map(|(id, _)| id_to_content.get(&id).cloned())
+            .collect()
     }
 
     async fn generate_reflection(&self, task: &TaskNode) -> String {

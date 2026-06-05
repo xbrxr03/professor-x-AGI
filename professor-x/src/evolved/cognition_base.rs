@@ -137,6 +137,18 @@ impl CognitionStore {
         Ok(db.query_row("SELECT COUNT(*) FROM cognition", [], |r| r.get(0))?)
     }
 
+    /// All cognition items — used to backfill embeddings and map ids to content.
+    pub fn all(&self) -> Result<Vec<CognitionItem>> {
+        let db = self.db.lock().unwrap();
+        let mut stmt = db.prepare(
+            "SELECT id, content, source, keywords, quality, use_count, success_count,
+                    embedding_id, created_at
+             FROM cognition",
+        )?;
+        let rows = stmt.query_map([], parse_item)?;
+        rows.map(|r| r.map_err(Into::into)).collect()
+    }
+
     pub fn record_use(&self, id: &Uuid, success: bool) -> Result<()> {
         let db = self.db.lock().unwrap();
         db.execute(
