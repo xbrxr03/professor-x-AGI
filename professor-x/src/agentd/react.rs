@@ -1437,12 +1437,18 @@ impl ReactLoop {
             "messages": messages,
         });
 
+        // Anchor at the resolved repo root (walks up to .git), NOT a bare
+        // cwd-relative check: the evolution loop creates a professor-x/ subdir
+        // which used to flip a naive `Path::new("professor-x").exists()` test
+        // and nest the corpus at professor-x/professor-x/artifacts where
+        // curate.py never globbed. Mirror evolution_artifact_root's pattern.
         let root = {
-            let nested = std::path::Path::new("professor-x/artifacts/trajectories");
-            if std::path::Path::new("professor-x").exists() {
-                nested.to_path_buf()
+            let repo = PermissionScope::default_autonomous().workspace_root;
+            let nested = repo.join("professor-x/artifacts/trajectories");
+            if nested.exists() || repo.join("professor-x/Cargo.toml").exists() {
+                nested
             } else {
-                std::path::PathBuf::from("artifacts/trajectories")
+                repo.join("artifacts/trajectories")
             }
         };
         let dir = root.join(Utc::now().format("%Y-%m-%d").to_string());

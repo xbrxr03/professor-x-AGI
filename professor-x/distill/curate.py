@@ -23,14 +23,22 @@ from collections import defaultdict
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)  # professor-x/
-TRAJ_GLOB = os.path.join(ROOT, "artifacts", "trajectories", "*", "trajectories.jsonl")
+# Recursive: tolerate both the canonical artifacts/trajectories/ and any nested
+# professor-x/artifacts/trajectories/ a stray subdir may have produced. The
+# corpus is precious — never miss a trajectory file because of a path quirk.
+TRAJ_GLOB = os.path.join(ROOT, "**", "trajectories", "*", "trajectories.jsonl")
 OUT_DIR = os.path.join(HERE, "data")
 OUT = os.path.join(OUT_DIR, "curated.jsonl")
 
 
 def load_all():
     rows = []
-    for path in glob.glob(TRAJ_GLOB):
+    seen = set()
+    for path in glob.glob(TRAJ_GLOB, recursive=True):
+        real = os.path.realpath(path)
+        if real in seen:
+            continue
+        seen.add(real)
         with open(path) as f:
             for line in f:
                 line = line.strip()
