@@ -971,6 +971,8 @@ fn is_known_builtin_tool(tool_name: &str) -> bool {
             | "fs.list"
             | "fs.write"
             | "shell.restricted"
+            | "scratchpad.write"
+            | "plan.write"
             | "meta.observe"
             | "vision.analyze"
             | "memory.read"

@@ -93,6 +93,10 @@ pub struct ReactLoop {
     /// task category, computed once per task and injected each step so the
     /// agent acts on what has actually worked before. The self-knowledge loop.
     causal_hint: std::sync::Mutex<String>,
+    /// Self-managed working memory (MemGPT / Claude-Code plan). The agent writes
+    /// a running plan/notes via scratchpad.write; it persists across steps and
+    /// is injected into every prompt. Cleared per task.
+    scratchpad: std::sync::Mutex<String>,
 }
 
 impl ReactLoop {
@@ -121,6 +125,7 @@ impl ReactLoop {
             body_prediction: std::sync::Mutex::new(ComputationalVitals::neutral()),
             self_prediction: std::sync::Mutex::new(SelfPrediction::uninformed()),
             causal_hint: std::sync::Mutex::new(String::new()),
+            scratchpad: std::sync::Mutex::new(String::new()),
             session_id,
         }
     }
@@ -206,6 +211,11 @@ impl ReactLoop {
         let (ice_examples, cognition_context) = self
             .apply_binding(ice_examples, cognition_context)
             .await;
+
+        // Fresh scratchpad per task (self-managed working memory).
+        if let Ok(mut sp) = self.scratchpad.lock() {
+            sp.clear();
+        }
 
         // LCAP: select context budget (Balanced before round 10, UCB1 after)
         let category = LcapPolicy::classify(&task.description);
@@ -787,6 +797,30 @@ impl ReactLoop {
                         return Ok(false);
                     }
 
+                    // scratchpad.write — self-managed working memory. Handled by
+                    // the loop (not the executor); updates the persistent plan
+                    // injected into every prompt. Does not consume a real step.
+                    if parsed.tool_name == "scratchpad.write" || parsed.tool_name == "plan.write" {
+                        let content = parsed
+                            .params
+                            .get("content")
+                            .and_then(|v| v.as_str())
+                            .or_else(|| parsed.params.get("plan").and_then(|v| v.as_str()))
+                            .unwrap_or("")
+                            .to_string();
+                        if let Ok(mut sp) = self.scratchpad.lock() {
+                            *sp = content.chars().take(2000).collect();
+                        }
+                        self.emit_event(
+                            Some(session_id),
+                            Some(task.id),
+                            "scratchpad.updated",
+                            "updated working plan",
+                            json!({"step": step_idx + 1, "chars": content.len()}),
+                        );
+                        continue;
+                    }
+
                     // Duplicate-action breaker: if the agent re-issues an action
                     // it already ran this attempt (same tool + same params), do
                     // NOT re-execute. Hand back the prior result with a firm
@@ -1108,6 +1142,13 @@ impl ReactLoop {
         // Under stress the model is told to conserve (System 1); when fresh, explore.
         if let Ok(body) = self.body_prediction.lock() {
             parts.push(body.to_prompt_fragment());
+        }
+
+        // Self-managed working memory (the agent's running plan/notes).
+        if let Ok(sp) = self.scratchpad.lock() {
+            if !sp.trim().is_empty() {
+                parts.push(format!("<scratchpad>\n{}\n</scratchpad>", sp.trim()));
+            }
         }
 
         // ICE: similar past tasks
@@ -1628,7 +1669,7 @@ You are Professor X — an autonomous AI research agent running on consumer hard
 Complete tasks precisely and efficiently using the available tools.\n\n\
 ## Approach\n\
 1. Read before writing. Gather information before modifying anything.\n\
-2. Decompose: find the smallest verifiable step, complete it, verify the result, then proceed.\n\
+2. Decompose: for any multi-step task, first call scratchpad.write to lay out the plan, then work it step by step, updating the scratchpad as you learn. Find the smallest verifiable step, complete it, verify, proceed.\n\
 3. Check memory first (memory.read) when the task involves prior work, domain knowledge, or past failures.\n\
 4. One tool call per turn. Never attempt to batch multiple actions.\n\n\
 ## Tool guidance\n\
@@ -1675,6 +1716,7 @@ const TOOLS_DESCRIPTION: &str = "Available tools:
 - vision.analyze   {\"path\": \"<image_path>\", \"prompt\": \"<question>\"} — describe or reason about an image; also accepts {\"url\": \"<image_url>\"}
 - shell.restricted {\"command\": \"<cmd>\"} — run a shell command (sandboxed)
 - patch.apply      {\"mode\": \"check|apply\", \"patch\": \"<unified diff>\"} — check or apply a reviewable git-style patch
+- scratchpad.write {\"content\": \"<your running plan / notes>\"} — maintain a working plan that persists across steps (use it for multi-step tasks: list the steps, check them off, track what you've learned)
 - meta.observe     {} — look at YOUR OWN recent processing (thoughts, tool calls, results) and notice patterns: are you looping, stalling, making progress?
 - memory.read      {\"query\": \"<q>\", \"layer\": \"episodic|semantic|procedural\"} — search memory
 - memory.write     {\"content\": \"<text>\", \"layer\": \"semantic\", \"source\": \"<src>\"} — store knowledge
