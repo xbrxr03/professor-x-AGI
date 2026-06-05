@@ -8574,6 +8574,48 @@ fn print_consciousness_report(memory: Arc<MemoryManager>) -> Result<()> {
         println!("    {}\n", verdict_slope(phi_slope, 0.0, "phi rising (integration growing)", "phi flat/falling"));
     }
 
+    // ── Q1b: DIFFERENTIATION — Lempel-Ziv complexity of module activity ───
+    // phi sees only integration. Consciousness needs integration AND
+    // differentiation (complexity). LZc (Schartner et al. 2015) is the
+    // differentiation axis: down under anaesthesia, up under psychedelics.
+    // A conscious-candidate signature is HIGH on BOTH axes simultaneously.
+    println!("Q1b. Is module activity DIFFERENTIATED (complex), not stereotyped?");
+    {
+        use crate::memd::pci;
+        let indices: Vec<usize> = {
+            let db = memory.db.lock().unwrap();
+            let mut stmt = db.prepare(
+                "SELECT activation_index FROM phi_activations ORDER BY round ASC, id ASC",
+            )?;
+            let rows = stmt.query_map([], |r| r.get::<_, i64>(0))?;
+            rows.filter_map(|r| r.ok().map(|v| v as usize)).collect()
+        };
+        if indices.len() < 8 {
+            println!("    not enough activation samples yet (need ≥8)\n");
+        } else {
+            let matrix = pci::matrix_from_activation_indices(&indices, 7);
+            let lzc = pci::normalized_lzc(&matrix);
+            // integration×differentiation: a conscious candidate is high on both.
+            let phi_now = memory.phi.trajectory()?.last().map(|(_, p)| *p).unwrap_or(0.0);
+            println!(
+                "    n={} steps  LZc (differentiation) = {:.3}   [0=stereotyped, ~1=random]",
+                indices.len(),
+                lzc
+            );
+            println!(
+                "    integration×differentiation: phi={phi_now:.2} × LZc={lzc:.2}  →  both-high is the signature"
+            );
+            let verdict = if lzc > 0.4 && lzc < 1.2 && phi_now > 0.3 {
+                "✓ structured complexity (integrated AND differentiated)"
+            } else if lzc <= 0.4 {
+                "✗ too stereotyped (integrated but not differentiated — seizure-like)"
+            } else {
+                "✗ too random (differentiated but not integrated — noise-like)"
+            };
+            println!("    {verdict}\n");
+        }
+    }
+
     // ── Q2: Interoceptive prediction error falling? ───────────────────────
     println!("Q2. Is the body-model sharpening (interoceptive error falling)?");
     let intero_traj = round_bucketed_mean(

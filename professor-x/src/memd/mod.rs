@@ -4,6 +4,7 @@ pub mod causal_traces;
 pub mod computational_body;
 pub mod narrative;
 pub mod phi;
+pub mod pci;
 pub mod self_authored_tests;
 pub mod self_prediction;
 pub mod coding_sessions;
