@@ -99,6 +99,17 @@ impl SelfPredictionError {
     }
 }
 
+/// Metacognitive-sensitivity result (Type-2 AUROC + calibration gap).
+#[derive(Debug, Clone)]
+pub struct MetacogResult {
+    /// Type-2 AUROC: P(confidence_correct > confidence_incorrect). 0.5 = none.
+    pub auroc: f32,
+    pub n: usize,
+    pub n_correct: usize,
+    pub mean_conf_correct: f32,
+    pub mean_conf_incorrect: f32,
+}
+
 #[derive(Clone)]
 pub struct SelfPredictionStore {
     db: Arc<Mutex<Connection>>,
@@ -193,6 +204,81 @@ impl SelfPredictionStore {
     pub fn count(&self) -> Result<i64> {
         let db = self.db.lock().unwrap();
         Ok(db.query_row("SELECT COUNT(*) FROM self_predictions", [], |r| r.get(0))?)
+    }
+
+    /// Metacognitive sensitivity — Type-2 AUROC (Fleming & Lau 2014). Measures
+    /// how well the agent's PRE-task confidence (expected_success) discriminates
+    /// its OWN correct from incorrect outcomes. 0.5 = no metacognition
+    /// (confidence is noise); > 0.5 = genuine self-monitoring, the operational
+    /// signature of Higher-Order Theories of consciousness. Model-free (no SDT
+    /// fit). Actual correctness is recovered from (expected_success, success_err):
+    /// success_err = |expected - actual|, so actual=1 ⟺ expected+err≈1.
+    pub fn metacognitive_auroc(&self, n: usize) -> Result<Option<MetacogResult>> {
+        let db = self.db.lock().unwrap();
+        let mut stmt = db.prepare(
+            "SELECT expected_success, success_err FROM self_predictions
+             ORDER BY id DESC LIMIT ?1",
+        )?;
+        let rows: Vec<(f64, f64)> = stmt
+            .query_map(params![n as i64], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        // Recover (confidence, correct) per trial.
+        let mut data: Vec<(f32, bool)> = Vec::with_capacity(rows.len());
+        for (conf, serr) in rows {
+            let conf = conf as f32;
+            let serr = serr as f32;
+            // actual=1 ⟹ serr=1-conf (so conf+serr≈1); actual=0 ⟹ serr=conf.
+            let correct = (conf + serr - 1.0).abs() < (conf - serr).abs();
+            data.push((conf, correct));
+        }
+        let n_correct = data.iter().filter(|(_, c)| *c).count();
+        let n_incorrect = data.len() - n_correct;
+        if n_correct == 0 || n_incorrect == 0 {
+            return Ok(None); // need both classes to discriminate
+        }
+
+        // AUROC via Mann-Whitney U on confidence ranks (average ranks for ties).
+        let mut idx: Vec<usize> = (0..data.len()).collect();
+        idx.sort_by(|&a, &b| data[a].0.partial_cmp(&data[b].0).unwrap_or(std::cmp::Ordering::Equal));
+        let mut ranks = vec![0.0f64; data.len()];
+        let mut i = 0;
+        while i < idx.len() {
+            let mut j = i;
+            while j + 1 < idx.len() && (data[idx[j + 1]].0 - data[idx[i]].0).abs() < 1e-9 {
+                j += 1;
+            }
+            // ranks i..=j are tied → average rank (1-based)
+            let avg = ((i + 1) + (j + 1)) as f64 / 2.0;
+            for k in i..=j {
+                ranks[idx[k]] = avg;
+            }
+            i = j + 1;
+        }
+        let rank_sum_correct: f64 = data
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, c))| *c)
+            .map(|(k, _)| ranks[k])
+            .sum();
+        let nc = n_correct as f64;
+        let ni = n_incorrect as f64;
+        let u_correct = rank_sum_correct - nc * (nc + 1.0) / 2.0;
+        let auroc = (u_correct / (nc * ni)) as f32;
+
+        // Calibration gap: mean confidence on correct vs incorrect trials.
+        let mean_conf = |want: bool| -> f32 {
+            let v: Vec<f32> = data.iter().filter(|(_, c)| *c == want).map(|(x, _)| *x).collect();
+            if v.is_empty() { 0.0 } else { v.iter().sum::<f32>() / v.len() as f32 }
+        };
+        Ok(Some(MetacogResult {
+            auroc,
+            n: data.len(),
+            n_correct,
+            mean_conf_correct: mean_conf(true),
+            mean_conf_incorrect: mean_conf(false),
+        }))
     }
 }
 

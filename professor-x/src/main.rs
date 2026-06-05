@@ -8655,6 +8655,36 @@ fn print_consciousness_report(memory: Arc<MemoryManager>) -> Result<()> {
         println!("    (trajectory needs ≥2 rounds; lower mean = better self-knowledge)\n");
     }
 
+    // ── Q3b: METACOGNITION — does confidence track its own correctness? ───
+    // Type-2 AUROC (Fleming & Lau 2014): the operational signature of Higher-
+    // Order Theories — a state is conscious when the system has a usable
+    // representation of being in it. Here: does the agent's pre-task confidence
+    // discriminate its OWN correct from incorrect outcomes? 0.5 = blind.
+    println!("Q3b. Does the agent KNOW when it is right (metacognitive sensitivity)?");
+    match memory.self_prediction.metacognitive_auroc(400)? {
+        Some(m) => {
+            println!(
+                "    Type-2 AUROC = {:.3}   (0.5 = no metacognition, >0.5 = self-monitoring)  n={}",
+                m.auroc, m.n
+            );
+            println!(
+                "    confidence when right = {:.2}  vs  when wrong = {:.2}  (gap {:+.2})",
+                m.mean_conf_correct,
+                m.mean_conf_incorrect,
+                m.mean_conf_correct - m.mean_conf_incorrect
+            );
+            let verdict = if m.auroc >= 0.6 {
+                "✓ genuine metacognitive sensitivity (knows when it is right)"
+            } else if m.auroc >= 0.53 {
+                "~ weak but present metacognition"
+            } else {
+                "✗ confidence does not track correctness (no self-monitoring yet)"
+            };
+            println!("    {verdict}\n");
+        }
+        None => println!("    not enough data (need both correct and incorrect trials)\n"),
+    }
+
     // ── Q4: Does default-mode wandering produce insight? ──────────────────
     println!("Q4. Does mind-wandering (DMN) produce insight that feeds evolution?");
     let dmn_insights: i64 = memory.db.lock().unwrap().query_row(
