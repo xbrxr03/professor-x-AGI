@@ -2,6 +2,7 @@ mod agentd;
 mod artifacts;
 mod embeddings;
 mod evolved;
+mod local_embed;
 mod memd;
 mod observer;
 mod ollama;

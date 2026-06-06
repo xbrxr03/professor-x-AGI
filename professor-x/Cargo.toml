@@ -9,6 +9,7 @@ name = "professor-x"
 path = "src/main.rs"
 
 [dependencies]
+fastembed = "4"
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["full", "rt"] }

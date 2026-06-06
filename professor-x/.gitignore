@@ -1,3 +1,4 @@
 .mcp.json
 artifacts/events/
 professor-x/artifacts/
+.fastembed_cache/

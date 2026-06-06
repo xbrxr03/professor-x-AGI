@@ -317,6 +317,14 @@ impl OllamaClient {
     /// Requires: `ollama pull nomic-embed-text`
     /// Falls back gracefully — callers should treat Err as "embedding unavailable".
     pub async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        // Local ONNX embeddings first (no network/process hop, 768-dim). Falls
+        // through to the Ollama HTTP path if the local embedder is unavailable.
+        let owned = text.chars().take(2048).collect::<String>();
+        if let Ok(Some(v)) =
+            tokio::task::spawn_blocking(move || crate::local_embed::embed_one(&owned)).await
+        {
+            return Ok(v);
+        }
         let req = EmbedRequest {
             model: EMBED_MODEL.to_string(),
             input: serde_json::Value::String(text.chars().take(2048).collect()),
@@ -344,6 +352,18 @@ impl OllamaClient {
     pub async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Ok(Vec::new());
+        }
+        // Local ONNX batch first; fall back to Ollama HTTP on any failure.
+        let owned: Vec<String> = texts.iter().map(|t| t.chars().take(2048).collect()).collect();
+        if let Ok(Some(v)) = tokio::task::spawn_blocking(move || {
+            let refs: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
+            crate::local_embed::embed_many(&refs)
+        })
+        .await
+        {
+            if v.len() == texts.len() {
+                return Ok(v);
+            }
         }
         let req = EmbedRequest {
             model: EMBED_MODEL.to_string(),
