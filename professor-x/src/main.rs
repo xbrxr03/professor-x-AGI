@@ -1480,6 +1480,7 @@ async fn main() -> Result<()> {
     }
 
     if cli.chat {
+        ensure_folder_trusted();
         return run_interactive_tasks(
             Arc::clone(&ollama),
             Arc::clone(&registry),
@@ -1538,6 +1539,19 @@ async fn main() -> Result<()> {
         .await;
     }
 
+    // Default: on an interactive terminal with no arguments, open the assistant
+    // session — like `claude` / `codex`. Headless or with-args → daemon.
+    {
+        use std::io::IsTerminal;
+        if std::env::args().len() == 1 && std::io::stdin().is_terminal() {
+            ensure_folder_trusted();
+            return run_interactive_tasks(
+                ollama, registry, policy, memory, events, transcripts, cancel,
+            )
+            .await;
+        }
+    }
+
     run_daemon(
         ollama,
         registry,
@@ -1550,6 +1564,50 @@ async fn main() -> Result<()> {
         cli.run_now,
     )
     .await
+}
+
+/// Workspace-trust gate (like Claude Code / VS Code "Do you trust this folder?").
+/// Professor X can read, write, and run shell commands in the working directory,
+/// so on first use in a new folder it asks for consent. Trusted folders are
+/// remembered in ~/.professor-x/trusted_dirs.txt. Non-interactive sessions skip
+/// the prompt (a daemon/service can't answer).
+fn ensure_folder_trusted() {
+    use std::io::{IsTerminal, Write};
+    let cwd = match std::env::current_dir() {
+        Ok(c) => c.to_string_lossy().to_string(),
+        Err(_) => return,
+    };
+    let dir = std::env::var("PROFESSOR_X_DATA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into())).join(".professor-x")
+        });
+    let trust_file = dir.join("trusted_dirs.txt");
+    let trusted = std::fs::read_to_string(&trust_file).unwrap_or_default();
+    if trusted.lines().any(|l| l.trim() == cwd) {
+        return;
+    }
+    if !std::io::stdin().is_terminal() {
+        return; // can't prompt; assume the operator launched it deliberately
+    }
+    println!("\n  \x1b[1mDo you trust the files in this folder?\x1b[0m");
+    println!("  {cwd}");
+    println!("  Professor X can read, write, and run shell commands here.\n");
+    print!("  Trust this folder? [y/N] ");
+    let _ = std::io::stdout().flush();
+    let mut line = String::new();
+    let _ = std::io::stdin().read_line(&mut line);
+    let ans = line.trim().to_lowercase();
+    if ans == "y" || ans == "yes" {
+        let _ = std::fs::create_dir_all(&dir);
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&trust_file) {
+            let _ = writeln!(f, "{cwd}");
+        }
+        println!("  ✓ trusted.\n");
+    } else {
+        println!("  Not trusted — exiting. (Run from a folder you trust.)");
+        std::process::exit(0);
+    }
 }
 
 // ── Evolution smoke mode ─────────────────────────────────────────────────────
