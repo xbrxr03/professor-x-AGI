@@ -55,6 +55,32 @@ struct ParsedStep {
     params: Value,
 }
 
+/// Homeostatic baselines for the interoceptive / prediction-error signals that
+/// gate the consciousness modules. Module flags fire RELATIVE to these running
+/// means (gain control / sensory adaptation), so they stay discriminating
+/// (~half on) instead of saturating as absolute signal levels drift upward over
+/// a long run — the failure mode the overnight data exposed (mean_active climbed
+/// toward all-on and both phi and LZc collapsed). Coupling is preserved: shared
+/// signals still drive multiple modules together; only the threshold adapts.
+#[derive(Clone, Copy)]
+struct SignalBaselines {
+    stress: f32,
+    surprise: f32,
+    affect: f32,
+}
+
+impl SignalBaselines {
+    fn prior() -> Self {
+        Self { stress: 0.3, surprise: 0.3, affect: 0.2 }
+    }
+    fn update(&mut self, stress: f32, surprise: f32, affect: f32) {
+        const A: f32 = 0.1; // EMA rate
+        self.stress += A * (stress - self.stress);
+        self.surprise += A * (surprise - self.surprise);
+        self.affect += A * (affect - self.affect);
+    }
+}
+
 pub struct ReactLoop {
     ollama: Arc<OllamaClient>,
     registry: Arc<std::sync::RwLock<ToolRegistry>>,
@@ -101,6 +127,8 @@ pub struct ReactLoop {
     /// runs at depth+1 and is forbidden from delegating further (depth cap),
     /// preventing runaway spawn trees.
     depth: u32,
+    /// Homeostatic baselines for module-gating signals (anti-saturation).
+    signal_baselines: std::sync::Mutex<SignalBaselines>,
 }
 
 impl ReactLoop {
@@ -132,6 +160,7 @@ impl ReactLoop {
             scratchpad: std::sync::Mutex::new(String::new()),
             session_id,
             depth: 0,
+            signal_baselines: std::sync::Mutex::new(SignalBaselines::prior()),
         }
     }
 
@@ -909,8 +938,27 @@ impl ReactLoop {
             // mechanisms, each a real neuroscience principle, not metric-tuning:
             let stress = actual.stress(); // actual interoceptive load this task
             let surprise = self_pred_err.max(intero_err); // prediction error (novelty)
-            let deliberate = stress < 0.35; // System 2 regime vs System 1 (stressed)
-            let surprised = surprise > 0.3;
+            let affect_signal = self
+                .affect
+                .lock()
+                .map(|a| a.valence.abs().max(a.arousal + 0.6 * stress))
+                .unwrap_or(0.0);
+            // HOMEOSTATIC gating (anti-saturation): each signal-driven module
+            // fires when its signal is ELEVATED relative to its own running
+            // baseline, not an absolute threshold. The overnight data showed
+            // fixed thresholds saturate — as load/surprise drift up over a run,
+            // flags pin on, mean_active climbs, and BOTH phi and LZc collapse.
+            // Gain control keeps each module discriminating (~half on) regardless
+            // of absolute drift, while PRESERVING coupling (shared signals still
+            // co-drive modules; only the threshold adapts).
+            let base = self
+                .signal_baselines
+                .lock()
+                .map(|b| *b)
+                .unwrap_or_else(|_| SignalBaselines::prior());
+            let deliberate = stress < base.stress; // below own baseline = calm (System 2)
+            let surprised = surprise > base.surprise; // above own baseline = novel
+            let affect_active = affect_signal > base.affect;
             let reflected = task.steps.iter().any(|s| {
                 matches!(
                     s.action.tool_name.as_str(),
@@ -918,20 +966,15 @@ impl ReactLoop {
                 )
             });
 
-            // (1) Damasio somatic markers: body stress amplifies arousal, so the
-            // affect module co-activates with the body module under load.
-            let affect_active = self
-                .affect
-                .lock()
-                .map(|a| a.valence.abs() > 0.2 || (a.arousal + 0.6 * stress) > 0.25)
-                .unwrap_or(false);
-            // Body registers interoceptive SALIENCE = enough load to force the
-            // System-1 regime — the SAME physiological boundary that gates
-            // cognition below. A flat `stress > 0.2` was always true (pinned at
-            // 1.00 = zero integration). Tying body to !deliberate makes body and
-            // cognition couple through one threshold: body fires exactly when
-            // cognition is suppressed — a genuine dependency, not a tuned flag.
+            // Body fires under relative load (System-1 regime); couples to
+            // cognition through the same boundary (body on ⟺ cognition suppressed).
             let body_active = !deliberate;
+
+            // Update the homeostatic baselines AFTER gating this decision, so the
+            // thresholds track the signals' running means going forward.
+            if let Ok(mut b) = self.signal_baselines.lock() {
+                b.update(stress, surprise, affect_signal);
+            }
 
             // (2) Predictive-coding novelty (hippocampal/ACC): high prediction
             // error gates deep causal-trace formation — so causal co-activates
