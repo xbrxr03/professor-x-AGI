@@ -4,7 +4,7 @@ Prioritized engineering backlog. Sources noted where an item came from a specifi
 analysis. Status: ☐ open · ◐ in progress · ✓ done.
 
 ## From jcode gap analysis (2026-06-06-jcode-vs-professor-x-gap-analysis.md)
-- ☐ **Local ONNX embeddings** (HIGH, self-contained). Replace the Ollama
+- ✓ **Local ONNX embeddings** (DONE, commit 9496ac0). Replace the Ollama
   `nomic-embed-text` dependency with in-process ONNX/`fastembed` vector inference.
   Removes a network/process dependency and speeds every embed (retrieve_ice,
   binding, cognition, case-based confidence). jcode runs vector inference locally
