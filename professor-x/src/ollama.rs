@@ -525,7 +525,7 @@ impl OllamaClient {
         unreachable!()
     }
 
-    fn model_name(&self) -> &str {
+    pub fn model_name(&self) -> &str {
         &self.model
     }
 

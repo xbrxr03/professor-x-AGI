@@ -44,6 +44,33 @@ analysis. Status: ☐ open · ◐ in progress · ✓ done.
   need the models to sharpen over a long evolution run, or a better integration
   measure than total correlation (which saturates).
 
+## MISSION: the best harness for AGENTIC work with LOCAL models
+The genre everyone underserves — Claude Code/openclaw etc. assume frontier models
+and fall apart on local ones. Professor X's harness is tuned for small-model
+failure modes. Make it a daily sensei/assistant for every local-AI user, scaling
+from 8B (laptop) to 70B (workstation) on the SAME harness, with best-in-class UX.
+- ✓ Model flexibility — `--model` / auto-pick biggest installed (11073c7)
+- ✓ Local ONNX embeddings (9496ac0) · ✓ README (6805b2c) · ✓ dashboard (b9090dc)
+
+### UX/UI roadmap — "implement every notable feature of every harness"
+Assistant-grade interactive experience (the REPL today is operator-grade):
+- ◐ **In-session `/model`** — show current + installed, switch live (leverage the
+  new model flexibility) [building now]
+- ◐ **`/tools`** — list available tools (built-in + MCP + skills) [building now]
+- ☐ **Diff-review-before-apply** (Claude Code / Aider signature) — show a colored
+  diff for fs.write/fs.replace/patch.apply and confirm in interactive mode. Trust
+  + safety. HIGH.
+- ☐ **Streaming + rich rendering** — markdown, syntax highlight, spinner/progress
+  while the agent works (jcode-grade feel). HIGH.
+- ☐ **`@file` references** in chat (Claude Code/Cursor) — pull a file into context.
+- ☐ **`/memory`** — view/edit what the agent remembers (CLAUDE.md-style).
+- ☐ **Plan mode + todo display** (Claude Code) — show the agent's plan/checklist live.
+- ☐ **Session resume / history** — `/resume`, up-arrow command history.
+- ☐ **`/undo`** — revert the last applied change (git-backed).
+- ☐ **`/add` / `/drop` files** (Aider) — manage the working set.
+- ☐ **Slash-command autocomplete + a clean banner/help split** (assistant vs operator).
+- ☐ **Full ratatui TUI** (jcode-grade) — panes: chat, diff, activity, vitals. LARGE.
+
 ## Consolidation
 - ◐ **PR #10** (`harness-gaps` → `main`) — open, awaiting review/merge. Do not
   merge without explicit instruction.

@@ -7291,7 +7291,11 @@ async fn run_interactive_tasks(
         serde_json::json!({}),
     )?;
 
+    // Mutable so `/model` can switch the local model live, mid-session.
+    let mut ollama = ollama;
+
     println!("{}", format_interactive_help());
+    println!("model: {}  (use /model to switch)\n", ollama.model_name());
 
     loop {
         if cancel.is_cancelled() {
@@ -7306,6 +7310,45 @@ async fn run_interactive_tasks(
         }
         let input = line.trim();
         if input.is_empty() {
+            continue;
+        }
+        // ── assistant UX: live model switching ────────────────────────────
+        if let Some(rest) = input.strip_prefix("/model") {
+            let arg = rest.trim();
+            if arg.is_empty() {
+                println!("current model: {}", ollama.model_name());
+                match ollama.installed_models().await {
+                    Ok(ms) if !ms.is_empty() => {
+                        println!("installed (largest first):");
+                        let mut ms = ms;
+                        ms.sort_by(|a, b| b.params_b.partial_cmp(&a.params_b)
+                            .unwrap_or(std::cmp::Ordering::Equal));
+                        for m in ms {
+                            let mark = if m.name == ollama.model_name() { " ←" } else { "" };
+                            println!("  {:<28} {:>6.1}B{}", m.name, m.params_b, mark);
+                        }
+                        println!("switch: /model <name>");
+                    }
+                    _ => println!("(could not list installed models)"),
+                }
+            } else {
+                ollama = Arc::new(
+                    ollama::OllamaClient::new("http://localhost:11434").with_model(arg),
+                );
+                println!("✓ switched to model: {arg}");
+                record_console_command(&events, "model", Some(arg.to_string()))?;
+            }
+            continue;
+        }
+        if input == "/tools" {
+            let reg = registry.read().unwrap();
+            let mut tools = reg.list();
+            tools.sort_by(|a, b| a.name.cmp(&b.name));
+            println!("available tools ({}):", tools.len());
+            for t in tools {
+                println!("  {:<20} {}", t.name, t.description.chars().take(60).collect::<String>());
+            }
+            record_console_command(&events, "tools", None)?;
             continue;
         }
         if matches!(input, "/quit" | "/exit" | "quit" | "exit") {
