@@ -7397,14 +7397,13 @@ async fn run_interactive_tasks(
     // Mutable so `/model` can switch the local model live, mid-session.
     let mut ollama = ollama;
 
-    println!("{}", format_interactive_help());
-    println!("model: {}  (use /model to switch)\n", ollama.model_name());
+    print_welcome(ollama.model_name());
 
     loop {
         if cancel.is_cancelled() {
             break;
         }
-        print!("prof-x> ");
+        print!("\x1b[35m❯\x1b[0m ");
         io::stdout().flush()?;
 
         let mut line = String::new();
@@ -7704,6 +7703,28 @@ async fn run_interactive_tasks(
     )?;
     println!("Professor X interactive task mode stopped");
     Ok(())
+}
+
+/// Clean, friendly welcome — answers "what do I type?" with concrete examples,
+/// instead of dumping the full operator command wall (that's behind /help).
+fn print_welcome(model: &str) {
+    const M: &str = "\x1b[35m"; // magenta
+    const C: &str = "\x1b[36m"; // cyan
+    const D: &str = "\x1b[90m"; // dim
+    const B: &str = "\x1b[1m"; // bold
+    const R: &str = "\x1b[0m"; // reset
+    println!();
+    println!("  {M}{B}● Professor X{R}{D} — local agentic assistant{R}");
+    println!("  {D}model {model} · type /model to switch{R}");
+    println!();
+    println!("  {B}Just tell me what you want done.{R} For example:");
+    println!("    {C}what does @src/main.rs do?{R}");
+    println!("    {C}create a python script that renames every .txt in this folder to .md{R}");
+    println!("    {C}find every TODO in the codebase and list them{R}");
+    println!("    {C}run the tests and tell me what's failing{R}");
+    println!();
+    println!("  {D}@path pulls a file into context · /model /tools /help /quit{R}");
+    println!();
 }
 
 fn format_interactive_help() -> String {
