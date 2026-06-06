@@ -20,11 +20,33 @@ use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, Padding, Paragraph, Wrap};
 use ratatui::{Frame, Terminal};
+
+// Refined palette (One-Dark-ish), tuned for dark terminals.
+const ACCENT: Color = Color::Rgb(198, 120, 221); // magenta
+const CYAN: Color = Color::Rgb(86, 182, 194);
+const GREEN: Color = Color::Rgb(152, 195, 121);
+const RED: Color = Color::Rgb(224, 108, 117);
+const YELLOW: Color = Color::Rgb(229, 192, 123);
+const BLUE: Color = Color::Rgb(97, 175, 239);
+const DIM: Color = Color::Rgb(92, 99, 112);
+const FG: Color = Color::Rgb(220, 223, 228);
+
+fn panel(title: &str, accent: Color) -> Block<'_> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(DIM))
+        .title(Span::styled(
+            format!(" {title} "),
+            Style::default().fg(accent).add_modifier(Modifier::BOLD),
+        ))
+        .padding(Padding::horizontal(1))
+}
 use tokio_util::sync::CancellationToken;
 
 use crate::agentd::graph::{TaskNode, TaskType};
@@ -64,10 +86,14 @@ impl App {
     fn new(model: String) -> Self {
         Self {
             input: String::new(),
-            activity: vec![(
-                "Welcome to Professor X. Type a task and press Enter.".to_string(),
-                Color::DarkGray,
-            )],
+            activity: vec![
+                ("Just tell me what you want done. For example:".to_string(), FG),
+                ("   what does @src/main.rs do?".to_string(), CYAN),
+                ("   create a script that renames every .txt here to .md".to_string(), CYAN),
+                ("   find every TODO in the codebase".to_string(), CYAN),
+                ("   run the tests and tell me what's failing".to_string(), CYAN),
+                ("@path pulls a file into context.".to_string(), DIM),
+            ],
             last_event_id: 0,
             scroll: 0,
             working: Arc::new(AtomicBool::new(false)),
@@ -86,16 +112,21 @@ impl App {
     }
 }
 
-fn event_color(et: &str) -> Color {
+/// (icon, color, label) for an event type — for a clean, legible feed.
+fn event_style(et: &str) -> (&'static str, Color, &'static str) {
     match et {
-        "task.succeeded" | "tool.succeeded" => Color::Green,
-        "task.failed" | "task.fail_requested" | "policy.denied" => Color::Red,
-        "tool.started" => Color::Cyan,
-        "tool.requested" => Color::Blue,
-        "react.duplicate_action" => Color::Yellow,
-        "agent.delegate" => Color::Magenta,
-        "llm.response" => Color::DarkGray,
-        _ => Color::Gray,
+        "task.succeeded" => ("✓", GREEN, "done"),
+        "tool.succeeded" => ("✓", GREEN, "ok"),
+        "task.failed" | "task.fail_requested" => ("✗", RED, "failed"),
+        "policy.denied" => ("⛔", RED, "denied"),
+        "tool.started" => ("⚙", CYAN, "run"),
+        "tool.requested" => ("·", BLUE, "→"),
+        "react.duplicate_action" => ("↻", YELLOW, "dup"),
+        "agent.delegate" => ("⑂", ACCENT, "delegate"),
+        "agent.critic" | "mirror.review" => ("◎", ACCENT, "critic"),
+        "llm.response" => ("…", DIM, "think"),
+        "task.queued" | "task.started" => ("▶", FG, "task"),
+        _ => ("·", DIM, ""),
     }
 }
 
@@ -143,26 +174,29 @@ fn draw(f: &mut Frame, app: &App) {
 }
 
 fn draw_header(f: &mut Frame, area: Rect, app: &App) {
-    let status = if app.working.load(Ordering::Relaxed) {
-        Span::styled(
-            format!(" {} working", SPINNER[app.frame % 4]),
-            Style::default().fg(Color::Yellow),
-        )
-    } else {
-        Span::styled(" ◉ ready", Style::default().fg(Color::Green))
-    };
-    let line = Line::from(vec![
-        Span::styled(" PROFESSOR X ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
-        Span::styled(format!("· {} ", app.model), Style::default().fg(Color::DarkGray)),
-        status,
+    let area = area.inner(Margin { vertical: 0, horizontal: 1 });
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(10), Constraint::Length(14)])
+        .split(area);
+    let left = Line::from(vec![
+        Span::styled("● ", Style::default().fg(ACCENT)),
+        Span::styled("PROFESSOR X", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("  {}", app.model), Style::default().fg(DIM)),
     ]);
-    f.render_widget(Paragraph::new(line), area);
+    let status = if app.working.load(Ordering::Relaxed) {
+        Span::styled(format!("{} working", SPINNER[app.frame % 4]), Style::default().fg(YELLOW))
+    } else {
+        Span::styled("● ready", Style::default().fg(GREEN))
+    };
+    f.render_widget(Paragraph::new(left), cols[0]);
+    f.render_widget(Paragraph::new(Line::from(status)).alignment(Alignment::Right), cols[1]);
 }
 
 fn draw_body(f: &mut Frame, area: Rect, app: &App) {
     let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(68), Constraint::Percentage(32)])
+        .constraints([Constraint::Min(40), Constraint::Length(30)])
         .split(area);
     draw_activity(f, cols[0], app);
     draw_vitals(f, cols[1], app);
@@ -177,64 +211,54 @@ fn draw_activity(f: &mut Frame, area: Rect, app: &App) {
         .iter()
         .map(|(s, c)| ListItem::new(Line::from(Span::styled(s.clone(), Style::default().fg(*c)))))
         .collect();
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" live activity ")
-            .border_style(Style::default().fg(Color::Cyan)),
-    );
-    f.render_widget(list, area);
+    f.render_widget(List::new(items).block(panel("live activity", CYAN)), area);
+}
+
+fn vital_row<'a>(label: &'a str, v: f32, lo: f32, hi: f32, col: Color, fmt: String) -> Line<'a> {
+    Line::from(vec![
+        Span::styled(format!("{label:<8}"), Style::default().fg(DIM)),
+        Span::styled(bar(v, lo, hi, 12), Style::default().fg(col)),
+        Span::styled(format!(" {fmt}"), Style::default().fg(FG)),
+    ])
 }
 
 fn draw_vitals(f: &mut Frame, area: Rect, app: &App) {
     let v = &app.vitals;
-    let icol = if v.ics >= 0.70 { Color::Green } else { Color::Red };
-    let scol = if v.stress > 0.5 { Color::Red } else if v.stress > 0.3 { Color::Yellow } else { Color::Green };
+    let icol = if v.ics >= 0.70 { GREEN } else { RED };
+    let scol = if v.stress > 0.5 { RED } else if v.stress > 0.3 { YELLOW } else { GREEN };
+    let vcol = if v.valence >= 0.0 { GREEN } else { RED };
     let rows = vec![
-        Line::from(vec![Span::styled("φ integ  ", Style::default().fg(Color::Gray)),
-            Span::styled(bar(v.phi, 0.0, 3.0, 12), Style::default().fg(Color::Magenta)),
-            Span::raw(format!(" {:.2}", v.phi))]),
-        Line::from(vec![Span::styled("ICS      ", Style::default().fg(Color::Gray)),
-            Span::styled(bar(v.ics, 0.0, 1.0, 12), Style::default().fg(icol)),
-            Span::raw(format!(" {:.2}", v.ics))]),
-        Line::from(vec![Span::styled("valence  ", Style::default().fg(Color::Gray)),
-            Span::styled(bar(v.valence, -1.0, 1.0, 12), Style::default().fg(if v.valence>=0.0 {Color::Green} else {Color::Red})),
-            Span::raw(format!(" {:+.2}", v.valence))]),
-        Line::from(vec![Span::styled("arousal  ", Style::default().fg(Color::Gray)),
-            Span::styled(bar(v.arousal, 0.0, 1.0, 12), Style::default().fg(Color::Yellow)),
-            Span::raw(format!(" {:.2}", v.arousal))]),
-        Line::from(vec![Span::styled("body     ", Style::default().fg(Color::Gray)),
-            Span::styled(bar(v.stress, 0.0, 1.0, 12), Style::default().fg(scol)),
-            Span::raw(format!(" {:.2}", v.stress))]),
+        vital_row("φ integ", v.phi, 0.0, 3.0, ACCENT, format!("{:.2}", v.phi)),
+        vital_row("ICS", v.ics, 0.0, 1.0, icol, format!("{:.2}", v.ics)),
+        vital_row("valence", v.valence, -1.0, 1.0, vcol, format!("{:+.2}", v.valence)),
+        vital_row("arousal", v.arousal, 0.0, 1.0, YELLOW, format!("{:.2}", v.arousal)),
+        vital_row("body", v.stress, 0.0, 1.0, scol, format!("{:.2}", v.stress)),
         Line::from(""),
-        Line::from(Span::styled(format!("phi round   {}", v.lzc_round), Style::default().fg(Color::DarkGray))),
-        Line::from(Span::styled(format!("episodic    {}", v.corpus_episodic), Style::default().fg(Color::DarkGray))),
+        Line::from(Span::styled(format!("phi rounds  {}", v.lzc_round), Style::default().fg(DIM))),
+        Line::from(Span::styled(format!("episodic    {}", v.corpus_episodic), Style::default().fg(DIM))),
     ];
-    let p = Paragraph::new(rows).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" consciousness vitals ")
-            .border_style(Style::default().fg(Color::Magenta)),
-    );
-    f.render_widget(p, area);
+    f.render_widget(Paragraph::new(rows).block(panel("vitals", ACCENT)), area);
 }
 
 fn draw_input(f: &mut Frame, area: Rect, app: &App) {
-    let prompt = if app.working.load(Ordering::Relaxed) {
-        Span::styled("  (working — Esc to quit) ", Style::default().fg(Color::DarkGray))
+    let busy = app.working.load(Ordering::Relaxed);
+    let content = if busy {
+        Line::from(Span::styled("working…  (Esc to quit)", Style::default().fg(DIM)))
+    } else if app.input.is_empty() {
+        Line::from(Span::styled("type a task…  @file pulls a file into context", Style::default().fg(DIM)))
     } else {
-        Span::styled(format!("> {}", app.input), Style::default().fg(Color::White))
+        Line::from(vec![
+            Span::styled(app.input.clone(), Style::default().fg(FG)),
+            Span::styled("▏", Style::default().fg(ACCENT)),
+        ])
     };
-    let p = Paragraph::new(Line::from(prompt))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" task ")
-                .border_style(Style::default().fg(Color::Blue)),
-        )
-        .alignment(Alignment::Left)
-        .wrap(Wrap { trim: false });
-    f.render_widget(p, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(if busy { DIM } else { ACCENT }))
+        .title(Span::styled(" ❯ ", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)))
+        .padding(Padding::horizontal(1));
+    f.render_widget(Paragraph::new(content).block(block).wrap(Wrap { trim: false }), area);
 }
 
 /// Run the interactive TUI. Blocking ratatui loop on a dedicated thread; agent
@@ -294,7 +318,7 @@ fn tui_loop(
                                 let typed = app.input.trim().to_string();
                                 let task = crate::util::expand_file_refs(&typed); // @file refs
                                 app.input.clear();
-                                app.activity.push((format!("▶ {typed}"), Color::White));
+                                app.activity.push((format!("▶ {typed}"), FG));
                                 app.working.store(true, Ordering::Relaxed);
                                 let working = Arc::clone(&app.working);
                                 let (o, r, p, m, e, c) = (
@@ -329,8 +353,9 @@ fn tui_loop(
                 for e in evs {
                     if e.id > app.last_event_id {
                         app.last_event_id = e.id;
-                        let line = format!("{:<22} {}", e.event_type, e.summary.chars().take(80).collect::<String>());
-                        app.activity.push((line, event_color(&e.event_type)));
+                        let (icon, color, _) = event_style(&e.event_type);
+                        let line = format!("{icon} {}", e.summary.chars().take(96).collect::<String>());
+                        app.activity.push((line, color));
                     }
                 }
                 if app.activity.len() > MAX_ACTIVITY {
