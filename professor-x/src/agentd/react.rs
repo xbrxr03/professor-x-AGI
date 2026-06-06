@@ -593,8 +593,15 @@ impl ReactLoop {
                     .category_success_rate(&cat, 100)
                     .ok()
                     .flatten();
+                // RESOLUTION-DOMINANT blend (HOT-2 fix). The category base rate is
+                // CONSTANT within a category, so it shifts the level but adds zero
+                // metacognitive resolution; only the case-based per-trial signal
+                // (predicted_success = outcome rate among the nearest past
+                // episodes) discriminates THIS task. Earlier 0.6/0.4 throttled
+                // resolution; now the per-trial signal dominates (0.7), with the
+                // base rate as a weak shrinkage prior (0.3).
                 sp.expected_success = match base {
-                    Some(rate) => (0.6 * rate + 0.4 * predicted_success).clamp(0.02, 0.98),
+                    Some(rate) => (0.3 * rate + 0.7 * predicted_success).clamp(0.02, 0.98),
                     None => predicted_success.clamp(0.02, 0.98),
                 };
             }
@@ -1789,15 +1796,18 @@ impl ReactLoop {
     async fn retrieve_ice(&self, task_desc: &str) -> Vec<String> {
         // Prefer semantic search (nomic-embed-text) for better recall.
         // Falls back to FTS5 keyword search when embeddings unavailable.
+        // k=5 (was 3): a finer case base gives the case-based confidence estimate
+        // (predict_success_from_ice) more resolution — it is the per-trial signal
+        // that drives metacognitive sensitivity (meta-d′).
         let entries = if let Ok(query_vec) = self.ollama.embed(task_desc).await {
             self.memory
                 .episodic
-                .search_semantic(&self.memory.embeddings, &query_vec, 3)
+                .search_semantic(&self.memory.embeddings, &query_vec, 5)
                 .unwrap_or_default()
         } else {
             self.memory
                 .episodic
-                .search_fts(task_desc, 3)
+                .search_fts(task_desc, 5)
                 .unwrap_or_default()
         };
 
