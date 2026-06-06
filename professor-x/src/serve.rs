@@ -135,10 +135,11 @@ async fn api_task(
     State(st): State<AppState>,
     Json(body): Json<TaskBody>,
 ) -> Json<serde_json::Value> {
-    let task = body.task.trim().to_string();
-    if task.is_empty() {
+    let typed = body.task.trim().to_string();
+    if typed.is_empty() {
         return Json(json!({"ok": false, "error": "empty task"}));
     }
+    let task = crate::util::expand_file_refs(&typed); // @file → inline context
     if st.working.swap(true, Ordering::Relaxed) {
         return Json(json!({"ok": false, "error": "already working"}));
     }

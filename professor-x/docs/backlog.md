@@ -62,7 +62,8 @@ Assistant-grade interactive experience (the REPL today is operator-grade):
   + safety. HIGH.
 - ☐ **Streaming + rich rendering** — markdown, syntax highlight, spinner/progress
   while the agent works (jcode-grade feel). HIGH.
-- ☐ **`@file` references** in chat (Claude Code/Cursor) — pull a file into context.
+- ✓ **`@file` references** — type @path to inline a file into the agent's context
+  (chat / --task / TUI / web). util::expand_file_refs, 3 tests.
 - ☐ **`/memory`** — view/edit what the agent remembers (CLAUDE.md-style).
 - ☐ **Plan mode + todo display** (Claude Code) — show the agent's plan/checklist live.
 - ☐ **Session resume / history** — `/resume`, up-arrow command history.

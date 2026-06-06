@@ -5,6 +5,7 @@ mod evolved;
 mod local_embed;
 mod serve;
 mod tui;
+mod util;
 mod memd;
 mod observer;
 mod ollama;
@@ -7276,6 +7277,7 @@ async fn run_single_task(
     transcripts: Arc<TranscriptStore>,
     cancel: CancellationToken,
 ) -> Result<()> {
+    let description = util::expand_file_refs(&description); // @file → inline context
     info!("one-shot task: {description}");
     let mut task = TaskNode::new(description, TaskType::UserRequest, 100);
     events.append(
@@ -7319,6 +7321,7 @@ async fn run_single_task_live(
     transcripts: Arc<TranscriptStore>,
     cancel: CancellationToken,
 ) -> Result<()> {
+    let description = util::expand_file_refs(&description); // @file → inline context
     info!("interactive task: {description}");
     let mut task = TaskNode::new(description, TaskType::UserRequest, 100);
     let task_id = task.id.to_string();
@@ -7706,7 +7709,8 @@ async fn run_interactive_tasks(
 fn format_interactive_help() -> String {
     [
         "Professor X interactive task mode",
-        "Type a task and press Enter.",
+        "Type a task and press Enter.  Reference files with @path (e.g. 'fix @src/main.rs').",
+        "  /model [name]   show/switch the local model    /tools  list available tools",
         "",
         "Operator commands",
         "  /brief         show latest run, coding session, evidence, and next commands",

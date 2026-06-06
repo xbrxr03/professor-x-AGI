@@ -291,9 +291,10 @@ fn tui_loop(
                             KeyCode::Esc => break,
                             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break,
                             KeyCode::Enter if !busy && !app.input.trim().is_empty() => {
-                                let task = app.input.trim().to_string();
+                                let typed = app.input.trim().to_string();
+                                let task = crate::util::expand_file_refs(&typed); // @file refs
                                 app.input.clear();
-                                app.activity.push((format!("▶ {task}"), Color::White));
+                                app.activity.push((format!("▶ {typed}"), Color::White));
                                 app.working.store(true, Ordering::Relaxed);
                                 let working = Arc::clone(&app.working);
                                 let (o, r, p, m, e, c) = (
