@@ -129,6 +129,11 @@ pub struct ReactLoop {
     depth: u32,
     /// Homeostatic baselines for module-gating signals (anti-saturation).
     signal_baselines: std::sync::Mutex<SignalBaselines>,
+    /// Cross-module coupling on/off. Default on; set PROFESSOR_X_COUPLING=off to
+    /// run the DECOUPLED control condition for the PCI contrast (modules fire on
+    /// their own signals, no shared-signal gating) — the anaesthesia arm of the
+    /// wake-vs-anaesthesia perturbational-complexity experiment.
+    coupling_enabled: bool,
 }
 
 impl ReactLoop {
@@ -161,6 +166,9 @@ impl ReactLoop {
             session_id,
             depth: 0,
             signal_baselines: std::sync::Mutex::new(SignalBaselines::prior()),
+            coupling_enabled: std::env::var("PROFESSOR_X_COUPLING")
+                .map(|v| v.to_lowercase() != "off")
+                .unwrap_or(true),
         }
     }
 
@@ -1003,14 +1011,37 @@ impl ReactLoop {
             // it is suppressed. Cognition thus couples to body and affect.
             let cognition_active = cognition_hit && deliberate;
 
-            let activation = ModuleActivation {
-                episodic: episodic_active,
-                semantic: used_memory_tool,
-                cognition: cognition_active,
-                affect: affect_active,
-                body: body_active,
-                causal: causal_active,
-                self_model: self_model_active,
+            // DECOUPLED control (PCI anaesthesia arm): when coupling is off, each
+            // module fires on its OWN signal with no shared-signal gating — the
+            // surprise signal no longer jointly drives episodic/causal/self_model,
+            // and stress no longer ties body to cognition. Same modules, same
+            // baselines; only the cross-module dependency is removed. The PCI
+            // contrast (coupled complexity vs this) is the wake-vs-anaesthesia test.
+            let activation = if self.coupling_enabled {
+                ModuleActivation {
+                    episodic: episodic_active,
+                    semantic: used_memory_tool,
+                    cognition: cognition_active,
+                    affect: affect_active,
+                    body: body_active,
+                    causal: causal_active,
+                    self_model: self_model_active,
+                }
+            } else {
+                ModuleActivation {
+                    episodic: ice_hit,
+                    semantic: used_memory_tool,
+                    cognition: cognition_hit,
+                    affect: affect_active,
+                    body: stress > base.stress,
+                    causal: self
+                        .memory
+                        .causal_traces
+                        .extract_patterns(Some(&category_name), 3, 0.6, 10_000)
+                        .map(|p| !p.is_empty())
+                        .unwrap_or(false),
+                    self_model: reflected,
+                }
             };
             if let Err(e) = self.memory.phi.record_activation(self.current_round, &activation) {
                 warn!("react: failed to record phi activation: {e}");
