@@ -3,6 +3,7 @@ mod artifacts;
 mod embeddings;
 mod evolved;
 mod local_embed;
+mod serve;
 mod tui;
 mod memd;
 mod observer;
@@ -208,6 +209,8 @@ struct CliArgs {
     model: Option<String>,
     /// Launch the interactive full-screen TUI cockpit.
     tui: bool,
+    /// Launch the local web UI server (http://127.0.0.1:8787).
+    serve: bool,
     /// Phase B truth gate one-shot: scan brain/, artifacts/, ops/daily/ against
     /// the artifact schemas and report. Exit 1 on any failure.
     validate_artifacts: bool,
@@ -339,6 +342,7 @@ fn parse_args() -> CliArgs {
         generate_curriculum: None,
         model: None,
         tui: false,
+        serve: false,
         validate_artifacts: false,
     };
     let mut i = 1;
@@ -366,6 +370,10 @@ fn parse_args() -> CliArgs {
             }
             "--tui" | "--cockpit-live" => {
                 cli.tui = true;
+                i += 1;
+            }
+            "--serve" | "--web" => {
+                cli.serve = true;
                 i += 1;
             }
             "--hiro" if i + 1 < args.len() => {
@@ -1483,6 +1491,19 @@ async fn main() -> Result<()> {
             Arc::clone(&events),
             Arc::clone(&transcripts),
             cancel,
+        )
+        .await;
+    }
+
+    if cli.serve {
+        ensure_folder_trusted();
+        return serve::run_serve(
+            Arc::clone(&ollama),
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            cancel.clone(),
         )
         .await;
     }

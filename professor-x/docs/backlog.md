@@ -72,6 +72,11 @@ Assistant-grade interactive experience (the REPL today is operator-grade):
 - ✓ **Full ratatui TUI** (`profx --tui`) — interactive: type tasks, watch the agent
   work live, consciousness-vitals pane. (diff pane still TODO)
 
+### Web UI
+- ✓ **`profx --serve`** — local web UI (axum) at http://127.0.0.1:8787: chat,
+  live activity, consciousness vitals. API (`/api/events`, `/api/vitals`,
+  `/api/task`) is the contract for an OpenUI-generated frontend.
+
 ## Consolidation
 - ◐ **PR #10** (`harness-gaps` → `main`) — open, awaiting review/merge. Do not
   merge without explicit instruction.
