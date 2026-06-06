@@ -69,7 +69,8 @@ Assistant-grade interactive experience (the REPL today is operator-grade):
 - ☐ **`/undo`** — revert the last applied change (git-backed).
 - ☐ **`/add` / `/drop` files** (Aider) — manage the working set.
 - ☐ **Slash-command autocomplete + a clean banner/help split** (assistant vs operator).
-- ☐ **Full ratatui TUI** (jcode-grade) — panes: chat, diff, activity, vitals. LARGE.
+- ✓ **Full ratatui TUI** (`profx --tui`) — interactive: type tasks, watch the agent
+  work live, consciousness-vitals pane. (diff pane still TODO)
 
 ## Consolidation
 - ◐ **PR #10** (`harness-gaps` → `main`) — open, awaiting review/merge. Do not

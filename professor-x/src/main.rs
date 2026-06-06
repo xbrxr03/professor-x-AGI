@@ -3,6 +3,7 @@ mod artifacts;
 mod embeddings;
 mod evolved;
 mod local_embed;
+mod tui;
 mod memd;
 mod observer;
 mod ollama;
@@ -205,6 +206,8 @@ struct CliArgs {
     /// Override the local generation model (any Ollama model). Default: the
     /// largest model you have installed (VRAM-aware by proxy), else qwen3:8b.
     model: Option<String>,
+    /// Launch the interactive full-screen TUI cockpit.
+    tui: bool,
     /// Phase B truth gate one-shot: scan brain/, artifacts/, ops/daily/ against
     /// the artifact schemas and report. Exit 1 on any failure.
     validate_artifacts: bool,
@@ -335,6 +338,7 @@ fn parse_args() -> CliArgs {
         run_self_tests: None,
         generate_curriculum: None,
         model: None,
+        tui: false,
         validate_artifacts: false,
     };
     let mut i = 1;
@@ -359,6 +363,10 @@ fn parse_args() -> CliArgs {
             "--model" if i + 1 < args.len() => {
                 cli.model = Some(args[i + 1].clone());
                 i += 2;
+            }
+            "--tui" | "--cockpit-live" => {
+                cli.tui = true;
+                i += 1;
             }
             "--hiro" if i + 1 < args.len() => {
                 cli.hiro_round = args[i + 1].parse::<u32>().ok();
@@ -1475,6 +1483,19 @@ async fn main() -> Result<()> {
             Arc::clone(&events),
             Arc::clone(&transcripts),
             cancel,
+        )
+        .await;
+    }
+
+    if cli.tui {
+        ensure_folder_trusted();
+        return tui::run_tui(
+            Arc::clone(&ollama),
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            cancel.clone(),
         )
         .await;
     }
