@@ -227,14 +227,27 @@ impl ToolExecutor {
             "fs.write" => {
                 let path = req_str(&action.params, "path")?;
                 let content = req_str(&action.params, "content")?;
+                let existed = std::path::Path::new(path).exists();
+                let old = if existed {
+                    std::fs::read_to_string(path).unwrap_or_default()
+                } else {
+                    String::new()
+                };
                 if let Some(p) = std::path::Path::new(path).parent() {
                     std::fs::create_dir_all(p)?;
                 }
                 std::fs::write(path, content)?;
-                Ok(ToolDispatch::output(format!(
-                    "wrote {} bytes to {path}",
-                    content.len()
-                )))
+                // Change visibility: report a diff so the user always sees the edit.
+                let summary = if !existed || old.is_empty() {
+                    format!(
+                        "created {path} ({} lines, {} bytes)",
+                        content.lines().count(),
+                        content.len()
+                    )
+                } else {
+                    format!("edited {path} — {}", diff_summary(&old, content))
+                };
+                Ok(ToolDispatch::output(summary))
             }
             "fs.replace" => {
                 let path = req_str(&action.params, "path")?;
@@ -263,14 +276,12 @@ impl ToolExecutor {
                 let updated = original.replacen(old, new, 1);
                 let diff_artifact = self.write_replace_artifact(path, &original, &updated)?;
                 if mode == "apply" {
-                    std::fs::write(&resolved_path, updated)?;
+                    std::fs::write(&resolved_path, &updated)?;
                 }
                 Ok(ToolDispatch::with_artifact(
                     format!(
-                        "replace {mode} succeeded for {path}; old_bytes={} new_bytes={}; artifact={}",
-                        old.len(),
-                        new.len(),
-                        diff_artifact.display()
+                        "replace {mode} {path} — {}",
+                        diff_summary(&original, &updated)
                     ),
                     diff_artifact,
                 ))
@@ -1023,6 +1034,37 @@ fn text_preview_diff(before: &str, after: &str) -> String {
     let before = truncate_text(before, 2000);
     let after = truncate_text(after, 2000);
     format!("- before:\n{before}\n+ after:\n{after}")
+}
+
+/// Compact change summary so every file edit is VISIBLE in the activity feed:
+/// "Δ +N -M lines" plus a few added lines. Multiset line diff (a moved line
+/// counts as both) — enough to see what an edit did at a glance, dependency-free.
+fn diff_summary(before: &str, after: &str) -> String {
+    use std::collections::HashMap;
+    let mut counts: HashMap<&str, i32> = HashMap::new();
+    for l in before.lines() {
+        *counts.entry(l).or_insert(0) += 1;
+    }
+    let mut added = 0usize;
+    let mut preview: Vec<String> = Vec::new();
+    for l in after.lines() {
+        let e = counts.entry(l).or_insert(0);
+        if *e > 0 {
+            *e -= 1;
+        } else {
+            added += 1;
+            if preview.len() < 6 && !l.trim().is_empty() {
+                preview.push(format!("  + {}", l.chars().take(80).collect::<String>()));
+            }
+        }
+    }
+    let removed: i32 = counts.values().filter(|v| **v > 0).sum();
+    let mut s = format!("Δ +{added} -{removed} lines");
+    if !preview.is_empty() {
+        s.push('\n');
+        s.push_str(&preview.join("\n"));
+    }
+    s
 }
 
 fn default_workspace_root() -> PathBuf {

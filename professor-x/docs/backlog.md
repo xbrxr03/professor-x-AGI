@@ -57,9 +57,9 @@ Assistant-grade interactive experience (the REPL today is operator-grade):
 - ◐ **In-session `/model`** — show current + installed, switch live (leverage the
   new model flexibility) [building now]
 - ◐ **`/tools`** — list available tools (built-in + MCP + skills) [building now]
-- ☐ **Diff-review-before-apply** (Claude Code / Aider signature) — show a colored
-  diff for fs.write/fs.replace/patch.apply and confirm in interactive mode. Trust
-  + safety. HIGH.
+- ◐ **Change visibility** — fs.write/fs.replace now report `created X` / `edited X —
+  Δ +N -M lines` with a changed-line preview, so every edit is visible in the feed.
+  (Interactive confirm-BEFORE-apply still TODO — needs an agent↔UI approval channel.)
 - ☐ **Streaming + rich rendering** — markdown, syntax highlight, spinner/progress
   while the agent works (jcode-grade feel). HIGH.
 - ✓ **`@file` references** — type @path to inline a file into the agent's context
