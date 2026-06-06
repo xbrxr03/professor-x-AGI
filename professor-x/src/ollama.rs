@@ -221,6 +221,30 @@ struct TagsResponse {
 #[derive(Debug, Deserialize)]
 struct ModelInfo {
     name: String,
+    #[serde(default)]
+    size: u64,
+    #[serde(default)]
+    details: Option<ModelDetails>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelDetails {
+    #[serde(default)]
+    parameter_size: Option<String>,
+}
+
+/// An installed Ollama model with its rough scale, for VRAM-aware selection.
+#[derive(Debug, Clone)]
+pub struct InstalledModel {
+    pub name: String,
+    pub params_b: f32,
+    pub size_bytes: u64,
+}
+
+/// Parse a parameter-size string like "8.2B" / "32B" / "1.5B" into billions.
+fn parse_params_b(s: &str) -> Option<f32> {
+    let t = s.trim().trim_end_matches(|c| c == 'B' || c == 'b').trim();
+    t.parse::<f32>().ok()
 }
 
 // ── Client ────────────────────────────────────────────────────────────────────
@@ -271,6 +295,51 @@ impl OllamaClient {
                 || m.name.trim_end_matches(":latest") == self.model.trim_end_matches(":latest")
         });
         Ok(loaded)
+    }
+
+    /// List installed models with their rough scale (excludes embedding models).
+    pub async fn installed_models(&self) -> Result<Vec<InstalledModel>> {
+        let url = format!("{}/api/tags", self.base_url);
+        let tags: TagsResponse = self
+            .http
+            .get(&url)
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await?
+            .json()
+            .await?;
+        Ok(tags
+            .models
+            .into_iter()
+            .filter(|m| !m.name.to_lowercase().contains("embed"))
+            .map(|m| {
+                let params_b = m
+                    .details
+                    .as_ref()
+                    .and_then(|d| d.parameter_size.as_deref())
+                    .and_then(parse_params_b)
+                    .unwrap_or(0.0);
+                InstalledModel { name: m.name, params_b, size_bytes: m.size }
+            })
+            .collect())
+    }
+
+    /// Pick the largest installed chat model. VRAM-aware by proxy: users only
+    /// pull models their hardware can actually run, so "biggest installed" is
+    /// "best the local machine can do." Professor X is one harness that scales
+    /// across the whole local-model spectrum — 8B on a laptop, 70B on a workstation.
+    pub async fn best_local_model(&self) -> Option<String> {
+        let mut models = self.installed_models().await.ok()?;
+        if models.is_empty() {
+            return None;
+        }
+        models.sort_by(|a, b| {
+            b.params_b
+                .partial_cmp(&a.params_b)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(b.size_bytes.cmp(&a.size_bytes))
+        });
+        models.into_iter().next().map(|m| m.name)
     }
 
     /// Single-turn generate. Used for ReAct Thought generation.

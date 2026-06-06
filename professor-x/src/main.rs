@@ -202,6 +202,9 @@ struct CliArgs {
     /// in the real tool set, and store them for --run-self-tests to execute.
     /// Breaks the distillation-corpus ceiling of the fixed 60-task benchmark.
     generate_curriculum: Option<usize>,
+    /// Override the local generation model (any Ollama model). Default: the
+    /// largest model you have installed (VRAM-aware by proxy), else qwen3:8b.
+    model: Option<String>,
     /// Phase B truth gate one-shot: scan brain/, artifacts/, ops/daily/ against
     /// the artifact schemas and report. Exit 1 on any failure.
     validate_artifacts: bool,
@@ -331,6 +334,7 @@ fn parse_args() -> CliArgs {
         evolve_forever: None,
         run_self_tests: None,
         generate_curriculum: None,
+        model: None,
         validate_artifacts: false,
     };
     let mut i = 1;
@@ -351,6 +355,10 @@ fn parse_args() -> CliArgs {
             "--run-now" => {
                 cli.run_now = true;
                 i += 1;
+            }
+            "--model" if i + 1 < args.len() => {
+                cli.model = Some(args[i + 1].clone());
+                i += 2;
             }
             "--hiro" if i + 1 < args.len() => {
                 cli.hiro_round = args[i + 1].parse::<u32>().ok();
@@ -1377,8 +1385,24 @@ async fn main() -> Result<()> {
         }
     }
 
+    // ── model resolution (local, VRAM-aware) ─────────────────────────────
+    // Professor X is one harness across the whole local-model spectrum. Pick the
+    // model: explicit --model / PROFESSOR_X_MODEL wins; else the LARGEST model the
+    // user has installed (they only pull what their VRAM runs, so "biggest
+    // installed" = "best this machine can do"); else the 8B default.
+    let ollama = {
+        let probe = ollama::OllamaClient::new("http://localhost:11434");
+        let chosen = match cli.model.clone().or_else(|| std::env::var("PROFESSOR_X_MODEL").ok()) {
+            Some(m) => m,
+            None => probe
+                .best_local_model()
+                .await
+                .unwrap_or_else(|| ollama::DEFAULT_MODEL.to_string()),
+        };
+        info!("model: {chosen}  (override: --model <name> or PROFESSOR_X_MODEL)");
+        Arc::new(probe.with_model(chosen))
+    };
     // ── ollama health check ───────────────────────────────────────────────
-    let ollama = Arc::new(ollama::OllamaClient::new("http://localhost:11434"));
     match ollama.health_check().await {
         Ok(true) => info!("ollama: reachable, model ready"),
         Ok(false) => warn!("ollama: reachable but model may not be loaded — check `ollama list`"),
