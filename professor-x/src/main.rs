@@ -10448,6 +10448,7 @@ fn render_work_cockpit(
     let recent_events = events.work_tail(limit)?;
     let latest_run = WorkLoopRunStore::new(Arc::clone(&memory.db)).latest()?;
     let latest_coding_session = CodingSessionStore::new(Arc::clone(&memory.db)).latest()?;
+    let recent_queue = AutonomyQueueStore::new(Arc::clone(&memory.db)).recent(5)?;
     let runtime_line = cockpit_runtime_line(&repo_root);
     let gate_store = WorkLoopGateStore::new(Arc::clone(&memory.db));
     let latest_gate = gate_store.latest()?;
@@ -10465,6 +10466,7 @@ fn render_work_cockpit(
         latest_coding_session.as_ref(),
         latest_gate.as_ref(),
         &recent_gates,
+        &recent_queue,
     ))
 }
 
@@ -10476,6 +10478,7 @@ fn format_work_cockpit(
     latest_coding_session: Option<&CodingSessionRecord>,
     latest_gate: Option<&WorkLoopGateRecord>,
     recent_gates: &[WorkLoopGateRecord],
+    recent_queue: &[AutonomyQueueItem],
 ) -> String {
     let mut lines = Vec::new();
     lines.push("Professor X live work cockpit".to_string());
@@ -10548,6 +10551,38 @@ fn format_work_cockpit(
             }
         }
         None => lines.push("  waiting for --operator-run, --operator-run-commit, or --lab".to_string()),
+    }
+
+    lines.push(String::new());
+    lines.push("Autonomous queue".to_string());
+    if recent_queue.is_empty() {
+        lines.push("  empty; add work with --prof-x-enqueue \"goal\" or --prof-x-enqueue-commit \"goal\"".to_string());
+    } else {
+        for item in recent_queue.iter().take(5) {
+            lines.push(format!(
+                "  {}",
+                format_autonomy_queue_item(item)
+            ));
+            let queue = short_fragment(&item.id);
+            match item.status.as_str() {
+                "pending" | "running" => lines.push(format!(
+                    "      next --prof-x-step-live 1  review --prof-x-queue-review {queue}"
+                )),
+                "passed" | "completed" => lines.push(format!(
+                    "      review --prof-x-queue-review {queue}  replay --prof-x-queue-replay {queue}  publish --prof-x-queue-publish {queue}"
+                )),
+                "failed" | "rejected" => lines.push(format!(
+                    "      inspect --prof-x-queue-review {queue}  replay --prof-x-queue-replay {queue}"
+                )),
+                _ => lines.push(format!("      inspect --prof-x-queue-review {queue}")),
+            }
+            if let Some(report) = &item.result_report_path {
+                lines.push(format!("      report {}", truncate(report, 120)));
+            }
+            if let Some(reason) = &item.failure_reason {
+                lines.push(format!("      failure {}", truncate(reason, 120)));
+            }
+        }
     }
 
     lines.push(String::new());
@@ -13043,6 +13078,11 @@ mod tests {
                 "detail": "deterministic coding smoke",
             }),
         };
+        let queued = queue_item(
+            "make Prof X work visible in the cockpit",
+            WorkLoopProfile::Commit,
+            3,
+        );
 
         let screen = format_work_cockpit(
             std::path::Path::new("."),
@@ -13052,6 +13092,7 @@ mod tests {
             Some(&session),
             Some(&gate),
             std::slice::from_ref(&gate),
+            std::slice::from_ref(&queued),
         );
 
         assert!(screen.contains("Professor X live work cockpit"));
@@ -13062,6 +13103,10 @@ mod tests {
         assert!(screen.contains("operator:core run=12345678"));
         assert!(screen.contains("commands replay=--replay 12345678"));
         assert!(screen.contains("Evidence bundle"));
+        assert!(screen.contains("Autonomous queue"));
+        assert!(screen.contains("make Prof X work visible in the cockpit"));
+        assert!(screen.contains("next --prof-x-step-live 1"));
+        assert!(screen.contains("review --prof-x-queue-review 12345678"));
         assert!(screen.contains("Latest coding session"));
         assert!(screen.contains("passed session=session-"));
         assert!(screen.contains("commit=eedcd3e1"));
