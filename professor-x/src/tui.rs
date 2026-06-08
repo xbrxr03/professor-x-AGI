@@ -44,6 +44,9 @@ const TICK: Duration = Duration::from_millis(100);
 const MAX_LINES: usize = 1200;
 const SPINNER: [&str; 4] = ["⠋", "⠙", "⠸", "⠴"];
 const TUI_QUEUE_STEP_COMMAND: &str = "cargo run -- --prof-x-step-live 1";
+const TUI_QUEUE_REVIEW_COMMAND: &str = "cargo run -- --prof-x-queue-review";
+const TUI_QUEUE_REPLAY_COMMAND: &str = "cargo run -- --prof-x-queue-replay";
+const TUI_QUEUE_PUBLISH_COMMAND: &str = "cargo run -- --prof-x-queue-publish";
 
 // One-Dark-ish palette.
 const ACCENT: Color = Color::Rgb(198, 120, 221);
@@ -215,8 +218,11 @@ fn event_to_line(event_type: &str, summary: &str, payload: &Value) -> Option<Lin
             Some(styled(format!("  ◇ {}", queue_event_summary(event, summary, payload)), YELLOW))
         }
         "tui.command.started" => Some(styled(format!("  ▶ {summary}"), CYAN)),
-        "tui.command.completed" => Some(styled(format!("  ✓ {summary}"), GREEN)),
-        "tui.command.failed" => Some(styled(format!("  ✗ {summary}"), RED)),
+        "tui.command.completed" => Some(styled(
+            format_tui_command_event(summary, payload),
+            GREEN,
+        )),
+        "tui.command.failed" => Some(styled(format_tui_command_event(summary, payload), RED)),
         "react.duplicate_action" => None,
         _ => None,
     }
@@ -317,9 +323,9 @@ fn queue_next_command(item: &AutonomyQueueItem) -> String {
     let queue = short(&item.id);
     match item.status.as_str() {
         "pending" | "running" => TUI_QUEUE_STEP_COMMAND.to_string(),
-        "passed" | "completed" => format!("cargo run -- --prof-x-queue-publish {queue}"),
-        "failed" | "rejected" => format!("cargo run -- --prof-x-queue-review {queue}"),
-        _ => format!("cargo run -- --prof-x-queue-review {queue}"),
+        "passed" | "completed" => format!("{TUI_QUEUE_PUBLISH_COMMAND} {queue}"),
+        "failed" | "rejected" => format!("{TUI_QUEUE_REVIEW_COMMAND} {queue}"),
+        _ => format!("{TUI_QUEUE_REVIEW_COMMAND} {queue}"),
     }
 }
 
@@ -369,6 +375,9 @@ fn tui_help_lines() -> Vec<Line<'static>> {
         styled("   /enqueue <goal>       queue a bounded core Prof X goal", CYAN),
         styled("   /enqueue-commit <goal> queue verified commit-capable work", CYAN),
         styled("   /step-live            run one supervised queue step", CYAN),
+        styled("   /queue-review [id]    review queue evidence", CYAN),
+        styled("   /queue-replay [id]    replay queue timeline", CYAN),
+        styled("   /queue-publish [id]   publish linked run evidence", CYAN),
     ]
 }
 
@@ -464,8 +473,57 @@ fn is_tui_step_command(input: &str) -> bool {
     matches!(input.trim(), "/step" | "/step-live")
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TuiCliCommand {
+    label: &'static str,
+    command_display: String,
+    args: Vec<String>,
+}
+
+fn tui_cli_command(input: &str) -> Option<TuiCliCommand> {
+    let input = input.trim();
+    let (label, flag, display, rest) =
+        if let Some(rest) = input.strip_prefix("/queue-review") {
+            ("queue review", "--prof-x-queue-review", TUI_QUEUE_REVIEW_COMMAND, rest)
+        } else if let Some(rest) = input.strip_prefix("/queue-replay") {
+            ("queue replay", "--prof-x-queue-replay", TUI_QUEUE_REPLAY_COMMAND, rest)
+        } else if let Some(rest) = input.strip_prefix("/queue-publish") {
+            ("queue publish", "--prof-x-queue-publish", TUI_QUEUE_PUBLISH_COMMAND, rest)
+        } else {
+            return None;
+        };
+    let queue_ref = nonempty_or_latest(rest);
+    Some(TuiCliCommand {
+        label,
+        command_display: format!("{display} {queue_ref}"),
+        args: vec![flag.to_string(), queue_ref],
+    })
+}
+
+fn nonempty_or_latest(raw: &str) -> String {
+    let value = raw.trim();
+    if value.is_empty() {
+        "latest".to_string()
+    } else {
+        value.chars().filter(|ch| !ch.is_control()).take(120).collect()
+    }
+}
+
 fn run_tui_queue_step_command(events: Arc<EventStore>) {
-    let command = TUI_QUEUE_STEP_COMMAND;
+    run_tui_cargo_command(
+        events,
+        "queue step",
+        TUI_QUEUE_STEP_COMMAND.to_string(),
+        vec!["--prof-x-step-live".to_string(), "1".to_string()],
+    );
+}
+
+fn run_tui_cargo_command(
+    events: Arc<EventStore>,
+    label: &'static str,
+    command_display: String,
+    args: Vec<String>,
+) {
     let crate_dir = find_professor_x_crate_dir().unwrap_or_else(|| {
         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
     });
@@ -473,44 +531,50 @@ fn run_tui_queue_step_command(events: Arc<EventStore>) {
         None,
         None,
         "tui.command.started",
-        "running one supervised autonomous queue step from the TUI",
+        format!("running {label} from the TUI"),
         serde_json::json!({
-            "command": command,
+            "command": command_display,
+            "args": args.clone(),
             "cwd": crate_dir.display().to_string(),
         }),
     );
 
     let output = Command::new("cargo")
-        .args(["run", "--", "--prof-x-step-live", "1"])
+        .args(["run", "--"])
+        .args(&args)
         .current_dir(&crate_dir)
         .output();
 
     match output {
         Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
             let _ = events.append(
                 None,
                 None,
                 "tui.command.completed",
-                "supervised queue step completed",
+                format!("{label} completed: {}", summarize_command_output(&stdout, &stderr)),
                 serde_json::json!({
-                    "command": command,
+                    "command": command_display,
                     "status": output.status.code(),
-                    "stdout_tail": tail_text(&String::from_utf8_lossy(&output.stdout), 1600),
-                    "stderr_tail": tail_text(&String::from_utf8_lossy(&output.stderr), 1600),
+                    "stdout_tail": tail_text(&stdout, 1600),
+                    "stderr_tail": tail_text(&stderr, 1600),
                 }),
             );
         }
         Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
             let _ = events.append(
                 None,
                 None,
                 "tui.command.failed",
-                "supervised queue step failed",
+                format!("{label} failed: {}", summarize_command_output(&stdout, &stderr)),
                 serde_json::json!({
-                    "command": command,
+                    "command": command_display,
                     "status": output.status.code(),
-                    "stdout_tail": tail_text(&String::from_utf8_lossy(&output.stdout), 1600),
-                    "stderr_tail": tail_text(&String::from_utf8_lossy(&output.stderr), 1600),
+                    "stdout_tail": tail_text(&stdout, 1600),
+                    "stderr_tail": tail_text(&stderr, 1600),
                 }),
             );
         }
@@ -519,14 +583,39 @@ fn run_tui_queue_step_command(events: Arc<EventStore>) {
                 None,
                 None,
                 "tui.command.failed",
-                format!("could not start supervised queue step: {err}"),
+                format!("could not start {label}: {err}"),
                 serde_json::json!({
-                    "command": command,
+                    "command": command_display,
                     "cwd": crate_dir.display().to_string(),
                     "error": err.to_string(),
                 }),
             );
         }
+    }
+}
+
+fn summarize_command_output(stdout: &str, stderr: &str) -> String {
+    first_meaningful_line(stdout)
+        .or_else(|| first_meaningful_line(stderr))
+        .unwrap_or_else(|| "no output".to_string())
+}
+
+fn first_meaningful_line(text: &str) -> Option<String> {
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(|line| truncate(line, 140))
+}
+
+fn format_tui_command_event(summary: &str, payload: &Value) -> String {
+    let command = payload
+        .get("command")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    if command.is_empty() {
+        format!("  {summary}")
+    } else {
+        format!("  {summary} [{command}]")
     }
 }
 
@@ -895,6 +984,39 @@ fn tui_loop(
                                     });
                                     continue;
                                 }
+                                if let Some(command) = tui_cli_command(&typed) {
+                                    app.input.clear();
+                                    app.scroll = 0;
+                                    app.push(Line::from(""));
+                                    app.push(Line::from(Span::styled(
+                                        format!("▌ {typed}"),
+                                        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                                    )));
+                                    app.push(styled(
+                                        format!(
+                                            "Running {} inside this cockpit.",
+                                            command.label
+                                        ),
+                                        CYAN,
+                                    ));
+                                    app.push(styled(
+                                        format!("   {}", command.command_display),
+                                        DIM,
+                                    ));
+                                    app.working.store(true, Ordering::Relaxed);
+                                    let working = Arc::clone(&app.working);
+                                    let command_events = Arc::clone(&events);
+                                    handle.spawn_blocking(move || {
+                                        run_tui_cargo_command(
+                                            command_events,
+                                            command.label,
+                                            command.command_display,
+                                            command.args,
+                                        );
+                                        working.store(false, Ordering::Relaxed);
+                                    });
+                                    continue;
+                                }
                                 if let Some(lines) = handle_tui_command(&typed, &memory, &events)? {
                                     app.input.clear();
                                     app.scroll = 0;
@@ -1075,5 +1197,32 @@ mod tests {
     fn tail_text_keeps_suffix_without_splitting_unicode() {
         assert_eq!(tail_text("abcdef", 3), "def");
         assert_eq!(tail_text("αβγδε", 3), "γδε");
+    }
+
+    #[test]
+    fn tui_cli_command_builds_queue_lifecycle_args() {
+        let review = tui_cli_command("/queue-review abc123").expect("review command");
+        assert_eq!(review.label, "queue review");
+        assert_eq!(review.args, vec!["--prof-x-queue-review", "abc123"]);
+        assert_eq!(
+            review.command_display,
+            "cargo run -- --prof-x-queue-review abc123"
+        );
+
+        let publish = tui_cli_command("/queue-publish").expect("publish command");
+        assert_eq!(publish.args, vec!["--prof-x-queue-publish", "latest"]);
+    }
+
+    #[test]
+    fn tui_cli_command_sanitizes_queue_ref() {
+        let command = tui_cli_command("/queue-replay abc\x00def\n").expect("replay command");
+        assert_eq!(command.args, vec!["--prof-x-queue-replay", "abcdef"]);
+    }
+
+    #[test]
+    fn summarize_command_output_prefers_stdout_then_stderr() {
+        assert_eq!(summarize_command_output("\nready\n", "error"), "ready");
+        assert_eq!(summarize_command_output("", "\nfailed\n"), "failed");
+        assert_eq!(summarize_command_output("", ""), "no output");
     }
 }
