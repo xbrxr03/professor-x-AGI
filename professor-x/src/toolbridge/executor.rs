@@ -10,8 +10,8 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, warn};
 
-use crate::memd::semantic::SemanticEntry;
 use crate::memd::MemoryManager;
+use crate::memd::semantic::SemanticEntry;
 use crate::ollama::OllamaClient;
 use crate::toolbridge::ToolRegistry;
 
@@ -309,11 +309,8 @@ impl ToolExecutor {
                     .current_dir(&self.workspace_root)
                     .stdin(std::process::Stdio::null())
                     .output();
-                let out = match tokio::time::timeout(
-                    std::time::Duration::from_secs(30),
-                    child,
-                )
-                .await
+                let out = match tokio::time::timeout(std::time::Duration::from_secs(30), child)
+                    .await
                 {
                     Ok(result) => result?,
                     Err(_) => {
@@ -470,12 +467,7 @@ impl ToolExecutor {
                     std::collections::HashMap::new();
                 for e in &tail {
                     if e.event_type == "tool.started" {
-                        let tool = e
-                            .summary
-                            .split('\'')
-                            .nth(1)
-                            .unwrap_or("?")
-                            .to_string();
+                        let tool = e.summary.split('\'').nth(1).unwrap_or("?").to_string();
                         *counts.entry(tool).or_insert(0) += 1;
                     }
                 }
@@ -514,9 +506,7 @@ impl ToolExecutor {
 
                 let result = if let Some(path) = action.params["path"].as_str() {
                     // Local file
-                    let resp = ollama
-                        .vision_generate(prompt, &[path], None)
-                        .await?;
+                    let resp = ollama.vision_generate(prompt, &[path], None).await?;
                     let (_, answer) = resp.split_thinking();
                     answer
                 } else if let Some(url) = action.params["url"].as_str() {
@@ -549,9 +539,8 @@ impl ToolExecutor {
                         // Prefer semantic search; fall back to FTS when embedding unavailable
                         let entries = if let Some(ollama) = self.ollama.as_ref() {
                             if let Ok(vec) = ollama.embed(query).await {
-                                let emb_store = crate::embeddings::EmbeddingStore::new(
-                                    Arc::clone(&mem.db),
-                                );
+                                let emb_store =
+                                    crate::embeddings::EmbeddingStore::new(Arc::clone(&mem.db));
                                 mem.episodic
                                     .search_semantic(&emb_store, &vec, 5)
                                     .unwrap_or_else(|_| {
@@ -565,9 +554,7 @@ impl ToolExecutor {
                         };
                         entries
                             .iter()
-                            .map(|e| {
-                                format!("[{}] {}", e.timestamp.format("%Y-%m-%d"), e.content)
-                            })
+                            .map(|e| format!("[{}] {}", e.timestamp.format("%Y-%m-%d"), e.content))
                             .collect::<Vec<_>>()
                             .join("\n")
                     }
@@ -588,10 +575,7 @@ impl ToolExecutor {
                         .map(|e| {
                             format!(
                                 "[{} q={:.2} uses={}] {}",
-                                e.name,
-                                e.verification_score,
-                                e.times_used,
-                                e.description
+                                e.name, e.verification_score, e.times_used, e.description
                             )
                         })
                         .collect::<Vec<_>>()
@@ -857,8 +841,8 @@ async fn web_search(query: &str, n: usize) -> Result<String> {
     for url in &endpoints {
         match try_web_search(url, n).await {
             Ok(Some(text)) => return Ok(text),
-            Ok(None) => continue,        // reachable but empty → try fallback
-            Err(_) => break,             // network/timeout → no point retrying same network
+            Ok(None) => continue, // reachable but empty → try fallback
+            Err(_) => break,      // network/timeout → no point retrying same network
         }
     }
     Ok(format!(
@@ -1093,7 +1077,11 @@ mod tests {
             .current_dir(&root)
             .output()
             .unwrap();
-        assert!(init.status.success(), "{}", String::from_utf8_lossy(&init.stderr));
+        assert!(
+            init.status.success(),
+            "{}",
+            String::from_utf8_lossy(&init.stderr)
+        );
         root
     }
 
@@ -1227,7 +1215,7 @@ mod tests {
             .execute(&replace_action("check", "pub fn x() {}", "pub fn x() { }"))
             .await;
         assert!(check.success, "{:?}", check.error);
-        assert!(check.output.contains("replace check succeeded"));
+        assert!(check.output.contains("replace check src/lib.rs"));
         assert_eq!(
             std::fs::read_to_string(root.join("src/lib.rs")).unwrap(),
             "pub fn x() {}\n"
@@ -1237,7 +1225,7 @@ mod tests {
             .execute(&replace_action("apply", "pub fn x() {}", "pub fn x() { }"))
             .await;
         assert!(apply.success, "{:?}", apply.error);
-        assert!(apply.output.contains("replace apply succeeded"));
+        assert!(apply.output.contains("replace apply src/lib.rs"));
         assert_eq!(apply.artifacts.len(), 1);
         assert_eq!(
             std::fs::read_to_string(root.join("src/lib.rs")).unwrap(),
@@ -1249,11 +1237,13 @@ mod tests {
             .execute(&replace_action("apply", "same", "changed"))
             .await;
         assert!(!ambiguous.success);
-        assert!(ambiguous
-            .error
-            .as_deref()
-            .unwrap_or_default()
-            .contains("expected exactly one match"));
+        assert!(
+            ambiguous
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("expected exactly one match")
+        );
 
         let _ = std::fs::remove_dir_all(root);
     }
