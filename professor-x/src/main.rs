@@ -518,7 +518,11 @@ fn parse_args() -> CliArgs {
                 cli.task_review = Some(value.unwrap_or_else(|| "latest".to_string()));
                 i += if has_value { 2 } else { 1 };
             }
-            "--task-evidence" | "--prof-x-task-evidence" | "--task-bundle" => {
+            "--task-evidence"
+            | "--prof-x-task-evidence"
+            | "--task-bundle"
+            | "--inspect"
+            | "--evidence" => {
                 let value = args
                     .get(i + 1)
                     .filter(|next| !next.starts_with("--"))
@@ -7786,7 +7790,10 @@ async fn run_interactive_tasks(
             print_task_review(Arc::clone(&transcripts), task_ref)?;
             continue;
         }
-        if let Some(rest) = input.strip_prefix("/task-evidence") {
+        if let Some(rest) = input
+            .strip_prefix("/task-evidence")
+            .or_else(|| input.strip_prefix("/inspect"))
+        {
             let task_ref = nonempty_or_latest(rest);
             record_console_command(&events, "task-evidence", Some(task_ref.to_string()))?;
             print_task_evidence(
@@ -7956,6 +7963,7 @@ fn format_interactive_help() -> String {
         "  /publish [run]  commit selected run report/ledger artifacts",
         "  /task-review [task] review latest or selected task transcript",
         "  /task-evidence [task] show task run, transcript, artifact verdicts, and events",
+        "  /inspect [task]       alias for /task-evidence",
         "  /step-live [n]  run queued autonomous work while streaming the work feed",
         "  /step [n]       run n queued autonomous work items, seeding one if empty",
         "  /run [n]        start a bounded core Prof X run",
@@ -8280,6 +8288,7 @@ fn format_operator_help() -> String {
         "Review and publish run evidence",
         "  cargo run -- --run-log 5",
         "  cargo run -- --task-evidence latest",
+        "  cargo run -- --inspect latest",
         "  cargo run -- --replay latest",
         "  cargo run -- --run-review latest",
         "  cargo run -- --publish-run latest",
@@ -11639,6 +11648,7 @@ mod tests {
         assert!(help.contains("--prof-x-queue-publish latest"));
         assert!(help.contains("--observe-work"));
         assert!(help.contains("--task-evidence latest"));
+        assert!(help.contains("--inspect latest"));
         assert!(help.contains("--prof-x-code-live"));
         assert!(help.contains("--prof-x-code-review latest"));
         assert!(help.contains("--prof-x-code-publish latest"));
@@ -11676,6 +11686,7 @@ mod tests {
         assert!(help.contains("/publish [run]"));
         assert!(help.contains("/task-review [task]"));
         assert!(help.contains("/task-evidence [task]"));
+        assert!(help.contains("/inspect [task]"));
         assert!(help.contains("/step-live [n]"));
         assert!(help.contains("/step [n]"));
         assert!(help.contains("/run [n]"));
