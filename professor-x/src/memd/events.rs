@@ -199,6 +199,7 @@ fn work_event_where_clause() -> &'static str {
       OR event_type LIKE 'tool.%'
       OR event_type LIKE 'policy.%'
       OR event_type LIKE 'react.%'
+      OR event_type LIKE 'artifact.%'
       OR event_type LIKE 'coding.session.%'
       OR event_type LIKE 'coding.smoke.%'
       OR event_type LIKE 'console.%'
@@ -275,16 +276,34 @@ mod tests {
                 serde_json::json!({"command": "brief"}),
             )
             .unwrap();
+        store
+            .append(
+                None,
+                None,
+                "artifact.daily_update.invalid",
+                "field:recorded_at missing",
+                serde_json::json!({
+                    "kind": "daily_update",
+                    "passed": false,
+                    "report_path": "artifacts/validation/2026-06-08/task.json"
+                }),
+            )
+            .unwrap();
 
         let events = store.tail(10).unwrap();
-        assert_eq!(events.len(), 4);
+        assert_eq!(events.len(), 5);
         assert_eq!(events[0].event_type, "daemon.started");
         assert_eq!(events[1].payload["priority"], 100);
         assert_eq!(events[2].event_type, "autonomous_run.requested");
         assert_eq!(events[3].event_type, "console.command");
-        assert_eq!(store.after_id(events[0].id, 10).unwrap().len(), 3);
-        assert_eq!(store.work_tail(10).unwrap().len(), 3);
-        assert_eq!(store.work_after_id(0, 10).unwrap().len(), 3);
+        assert_eq!(events[4].event_type, "artifact.daily_update.invalid");
+        assert_eq!(store.after_id(events[0].id, 10).unwrap().len(), 4);
+        let work_tail = store.work_tail(10).unwrap();
+        assert_eq!(work_tail.len(), 4);
+        assert!(work_tail
+            .iter()
+            .any(|event| event.event_type == "artifact.daily_update.invalid"));
+        assert_eq!(store.work_after_id(0, 10).unwrap().len(), 4);
         assert_eq!(
             store
                 .latest_of_type("autonomous_run.requested")

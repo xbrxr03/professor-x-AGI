@@ -10602,6 +10602,7 @@ fn work_signal_summary(events: &[memd::events::AgentEvent]) -> String {
     let mut autonomy = 0;
     let mut transcripts = 0;
     let mut console = 0;
+    let mut artifact = 0;
     for event in events {
         let event_type = event.event_type.as_str();
         if event_type.starts_with("task.") {
@@ -10610,6 +10611,8 @@ fn work_signal_summary(events: &[memd::events::AgentEvent]) -> String {
             tool += 1;
         } else if event_type.starts_with("policy.") {
             policy += 1;
+        } else if event_type.starts_with("artifact.") {
+            artifact += 1;
         } else if event_type.starts_with("coding.") {
             coding += 1;
         } else if event_type.starts_with("evolution.") {
@@ -10625,11 +10628,12 @@ fn work_signal_summary(events: &[memd::events::AgentEvent]) -> String {
         }
     }
     format!(
-        "events={} task={} tool={} policy={} coding={} evolution={} loop={} autonomy={} transcript={} console={}",
+        "events={} task={} tool={} policy={} artifact={} coding={} evolution={} loop={} autonomy={} transcript={} console={}",
         events.len(),
         task,
         tool,
         policy,
+        artifact,
         coding,
         evolution,
         loop_events,
@@ -10799,6 +10803,9 @@ fn format_work_event(event: &memd::events::AgentEvent) -> String {
     if let Some(tool) = event.payload["tool"].as_str() {
         meta.push(format!("tool={tool}"));
     }
+    if let Some(kind) = event.payload["kind"].as_str() {
+        meta.push(format!("kind={kind}"));
+    }
     if let Some(exercise) = event.payload["exercise"].as_str() {
         meta.push(format!("exercise={exercise}"));
     }
@@ -10904,6 +10911,12 @@ fn event_action(event: &memd::events::AgentEvent) -> &'static str {
         "coding.smoke.started" => "Started coding smoke",
         "coding.smoke.passed" => "Passed coding smoke",
         "coding.smoke.failed" => "Failed coding smoke",
+        event_type if event_type.starts_with("artifact.") && event_type.ends_with(".valid") => {
+            "Validated artifact"
+        }
+        event_type if event_type.starts_with("artifact.") && event_type.ends_with(".invalid") => {
+            "Rejected artifact"
+        }
         "transcript.written" => "Wrote transcript",
         "console.command" => "Operator command",
         "autonomy.queue.seeded" => "Seeded queue",
@@ -10939,6 +10952,8 @@ fn work_event_label(event_type: &str) -> &'static str {
         "TASK"
     } else if event_type.starts_with("react.") {
         "REACT"
+    } else if event_type.starts_with("artifact.") {
+        "ARTIFACT"
     } else if event_type.starts_with("coding.session.") {
         "CODE"
     } else if event_type.starts_with("coding.smoke.") {
@@ -11662,6 +11677,40 @@ mod tests {
         assert!(line.contains("result-report artifacts/work-loop/2026-06-08/loop-085024.json"));
         assert!(line.contains("result-journal artifacts/work-loop/ledger/2026-06-08/prof-x-journal-12345678.md"));
         assert!(line.contains("passed=true"));
+    }
+
+    #[test]
+    fn format_work_event_surfaces_artifact_truth_verdict() {
+        let event = memd::events::AgentEvent {
+            id: 88,
+            timestamp: chrono::Utc::now(),
+            session_id: None,
+            task_id: Some("12345678-aaaa-bbbb-cccc-123456789abc".to_string()),
+            event_type: "artifact.daily_update.invalid".to_string(),
+            summary: "field:recorded_at: missing".to_string(),
+            payload: serde_json::json!({
+                "kind": "daily_update",
+                "passed": false,
+                "checks": [
+                    {"name": "field:recorded_at", "passed": false, "detail": "missing"}
+                ],
+                "artifacts": ["professor-x/ops/daily/2026-06-08.md"],
+                "report_path": "artifacts/validation/2026-06-08/12345678.json"
+            }),
+        };
+
+        let line = format_work_event(&event);
+
+        assert!(line.contains("ARTIFACT"));
+        assert!(line.contains("Rejected artifact"));
+        assert!(line.contains("task=12345678"));
+        assert!(line.contains("kind=daily_update"));
+        assert!(line.contains("passed=false"));
+        assert!(line.contains("checks=1"));
+        assert!(line.contains("artifacts=1"));
+        assert!(line.contains("report artifacts/validation/2026-06-08/12345678.json"));
+        assert!(line.contains("artifact professor-x/ops/daily/2026-06-08.md"));
+        assert!(work_signal_summary(&[event]).contains("artifact=1"));
     }
 
     #[test]
