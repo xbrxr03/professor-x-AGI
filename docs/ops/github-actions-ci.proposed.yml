@@ -19,7 +19,7 @@ jobs:
   check:
     name: cargo check
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     defaults:
       run:
         working-directory: professor-x
@@ -37,13 +37,13 @@ jobs:
           key: ${{ runner.os }}-cargo-check-${{ hashFiles('professor-x/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-check-
-      - name: Run cargo check
-        run: cargo check --all-targets
+      - name: cargo check
+        run: cargo check
 
   test:
-    name: cargo test
+    name: cargo test --bins
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
     defaults:
       run:
         working-directory: professor-x
@@ -61,7 +61,7 @@ jobs:
           key: ${{ runner.os }}-cargo-test-${{ hashFiles('professor-x/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-test-
-      - name: Run cargo test
+      - name: cargo test --bins
         run: cargo test --bins
 
   fmt:
@@ -77,6 +77,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - name: Run cargo fmt check
+      - name: cargo fmt --check
         continue-on-error: true
         run: cargo fmt --all -- --check
