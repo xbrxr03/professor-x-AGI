@@ -166,6 +166,27 @@ impl TaskRunStore {
         Ok(self.recent(1)?.into_iter().next())
     }
 
+    pub fn get_by_task_prefix(&self, task_ref: &str) -> Result<Option<TaskRun>> {
+        let db = self.db.lock().unwrap();
+        let pattern = format!("{task_ref}%");
+        let mut stmt = db.prepare(
+            "SELECT task_id, description, task_type, status, priority, attempt_count, step_count,
+                    last_tool, last_summary, last_output_preview, last_error, last_artifacts,
+                    verification_summary, verification_artifacts,
+                    outcome_score, failure_mode, transcript_path,
+                    queued_at, started_at, updated_at, completed_at
+             FROM task_runs
+             WHERE task_id LIKE ?1
+             ORDER BY updated_at DESC
+             LIMIT 1",
+        )?;
+        let mut rows = stmt.query([pattern])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        Ok(Some(parse_run(row)?))
+    }
+
     pub fn recent(&self, limit: usize) -> Result<Vec<TaskRun>> {
         let db = self.db.lock().unwrap();
         let mut stmt = db.prepare(

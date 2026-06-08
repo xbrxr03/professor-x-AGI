@@ -12,7 +12,7 @@ mod ollama;
 mod policyd;
 mod toolbridge;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::collections::BTreeSet;
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -104,6 +104,8 @@ struct CliArgs {
     publish_run: Option<String>,
     /// Print a task transcript review by task id prefix, or 'latest'.
     task_review: Option<String>,
+    /// Print a task evidence bundle: run row, transcript, artifact verdicts, and work events.
+    task_evidence: Option<String>,
     /// Follow agent events until interrupted.
     watch: bool,
     /// Follow work/task/tool events until interrupted.
@@ -296,6 +298,7 @@ fn parse_args() -> CliArgs {
         run_replay: None,
         publish_run: None,
         task_review: None,
+        task_evidence: None,
         watch: false,
         watch_work: false,
         work_cockpit_once: false,
@@ -506,9 +509,23 @@ fn parse_args() -> CliArgs {
                 cli.publish_run = Some(value.unwrap_or_else(|| "latest".to_string()));
                 i += if has_value { 2 } else { 1 };
             }
-            "--task-review" if i + 1 < args.len() => {
-                cli.task_review = Some(args[i + 1].clone());
-                i += 2;
+            "--task-review" => {
+                let value = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .cloned();
+                let has_value = value.is_some();
+                cli.task_review = Some(value.unwrap_or_else(|| "latest".to_string()));
+                i += if has_value { 2 } else { 1 };
+            }
+            "--task-evidence" | "--prof-x-task-evidence" | "--task-bundle" => {
+                let value = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .cloned();
+                let has_value = value.is_some();
+                cli.task_evidence = Some(value.unwrap_or_else(|| "latest".to_string()));
+                i += if has_value { 2 } else { 1 };
             }
             "--watch" => {
                 cli.watch = true;
@@ -901,6 +918,7 @@ async fn main() -> Result<()> {
         || cli.consciousness_report
         || cli.run_review.is_some()
         || cli.task_review.is_some()
+        || cli.task_evidence.is_some()
         || cli.run_replay.is_some()
         || cli.publish_run.is_some()
         || cli.watch
@@ -1055,6 +1073,15 @@ async fn main() -> Result<()> {
 
     if let Some(task_ref) = cli.task_review {
         return print_task_review(Arc::clone(&transcripts), &task_ref);
+    }
+
+    if let Some(task_ref) = cli.task_evidence {
+        return print_task_evidence(
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            Arc::clone(&transcripts),
+            &task_ref,
+        );
     }
 
     if cli.watch {
@@ -7759,6 +7786,17 @@ async fn run_interactive_tasks(
             print_task_review(Arc::clone(&transcripts), task_ref)?;
             continue;
         }
+        if let Some(rest) = input.strip_prefix("/task-evidence") {
+            let task_ref = nonempty_or_latest(rest);
+            record_console_command(&events, "task-evidence", Some(task_ref.to_string()))?;
+            print_task_evidence(
+                Arc::clone(&memory),
+                Arc::clone(&events),
+                Arc::clone(&transcripts),
+                task_ref,
+            )?;
+            continue;
+        }
         if let Some(rest) = input.strip_prefix("/step-live") {
             let count = rest.trim().parse::<u32>().unwrap_or(1);
             record_console_command(&events, "step-live", Some(count.to_string()))?;
@@ -7917,6 +7955,7 @@ fn format_interactive_help() -> String {
         "  /replay [run]   replay latest or selected run timeline",
         "  /publish [run]  commit selected run report/ledger artifacts",
         "  /task-review [task] review latest or selected task transcript",
+        "  /task-evidence [task] show task run, transcript, artifact verdicts, and events",
         "  /step-live [n]  run queued autonomous work while streaming the work feed",
         "  /step [n]       run n queued autonomous work items, seeding one if empty",
         "  /run [n]        start a bounded core Prof X run",
@@ -8240,6 +8279,7 @@ fn format_operator_help() -> String {
         "",
         "Review and publish run evidence",
         "  cargo run -- --run-log 5",
+        "  cargo run -- --task-evidence latest",
         "  cargo run -- --replay latest",
         "  cargo run -- --run-review latest",
         "  cargo run -- --publish-run latest",
@@ -10159,6 +10199,123 @@ fn print_task_review(transcripts: Arc<TranscriptStore>, task_ref: &str) -> Resul
     Ok(())
 }
 
+fn print_task_evidence(
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    transcripts: Arc<TranscriptStore>,
+    task_ref: &str,
+) -> Result<()> {
+    let transcript = if task_ref == "latest" {
+        transcripts.latest()?
+    } else {
+        transcripts.get_by_task_prefix(task_ref)?
+    };
+    let Some(transcript) = transcript else {
+        println!("No transcript found for '{task_ref}'.");
+        return Ok(());
+    };
+    let task_run = TaskRunStore::new(Arc::clone(&memory.db))
+        .get_by_task_prefix(&transcript.task_id)?;
+    let task_id = uuid::Uuid::parse_str(&transcript.task_id)
+        .with_context(|| format!("stored transcript task id is not a UUID: {}", transcript.task_id))?;
+    let task_events = events.for_task(task_id, 2000)?;
+    println!(
+        "{}",
+        format_task_evidence_bundle(&transcript, task_run.as_ref(), &task_events)
+    );
+    Ok(())
+}
+
+fn format_task_evidence_bundle(
+    transcript: &TranscriptSummary,
+    task_run: Option<&TaskRun>,
+    events: &[memd::events::AgentEvent],
+) -> String {
+    let mut lines = Vec::new();
+    lines.push(format!(
+        "Professor X task evidence {}",
+        short_fragment(&transcript.task_id)
+    ));
+    lines.push(format!("  task: {}", transcript.task_id));
+    lines.push(format!("  transcript: {}", transcript.transcript_path));
+    lines.push(format!("  transcript_status: {}", transcript.status));
+    lines.push(format!("  attempts: {}", transcript.attempt_count));
+    lines.push(format!("  steps: {}", transcript.step_count));
+    lines.push(format!("  description: {}", truncate(&transcript.task_description, 180)));
+    lines.push(format!("  summary: {}", truncate(&transcript.summary, 180)));
+
+    match task_run {
+        Some(run) => {
+            lines.push(String::new());
+            lines.push("Run row".to_string());
+            lines.push(format!("  status: {}", run.status));
+            lines.push(format!("  type: {}", run.task_type));
+            lines.push(format!("  priority: {}", run.priority));
+            if let Some(score) = run.outcome_score {
+                lines.push(format!("  score: {score:.2}"));
+            }
+            if let Some(mode) = &run.failure_mode {
+                lines.push(format!("  failure: {}", truncate(mode, 180)));
+            }
+            if let Some(tool) = &run.last_tool {
+                lines.push(format!("  last_tool: {tool}"));
+            }
+            if !run.last_summary.is_empty() {
+                lines.push(format!("  last_summary: {}", truncate(&run.last_summary, 180)));
+            }
+            if let Some(error) = &run.last_error {
+                lines.push(format!("  last_error: {}", truncate(error, 180)));
+            }
+            if !run.verification_summary.is_empty() {
+                lines.push(format!("  verification: {}", truncate(&run.verification_summary, 220)));
+            }
+            if !run.verification_artifacts.is_empty() {
+                lines.push(format!("  verification_artifacts: {}", run.verification_artifacts.len()));
+                for artifact in run.verification_artifacts.iter().take(5) {
+                    lines.push(format!("    - {}", truncate(artifact, 160)));
+                }
+            }
+        }
+        None => {
+            lines.push(String::new());
+            lines.push("Run row".to_string());
+            lines.push("  no task_runs row recorded".to_string());
+        }
+    }
+
+    let artifact_events = events
+        .iter()
+        .filter(|event| event.event_type.starts_with("artifact."))
+        .collect::<Vec<_>>();
+    lines.push(String::new());
+    lines.push(format!("Artifact verdicts: {}", artifact_events.len()));
+    if artifact_events.is_empty() {
+        lines.push("  none recorded".to_string());
+    } else {
+        for event in artifact_events.iter().take(20) {
+            lines.push(format!("  {}", one_line(&format_work_event(event), 240)));
+        }
+        if artifact_events.len() > 20 {
+            lines.push(format!("  ... {} more", artifact_events.len() - 20));
+        }
+    }
+
+    lines.push(String::new());
+    lines.push(format!("Work events: {}", events.len()));
+    for event in events.iter().take(40) {
+        lines.push(format!("  {}", one_line(&format_work_event(event), 240)));
+    }
+    if events.len() > 40 {
+        lines.push(format!("  ... {} more", events.len() - 40));
+    }
+    lines.push(String::new());
+    lines.push(format!(
+        "Replay: cargo run -- --task-review {}",
+        short_fragment(&transcript.task_id)
+    ));
+    lines.join("\n")
+}
+
 fn format_transcript_summary(transcript: &TranscriptSummary) -> String {
     format!(
         "{} {} transcript={} task={} attempts={} steps={} {}",
@@ -11476,6 +11633,7 @@ mod tests {
         assert!(help.contains("--prof-x-queue-review latest"));
         assert!(help.contains("--prof-x-queue-publish latest"));
         assert!(help.contains("--observe-work"));
+        assert!(help.contains("--task-evidence latest"));
         assert!(help.contains("--prof-x-code-live"));
         assert!(help.contains("--prof-x-code-review latest"));
         assert!(help.contains("--prof-x-code-publish latest"));
@@ -11512,6 +11670,7 @@ mod tests {
         assert!(help.contains("/replay [run]"));
         assert!(help.contains("/publish [run]"));
         assert!(help.contains("/task-review [task]"));
+        assert!(help.contains("/task-evidence [task]"));
         assert!(help.contains("/step-live [n]"));
         assert!(help.contains("/step [n]"));
         assert!(help.contains("/run [n]"));
@@ -11711,6 +11870,77 @@ mod tests {
         assert!(line.contains("report artifacts/validation/2026-06-08/12345678.json"));
         assert!(line.contains("artifact professor-x/ops/daily/2026-06-08.md"));
         assert!(work_signal_summary(&[event]).contains("artifact=1"));
+    }
+
+    #[test]
+    fn format_task_evidence_bundle_stitches_run_transcript_and_artifact_events() {
+        let now = chrono::Utc::now();
+        let transcript = TranscriptSummary {
+            id: "87654321-bbbb-cccc-dddd-123456789abc".to_string(),
+            task_id: "12345678-aaaa-bbbb-cccc-123456789abc".to_string(),
+            task_description: "Write a valid daily update artifact".to_string(),
+            status: "failed".to_string(),
+            attempt_count: 2,
+            step_count: 4,
+            transcript_path: "artifacts/transcripts/2026-06-08/12345678.json".to_string(),
+            summary: "artifact validation failed".to_string(),
+            recorded_at: now,
+        };
+        let run = TaskRun {
+            task_id: transcript.task_id.clone(),
+            description: transcript.task_description.clone(),
+            task_type: "Scheduled".to_string(),
+            status: "Failed".to_string(),
+            priority: 90,
+            attempt_count: 2,
+            step_count: 4,
+            last_tool: Some("fs.write".to_string()),
+            last_summary: "step 4: fs.write succeeded".to_string(),
+            last_output_preview: Some("wrote daily update".to_string()),
+            last_error: None,
+            last_artifacts: vec!["artifacts/commands/write.txt".to_string()],
+            verification_summary: "4 step(s): 4 succeeded, 0 failed; 2 artifact(s); transcript recorded".to_string(),
+            verification_artifacts: vec![
+                "artifacts/transcripts/2026-06-08/12345678.json".to_string(),
+                "artifacts/validation/2026-06-08/12345678.json".to_string(),
+            ],
+            outcome_score: Some(0.0),
+            failure_mode: Some("field:recorded_at: missing".to_string()),
+            transcript_path: Some(transcript.transcript_path.clone()),
+            queued_at: now,
+            started_at: Some(now),
+            updated_at: now,
+            completed_at: Some(now),
+        };
+        let event = memd::events::AgentEvent {
+            id: 88,
+            timestamp: now,
+            session_id: None,
+            task_id: Some(transcript.task_id.clone()),
+            event_type: "artifact.daily_update.invalid".to_string(),
+            summary: "field:recorded_at: missing".to_string(),
+            payload: serde_json::json!({
+                "kind": "daily_update",
+                "passed": false,
+                "checks": [{"name": "field:recorded_at", "passed": false, "detail": "missing"}],
+                "artifacts": ["professor-x/ops/daily/2026-06-08.md"],
+                "report_path": "artifacts/validation/2026-06-08/12345678.json"
+            }),
+        };
+
+        let bundle = format_task_evidence_bundle(&transcript, Some(&run), &[event]);
+
+        assert!(bundle.contains("Professor X task evidence 12345678"));
+        assert!(bundle.contains("transcript: artifacts/transcripts/2026-06-08/12345678.json"));
+        assert!(bundle.contains("Run row"));
+        assert!(bundle.contains("status: Failed"));
+        assert!(bundle.contains("verification: 4 step(s): 4 succeeded"));
+        assert!(bundle.contains("Artifact verdicts: 1"));
+        assert!(bundle.contains("Rejected artifact"));
+        assert!(bundle.contains("kind=daily_update"));
+        assert!(bundle.contains("report artifacts/validation/2026-06-08/12345678.json"));
+        assert!(bundle.contains("Work events: 1"));
+        assert!(bundle.contains("Replay: cargo run -- --task-review 12345678"));
     }
 
     #[test]
