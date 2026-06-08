@@ -708,12 +708,30 @@ fn parse_args() -> CliArgs {
                 cli.autonomy_step_count = Some(count.unwrap_or(1));
                 i += if count.is_some() { 2 } else { 1 };
             }
+            "--autonomy-step-publish" | "--prof-x-step-publish" => {
+                let count = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .and_then(|next| next.parse::<u32>().ok());
+                cli.autonomy_step_count = Some(count.unwrap_or(1));
+                cli.publish_after_run = true;
+                i += if count.is_some() { 2 } else { 1 };
+            }
             "--autonomy-step-live" | "--prof-x-step-live" => {
                 let count = args
                     .get(i + 1)
                     .filter(|next| !next.starts_with("--"))
                     .and_then(|next| next.parse::<u32>().ok());
                 cli.autonomy_step_live_count = Some(count.unwrap_or(1));
+                i += if count.is_some() { 2 } else { 1 };
+            }
+            "--autonomy-step-publish-live" | "--prof-x-step-publish-live" => {
+                let count = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .and_then(|next| next.parse::<u32>().ok());
+                cli.autonomy_step_live_count = Some(count.unwrap_or(1));
+                cli.publish_after_run = true;
                 i += if count.is_some() { 2 } else { 1 };
             }
             "--supervised-loop" => {
@@ -4048,6 +4066,7 @@ async fn run_autonomy_queue_steps(
 
     println!("Professor X autonomy queue step");
     println!("  requested items: {count}");
+    println!("  publish-after-run: {publish_after_run}");
     println!("  queue: cargo run -- --autonomy-queue 10");
     println!("  watch: cargo run -- --observe-work");
 
@@ -4116,6 +4135,8 @@ async fn run_autonomy_queue_steps(
                         "queue_id": item.id,
                         "result_run_id": new_run.as_ref().map(|run| run.run_id.clone()),
                         "result_report_path": new_run.as_ref().map(|run| run.report_path.clone()),
+                        "result_journal_path": new_run.as_ref().and_then(run_journal_path),
+                        "publish_after_run": publish_after_run,
                         "passed": true,
                     }),
                 )?;
@@ -4138,6 +4159,8 @@ async fn run_autonomy_queue_steps(
                         "queue_id": item.id,
                         "result_run_id": new_run.as_ref().map(|run| run.run_id.clone()),
                         "result_report_path": new_run.as_ref().map(|run| run.report_path.clone()),
+                        "result_journal_path": new_run.as_ref().and_then(run_journal_path),
+                        "publish_after_run": publish_after_run,
                         "passed": false,
                         "error": reason,
                     }),
@@ -4163,6 +4186,7 @@ async fn run_autonomy_queue_steps_live(
     let mut last_id = events.tail(1)?.last().map(|event| event.id).unwrap_or(0);
     println!("Professor X live autonomy queue step");
     println!("  requested items: {count}");
+    println!("  publish-after-run: {publish_after_run}");
     println!("  preview: cargo run -- --prof-x-preview-step");
     println!("  queue: cargo run -- --prof-x-queue 10");
     println!("  streaming work feed below");
@@ -8184,7 +8208,9 @@ fn format_operator_help() -> String {
         "  cargo run -- --prof-x-plan",
         "  cargo run -- --prof-x-preview-step",
         "  cargo run -- --prof-x-step-live 1",
+        "  cargo run -- --prof-x-step-publish-live 1",
         "  cargo run -- --prof-x-step 1",
+        "  cargo run -- --prof-x-step-publish 1",
         "  cargo run -- --prof-x-queue 10",
         "  cargo run -- --prof-x-queue-review latest",
         "  cargo run -- --prof-x-queue-publish latest",
@@ -10809,6 +10835,16 @@ fn format_work_event(event: &memd::events::AgentEvent) -> String {
     push_payload_line(&mut lines, "report", event.payload["report_path"].as_str());
     push_payload_line(
         &mut lines,
+        "result-report",
+        event.payload["result_report_path"].as_str(),
+    );
+    push_payload_line(
+        &mut lines,
+        "result-journal",
+        event.payload["result_journal_path"].as_str(),
+    );
+    push_payload_line(
+        &mut lines,
         "session-report",
         event.payload["session_report_path"].as_str(),
     );
@@ -11418,7 +11454,9 @@ mod tests {
         assert!(help.contains("--prof-x-plan"));
         assert!(help.contains("--prof-x-preview-step"));
         assert!(help.contains("--prof-x-step-live 1"));
+        assert!(help.contains("--prof-x-step-publish-live 1"));
         assert!(help.contains("--prof-x-step 1"));
+        assert!(help.contains("--prof-x-step-publish 1"));
         assert!(help.contains("--prof-x-queue 10"));
         assert!(help.contains("--prof-x-queue-review latest"));
         assert!(help.contains("--prof-x-queue-publish latest"));
@@ -11595,6 +11633,35 @@ mod tests {
         assert!(line.contains("queue=12345678"));
         assert!(line.contains("operator-goal run the next harness gate"));
         assert!(work_signal_summary(&[event]).contains("autonomy=1"));
+    }
+
+    #[test]
+    fn format_work_event_surfaces_completed_queue_evidence_bundle() {
+        let event = memd::events::AgentEvent {
+            id: 87,
+            timestamp: chrono::Utc::now(),
+            session_id: None,
+            task_id: None,
+            event_type: "autonomy.queue.completed".to_string(),
+            summary: "completed autonomous queue item 12345678".to_string(),
+            payload: serde_json::json!({
+                "queue_id": "12345678-aaaa-bbbb-cccc-123456789abc",
+                "result_run_id": "run-12345678-aaaa-bbbb",
+                "result_report_path": "artifacts/work-loop/2026-06-08/loop-085024.json",
+                "result_journal_path": "artifacts/work-loop/ledger/2026-06-08/prof-x-journal-12345678.md",
+                "publish_after_run": true,
+                "passed": true
+            }),
+        };
+
+        let line = format_work_event(&event);
+
+        assert!(line.contains("QUEUE"));
+        assert!(line.contains("Completed queued work"));
+        assert!(line.contains("queue=12345678"));
+        assert!(line.contains("result-report artifacts/work-loop/2026-06-08/loop-085024.json"));
+        assert!(line.contains("result-journal artifacts/work-loop/ledger/2026-06-08/prof-x-journal-12345678.md"));
+        assert!(line.contains("passed=true"));
     }
 
     #[test]
