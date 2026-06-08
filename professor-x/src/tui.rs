@@ -61,6 +61,8 @@ const TUI_SESSION_REVIEW_COMMAND: &str = "cargo run -- --session-review";
 const TUI_SESSION_PUBLISH_COMMAND: &str = "cargo run -- --session-publish";
 const TUI_PLAN_COMMAND: &str = "cargo run -- --prof-x-plan";
 const TUI_PREVIEW_COMMAND: &str = "cargo run -- --prof-x-preview-step";
+const TUI_RUN_COMMAND: &str = "cargo run -- --prof-x-run";
+const TUI_RUN_COMMIT_COMMAND: &str = "cargo run -- --prof-x-run-commit";
 
 // One-Dark-ish palette.
 const ACCENT: Color = Color::Rgb(198, 120, 221);
@@ -398,6 +400,7 @@ fn tui_help_lines() -> Vec<Line<'static>> {
         styled("   /sessions [n] /session-review [id] /session-publish [id]", CYAN),
         styled("   /task-review [id] /task-evidence [id] /inspect [id]", CYAN),
         styled("   /plan /preview        plan or preview autonomous gates", CYAN),
+        styled("   /run [n] /run-commit [n] start bounded Prof X runs", CYAN),
     ]
 }
 
@@ -490,7 +493,8 @@ fn sanitize_tui_goal(goal: &str) -> String {
 }
 
 fn is_tui_step_command(input: &str) -> bool {
-    matches!(input.trim(), "/step" | "/step-live")
+    let input = input.trim();
+    strip_tui_command(input, "/step").is_some() || strip_tui_command(input, "/step-live").is_some()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -517,6 +521,38 @@ fn tui_cli_command(input: &str) -> Option<TuiCliCommand> {
             "--prof-x-preview-step",
             TUI_PREVIEW_COMMAND,
         ));
+    }
+    if let Some(rest) = strip_tui_command(input, "/step-live") {
+        let count = count_arg(rest, 1, 10);
+        return Some(TuiCliCommand {
+            label: "queue step live",
+            command_display: format!("{TUI_QUEUE_STEP_COMMAND} {count}"),
+            args: vec!["--prof-x-step-live".to_string(), count],
+        });
+    }
+    if let Some(rest) = strip_tui_command(input, "/step") {
+        let count = count_arg(rest, 1, 10);
+        return Some(TuiCliCommand {
+            label: "queue step",
+            command_display: format!("cargo run -- --prof-x-step {count}"),
+            args: vec!["--prof-x-step".to_string(), count],
+        });
+    }
+    if let Some(rest) = strip_tui_command(input, "/run-commit") {
+        let cycles = count_arg(rest, 5, 50);
+        return Some(TuiCliCommand {
+            label: "commit-capable Prof X run",
+            command_display: format!("{TUI_RUN_COMMIT_COMMAND} {cycles}"),
+            args: vec!["--prof-x-run-commit".to_string(), cycles],
+        });
+    }
+    if let Some(rest) = strip_tui_command(input, "/run") {
+        let cycles = count_arg(rest, 4, 50);
+        return Some(TuiCliCommand {
+            label: "core Prof X run",
+            command_display: format!("{TUI_RUN_COMMAND} {cycles}"),
+            args: vec!["--prof-x-run".to_string(), cycles],
+        });
     }
     if let Some(rest) = strip_tui_command(input, "/work") {
         return Some(limit_tui_command("work feed", "--work-log", TUI_WORK_COMMAND, rest, 12));
@@ -666,6 +702,14 @@ fn limit_tui_command(
     }
 }
 
+fn count_arg(rest: &str, default_value: usize, max_value: usize) -> String {
+    rest.trim()
+        .parse::<usize>()
+        .unwrap_or(default_value)
+        .clamp(1, max_value)
+        .to_string()
+}
+
 fn ref_tui_command(
     label: &'static str,
     flag: &str,
@@ -687,15 +731,6 @@ fn nonempty_or_latest(raw: &str) -> String {
     } else {
         value.chars().filter(|ch| !ch.is_control()).take(120).collect()
     }
-}
-
-fn run_tui_queue_step_command(events: Arc<EventStore>) {
-    run_tui_cargo_command(
-        events,
-        "queue step",
-        TUI_QUEUE_STEP_COMMAND.to_string(),
-        vec!["--prof-x-step-live".to_string(), "1".to_string()],
-    );
 }
 
 fn run_tui_cargo_command(
@@ -1140,6 +1175,8 @@ fn tui_loop(
                             KeyCode::Enter if !busy && !app.input.trim().is_empty() => {
                                 let typed = app.input.trim().to_string();
                                 if is_tui_step_command(&typed) {
+                                    let command = tui_cli_command(&typed)
+                                        .expect("step commands are mapped to CLI commands");
                                     app.input.clear();
                                     app.scroll = 0;
                                     app.push(Line::from(""));
@@ -1148,8 +1185,15 @@ fn tui_loop(
                                         Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
                                     )));
                                     app.push(styled(
-                                        "Running one supervised queue step inside this cockpit.",
+                                        format!(
+                                            "Running {} inside this cockpit.",
+                                            command.label
+                                        ),
                                         CYAN,
+                                    ));
+                                    app.push(styled(
+                                        format!("   {}", command.command_display),
+                                        DIM,
                                     ));
                                     app.push(styled(
                                         "Watch the transcript for queue, tool, and completion events.",
@@ -1159,7 +1203,12 @@ fn tui_loop(
                                     let working = Arc::clone(&app.working);
                                     let step_events = Arc::clone(&events);
                                     handle.spawn_blocking(move || {
-                                        run_tui_queue_step_command(step_events);
+                                        run_tui_cargo_command(
+                                            step_events,
+                                            command.label,
+                                            command.command_display,
+                                            command.args,
+                                        );
                                         working.store(false, Ordering::Relaxed);
                                     });
                                     continue;
@@ -1369,7 +1418,7 @@ mod tests {
     fn step_command_variants_are_recognized() {
         assert!(is_tui_step_command("/step"));
         assert!(is_tui_step_command(" /step-live "));
-        assert!(!is_tui_step_command("/step-live 2"));
+        assert!(is_tui_step_command("/step-live 2"));
         assert!(!is_tui_step_command("/queue"));
     }
 
@@ -1416,6 +1465,23 @@ mod tests {
 
         let evidence = tui_cli_command("/inspect").expect("inspect command");
         assert_eq!(evidence.args, vec!["--inspect", "latest"]);
+    }
+
+    #[test]
+    fn tui_cli_command_builds_step_and_run_args() {
+        let step = tui_cli_command("/step 3").expect("step command");
+        assert_eq!(step.label, "queue step");
+        assert_eq!(step.args, vec!["--prof-x-step", "3"]);
+
+        let live_step = tui_cli_command("/step-live 99").expect("live step command");
+        assert_eq!(live_step.args, vec!["--prof-x-step-live", "10"]);
+
+        let run = tui_cli_command("/run").expect("run command");
+        assert_eq!(run.args, vec!["--prof-x-run", "4"]);
+
+        let commit_run = tui_cli_command("/run-commit 9").expect("commit run command");
+        assert_eq!(commit_run.label, "commit-capable Prof X run");
+        assert_eq!(commit_run.args, vec!["--prof-x-run-commit", "9"]);
     }
 
     #[test]
