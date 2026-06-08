@@ -3363,6 +3363,8 @@ struct SupervisedLoopReport {
     profile: String,
     #[serde(default)]
     ledger_path: Option<String>,
+    #[serde(default)]
+    journal_path: Option<String>,
     planned_jobs: Vec<WorkLoopPlannedJob>,
     smoke_records: Vec<WorkLoopSmokeRecord>,
     #[serde(default)]
@@ -4507,6 +4509,7 @@ async fn run_supervised_loop(
         failed_cycles,
         profile: profile.as_str().to_string(),
         ledger_path: None,
+        journal_path: None,
         planned_jobs,
         smoke_records: records,
         timeline: work_timeline_from_events(&events.work_after_id(timeline_start_id, 1000)?),
@@ -4514,6 +4517,8 @@ async fn run_supervised_loop(
     let report_path = write_supervised_loop_report(&report)?;
     let ledger_path = write_work_loop_ledger(&report, &report_path)?;
     report.ledger_path = Some(ledger_path.display().to_string());
+    let journal_path = write_work_loop_journal(&report)?;
+    report.journal_path = Some(journal_path.display().to_string());
     std::fs::write(&report_path, serde_json::to_string_pretty(&report)?)?;
     WorkLoopRunStore::new(Arc::clone(&memory.db)).insert(&WorkLoopRunRecord {
         id: None,
@@ -4553,6 +4558,7 @@ async fn run_supervised_loop(
             "operator_goal": report.operator_goal.clone(),
             "report_path": report_path,
             "ledger_path": ledger_path,
+            "journal_path": journal_path,
             "passed_cycles": report.passed_cycles,
             "failed_cycles": report.failed_cycles,
             "planned_jobs": &report.planned_jobs,
@@ -4565,6 +4571,7 @@ async fn run_supervised_loop(
     println!("  failed: {}", report.failed_cycles);
     println!("  report: {}", report_path.display());
     println!("  ledger: {}", ledger_path.display());
+    println!("  journal: {}", journal_path.display());
     if report.failed_cycles > 0 {
         anyhow::bail!(
             "{} completed with {} failed cycle(s)",
@@ -4588,6 +4595,7 @@ async fn run_supervised_loop(
                 "profile": report.profile.clone(),
                 "report_path": report_path.display().to_string(),
                 "ledger_path": ledger_path.display().to_string(),
+                "journal_path": journal_path.display().to_string(),
             }),
         )?;
         let published = publish_run_report_artifacts(&default_repo_root(), &report_path, &report)?;
@@ -6249,6 +6257,29 @@ fn write_work_loop_ledger(
     Ok(path)
 }
 
+fn write_work_loop_journal(report: &SupervisedLoopReport) -> Result<PathBuf> {
+    let repo_root = default_repo_root();
+    let completed_at = chrono::DateTime::parse_from_rfc3339(&report.completed_at)
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+        .unwrap_or_else(|_| chrono::Utc::now());
+    let dir = std::env::var("PROFESSOR_X_WORK_LOOP_LEDGER_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            PathBuf::from("artifacts")
+                .join("work-loop")
+                .join("ledger")
+                .join(completed_at.format("%Y-%m-%d").to_string())
+        });
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("prof-x-journal-{}.md", short_fragment(&report.run_id)));
+    let commit_id = git_head(&repo_root).unwrap_or_else(|_| "unknown".to_string());
+    std::fs::write(
+        &path,
+        format_work_loop_journal_markdown(&repo_root, report, completed_at, &commit_id),
+    )?;
+    Ok(path)
+}
+
 fn format_work_loop_ledger(
     report: &SupervisedLoopReport,
     report_path: &std::path::Path,
@@ -6338,6 +6369,85 @@ fn format_work_loop_ledger(
     }
     out.push(String::new());
     out.join("\n")
+}
+
+fn format_work_loop_journal_markdown(
+    repo_root: &std::path::Path,
+    report: &SupervisedLoopReport,
+    timestamp: chrono::DateTime<chrono::Utc>,
+    commit_id: &str,
+) -> String {
+    let git_line = cockpit_git_line(repo_root);
+    let status_raw = command_stdout(repo_root, "git", &["status", "--short"])
+        .filter(|text| !text.is_empty())
+        .unwrap_or_else(|| "clean".to_string());
+    let mut lines = vec![
+        format!("# Professor X Work Journal - {}", short_fragment(&report.run_id)),
+        String::new(),
+        "## Run Context".to_string(),
+        format!("- generated_at: {}", timestamp.to_rfc3339()),
+        format!("- run_id: {}", report.run_id),
+        format!("- kind: {}", report.run_kind),
+        format!("- profile: {}", report.profile),
+        format!("- harness_commit: {commit_id}"),
+        format!("- git: {git_line}"),
+        format!("- cycles: {}/{} completed, {} passed, {} failed",
+            report.completed_cycles,
+            report.requested_cycles,
+            report.passed_cycles,
+            report.failed_cycles
+        ),
+        format!("- timeline_events: {}", report.timeline.len()),
+    ];
+    if let Some(queue_id) = &report.queue_id {
+        lines.push(format!("- queue_id: {queue_id}"));
+    }
+    if let Some(goal) = &report.operator_goal {
+        lines.push(format!("- operator_goal: {}", truncate(goal, 180)));
+    }
+    if let Some(ledger) = &report.ledger_path {
+        lines.push(format!("- ledger: {ledger}"));
+    }
+
+    lines.push(String::new());
+    lines.push("## Working Tree".to_string());
+    if status_raw == "clean" {
+        lines.push("- clean".to_string());
+    } else {
+        for line in status_raw.lines().take(40) {
+            lines.push(format!("- `{}`", line));
+        }
+        if status_raw.lines().count() > 40 {
+            lines.push("- ... truncated".to_string());
+        }
+    }
+
+    lines.push(String::new());
+    lines.push("## Timeline".to_string());
+    if report.timeline.is_empty() {
+        lines.push("- no work events recorded in this run".to_string());
+    } else {
+        for entry in &report.timeline {
+            lines.push(format_work_replay_entry(entry));
+        }
+    }
+
+    lines.push(String::new());
+    lines.push("## Operator Commands".to_string());
+    lines.push(format!(
+        "- `cargo run -- --replay {}`",
+        short_fragment(&report.run_id)
+    ));
+    lines.push(format!(
+        "- `cargo run -- --run-review {}`",
+        short_fragment(&report.run_id)
+    ));
+    lines.push(format!(
+        "- `cargo run -- --publish-run {}`",
+        short_fragment(&report.run_id)
+    ));
+    lines.push(String::new());
+    lines.join("\n")
 }
 
 async fn run_one_evolution_cycle(
@@ -9172,6 +9282,14 @@ fn run_ledger_path(run: &WorkLoopRunRecord) -> Option<String> {
     report.ledger_path.filter(|path| !path.is_empty())
 }
 
+fn run_journal_path(run: &WorkLoopRunRecord) -> Option<String> {
+    let repo_root = default_repo_root();
+    let report_path = resolve_report_reference(&repo_root, &run.report_path);
+    let raw = std::fs::read_to_string(report_path).ok()?;
+    let report: SupervisedLoopReport = serde_json::from_str(&raw).ok()?;
+    report.journal_path.filter(|path| !path.is_empty())
+}
+
 fn format_run_log_entry(run: &WorkLoopRunRecord, ledger_path: Option<&str>) -> String {
     let status = if run.failed_cycles == 0 { "passed" } else { "failed" };
     let latest_gate = run
@@ -9201,6 +9319,9 @@ fn format_run_log_entry(run: &WorkLoopRunRecord, ledger_path: Option<&str>) -> S
     lines.push(format!("  L report {}", run.report_path));
     if let Some(path) = ledger_path {
         lines.push(format!("  L ledger {path}"));
+    }
+    if let Some(path) = run_journal_path(run) {
+        lines.push(format!("  L journal {path}"));
     }
     lines.push(format!(
         "  L replay cargo run -- --replay {}",
@@ -9236,6 +9357,9 @@ fn print_run_review(memory: Arc<MemoryManager>, run_ref: &str) -> Result<()> {
     println!("  report: {}", display_repo_path(&repo_root, &report_path));
     if let Some(path) = &report.ledger_path {
         println!("  ledger: {path}");
+    }
+    if let Some(path) = &report.journal_path {
+        println!("  journal: {path}");
     }
 
     println!("Plan");
@@ -9311,6 +9435,9 @@ fn print_run_replay(memory: Arc<MemoryManager>, run_ref: &str) -> Result<()> {
     }
     if let Some(goal) = &report.operator_goal {
         println!("operator_goal: {}", truncate(goal, 180));
+    }
+    if let Some(journal) = &report.journal_path {
+        println!("journal: {journal}");
     }
     println!();
 
@@ -9526,6 +9653,12 @@ fn publishable_run_artifact_paths(
         repo_root,
         &resolve_report_reference(repo_root, ledger),
     )?);
+    if let Some(journal) = report.journal_path.as_ref().filter(|path| !path.is_empty()) {
+        paths.push(repo_relative_existing_path(
+            repo_root,
+            &resolve_report_reference(repo_root, journal),
+        )?);
+    }
     for smoke in &report.smoke_records {
         if let Some(path) =
             optional_publishable_run_artifact_path(repo_root, &smoke.report_path)?
@@ -12073,6 +12206,7 @@ mod tests {
             failed_cycles: 0,
             profile: "core".to_string(),
             ledger_path: None,
+            journal_path: None,
             planned_jobs: vec![WorkLoopPlannedJob {
                 cycle: 1,
                 kind: "coding_smoke".to_string(),
@@ -12123,6 +12257,21 @@ mod tests {
         assert!(ledger.contains("report: `artifacts/coding-smoke/report.json`"));
         assert!(ledger.contains("transcript: `artifacts/transcripts/task.json`"));
         assert!(ledger.contains("#00008 `TOOL` `Running`"));
+
+        let journal = format_work_loop_journal_markdown(
+            std::path::Path::new("/tmp"),
+            &report,
+            chrono::DateTime::parse_from_rfc3339("2026-06-01T01:01:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+            "abc1234",
+        );
+
+        assert!(journal.contains("# Professor X Work Journal - 12345678"));
+        assert!(journal.contains("- run_id: 12345678-aaaa-bbbb-cccc-123456789abc"));
+        assert!(journal.contains("- harness_commit: abc1234"));
+        assert!(journal.contains("- timeline_events: 1"));
+        assert!(journal.contains("running tool 'shell.restricted'"));
     }
 
     #[test]
@@ -12194,7 +12343,7 @@ mod tests {
     }
 
     #[test]
-    fn publishable_run_artifact_paths_only_allows_work_loop_report_and_ledger() {
+    fn publishable_run_artifact_paths_allows_report_ledger_journal_and_evidence() {
         let root = std::env::temp_dir().join(format!("px-publish-paths-{}", uuid::Uuid::new_v4()));
         let report_path = root
             .join("professor-x")
@@ -12209,6 +12358,13 @@ mod tests {
             .join("ledger")
             .join("2026-06-01")
             .join("run-12345678.md");
+        let journal_path = root
+            .join("professor-x")
+            .join("artifacts")
+            .join("work-loop")
+            .join("ledger")
+            .join("2026-06-01")
+            .join("prof-x-journal-12345678.md");
         let smoke_path = root
             .join("professor-x")
             .join("artifacts")
@@ -12222,10 +12378,12 @@ mod tests {
             .join("2026-06-01.jsonl");
         std::fs::create_dir_all(report_path.parent().unwrap()).unwrap();
         std::fs::create_dir_all(ledger_path.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(journal_path.parent().unwrap()).unwrap();
         std::fs::create_dir_all(smoke_path.parent().unwrap()).unwrap();
         std::fs::create_dir_all(event_path.parent().unwrap()).unwrap();
         std::fs::write(&report_path, "{}").unwrap();
         std::fs::write(&ledger_path, "# run\n").unwrap();
+        std::fs::write(&journal_path, "# journal\n").unwrap();
         std::fs::write(&smoke_path, "{}").unwrap();
         std::fs::write(&event_path, "{}\n").unwrap();
         let report = SupervisedLoopReport {
@@ -12241,6 +12399,7 @@ mod tests {
             failed_cycles: 0,
             profile: "core".to_string(),
             ledger_path: Some(ledger_path.display().to_string()),
+            journal_path: Some(journal_path.display().to_string()),
             planned_jobs: Vec::new(),
             smoke_records: vec![WorkLoopSmokeRecord {
                 cycle: 1,
@@ -12257,9 +12416,10 @@ mod tests {
 
         let paths = publishable_run_artifact_paths(&root, &report_path, &report).unwrap();
 
-        assert_eq!(paths.len(), 4);
+        assert_eq!(paths.len(), 5);
         assert!(paths.iter().any(|path| path.ends_with("loop-010000.json")));
         assert!(paths.iter().any(|path| path.ends_with("run-12345678.md")));
+        assert!(paths.iter().any(|path| path.ends_with("prof-x-journal-12345678.md")));
         assert!(paths.iter().any(|path| path.ends_with("smoke-010000.json")));
         assert!(paths.iter().any(|path| path.ends_with("2026-06-01.jsonl")));
         assert!(publishable_run_artifact_path(std::path::Path::new(
