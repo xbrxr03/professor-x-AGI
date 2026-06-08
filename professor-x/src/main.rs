@@ -100,6 +100,9 @@ struct CliArgs {
     publish_run: Option<String>,
     /// Print a task transcript review by task id prefix, or 'latest'.
     task_review: Option<String>,
+    /// Print + save a full task-run evidence bundle (task → transcript →
+    /// changes → artifacts → validation → work events) for a task-id prefix or 'latest'.
+    inspect: Option<String>,
     /// Follow agent events until interrupted.
     watch: bool,
     /// Follow work/task/tool events until interrupted.
@@ -290,6 +293,7 @@ fn parse_args() -> CliArgs {
         run_replay: None,
         publish_run: None,
         task_review: None,
+        inspect: None,
         watch: false,
         watch_work: false,
         work_cockpit_once: false,
@@ -487,6 +491,15 @@ fn parse_args() -> CliArgs {
             "--task-review" if i + 1 < args.len() => {
                 cli.task_review = Some(args[i + 1].clone());
                 i += 2;
+            }
+            "--inspect" | "--evidence" => {
+                cli.inspect = Some(
+                    args.get(i + 1)
+                        .filter(|a| !a.starts_with("--"))
+                        .cloned()
+                        .unwrap_or_else(|| "latest".to_string()),
+                );
+                i += if args.get(i + 1).map(|a| !a.starts_with("--")).unwrap_or(false) { 2 } else { 1 };
             }
             "--watch" => {
                 cli.watch = true;
@@ -861,6 +874,7 @@ async fn main() -> Result<()> {
         || cli.consciousness_report
         || cli.run_review.is_some()
         || cli.task_review.is_some()
+        || cli.inspect.is_some()
         || cli.run_replay.is_some()
         || cli.publish_run.is_some()
         || cli.watch
@@ -1007,6 +1021,10 @@ async fn main() -> Result<()> {
 
     if let Some(task_ref) = cli.task_review {
         return print_task_review(Arc::clone(&transcripts), &task_ref);
+    }
+
+    if let Some(task_ref) = cli.inspect {
+        return print_evidence_bundle(Arc::clone(&transcripts), &task_ref);
     }
 
     if cli.watch {
@@ -7595,6 +7613,12 @@ async fn run_interactive_tasks(
             print_task_review(Arc::clone(&transcripts), task_ref)?;
             continue;
         }
+        if let Some(rest) = input.strip_prefix("/inspect") {
+            let task_ref = nonempty_or_latest(rest);
+            record_console_command(&events, "inspect", Some(task_ref.to_string()))?;
+            print_evidence_bundle(Arc::clone(&transcripts), task_ref)?;
+            continue;
+        }
         if let Some(rest) = input.strip_prefix("/step-live") {
             let count = rest.trim().parse::<u32>().unwrap_or(1);
             record_console_command(&events, "step-live", Some(count.to_string()))?;
@@ -7753,6 +7777,7 @@ fn format_interactive_help() -> String {
         "  /replay [run]   replay latest or selected run timeline",
         "  /publish [run]  commit selected run report/ledger artifacts",
         "  /task-review [task] review latest or selected task transcript",
+        "  /inspect [task]   full evidence bundle: transcript+changes+artifacts+events",
         "  /step-live [n]  run queued autonomous work while streaming the work feed",
         "  /step [n]       run n queued autonomous work items, seeding one if empty",
         "  /run [n]        start a bounded core Prof X run",
@@ -9824,6 +9849,181 @@ fn print_task_review(transcripts: Arc<TranscriptStore>, task_ref: &str) -> Resul
         println!("diff: clean or no uncommitted diff captured");
     }
     Ok(())
+}
+
+/// Task-run EVIDENCE BUNDLE — the way you inspect a coding-agent session.
+/// Ties together, for one task: the task header, the step-by-step transcript
+/// (thought → action → observation), the changes/diff, the artifacts, the
+/// validation evidence, and the work-event timeline — and writes it all to a
+/// shareable `<task>.evidence.md` next to the transcript.
+fn print_evidence_bundle(transcripts: Arc<TranscriptStore>, task_ref: &str) -> Result<()> {
+    let t = if task_ref == "latest" {
+        transcripts.latest()?
+    } else {
+        transcripts.get_by_task_prefix(task_ref)?
+    };
+    let Some(t) = t else {
+        println!("No task found for '{task_ref}'. Try a task-id prefix or 'latest' (see --task-runs).");
+        return Ok(());
+    };
+    let raw = std::fs::read_to_string(&t.transcript_path)?;
+    let doc: serde_json::Value = serde_json::from_str(&raw)?;
+    let md = render_evidence_bundle(&t, &doc);
+    println!("{md}");
+
+    // Persist the bundle as a shareable artifact next to the transcript.
+    let md_path = std::path::Path::new(&t.transcript_path).with_extension("evidence.md");
+    if std::fs::write(&md_path, &md).is_ok() {
+        println!("\n📦 evidence bundle saved → {}", md_path.display());
+    }
+    Ok(())
+}
+
+fn render_evidence_bundle(t: &TranscriptSummary, doc: &serde_json::Value) -> String {
+    use std::fmt::Write as _;
+    let mut o = String::new();
+    let id8 = &t.task_id[..8.min(t.task_id.len())];
+
+    // ── header ────────────────────────────────────────────────────────────
+    let _ = writeln!(o, "# Evidence bundle — task {id8}");
+    let _ = writeln!(o);
+    let _ = writeln!(o, "**Task:** {}", t.task_description);
+    let started = doc["started_at"].as_str().unwrap_or("?");
+    let completed = doc["completed_at"].as_str().unwrap_or("?");
+    let _ = writeln!(
+        o,
+        "**Status:** `{}`  ·  type {}  ·  attempt {}/{}  ·  {} steps",
+        t.status,
+        doc["task_type"].as_str().unwrap_or("?"),
+        doc["attempt_count"].as_u64().unwrap_or(0),
+        doc["max_attempts"].as_u64().unwrap_or(0),
+        t.step_count,
+    );
+    let _ = writeln!(o, "**When:** {started} → {completed}");
+    if !t.summary.is_empty() {
+        let _ = writeln!(o, "**Summary:** {}", t.summary);
+    }
+
+    // ── transcript timeline (the coding-agent session) ──────────────────────
+    let _ = writeln!(o, "\n## Transcript");
+    if let Some(steps) = doc["steps"].as_array() {
+        if steps.is_empty() {
+            let _ = writeln!(o, "_(no steps recorded)_");
+        }
+        for st in steps {
+            let idx = st["index"].as_u64().unwrap_or(0);
+            let tool = st["tool_name"].as_str().unwrap_or("");
+            let ms = st["execution_ms"].as_u64().unwrap_or(0);
+            let _ = writeln!(o, "\n**[{idx}] {tool}**  _{ms}ms_");
+            let thought = st["thought"].as_str().unwrap_or("").trim();
+            if !thought.is_empty() {
+                let _ = writeln!(o, "- 💭 {}", truncate(thought, 400));
+            }
+            let params = compact_params(&st["params"]);
+            if !params.is_empty() {
+                let _ = writeln!(o, "- ⚙ `{tool}` {params}");
+            }
+            let ok = st["observation_success"].as_bool().unwrap_or(false);
+            if let Some(err) = st["observation_error"].as_str().filter(|e| !e.is_empty()) {
+                let _ = writeln!(o, "- ✗ {}", truncate(err, 300));
+            } else {
+                let out = st["observation_output"].as_str().unwrap_or("");
+                let mark = if ok { "✓" } else { "·" };
+                let _ = writeln!(o, "- {mark} {}", truncate(out.trim(), 400));
+            }
+            if let Some(arts) = st["observation_artifacts"].as_array() {
+                for a in arts {
+                    if let Some(p) = a.as_str() {
+                        let _ = writeln!(o, "  - 📄 {p}");
+                    }
+                }
+            }
+        }
+    }
+
+    // ── changes / diff ──────────────────────────────────────────────────────
+    let review = &doc["review"];
+    let _ = writeln!(o, "\n## Changes");
+    let changed = review["changed_files"].as_array().map(|a| a.len()).unwrap_or(0);
+    if changed == 0 {
+        let _ = writeln!(o, "_(no tracked file changes)_");
+    } else if let Some(files) = review["changed_files"].as_array() {
+        for f in files.iter().take(40) {
+            if let Some(p) = f.as_str() {
+                let _ = writeln!(o, "- {p}");
+            }
+        }
+    }
+    if let Some(diff) = review["git_diff"].as_str().filter(|d| !d.is_empty()) {
+        let _ = writeln!(o, "\n```diff\n{}\n```", truncate(diff, 6000));
+        if review["git_diff_truncated"].as_bool().unwrap_or(false) {
+            let _ = writeln!(o, "_[diff truncated]_");
+        }
+    }
+
+    // ── artifacts ───────────────────────────────────────────────────────────
+    if let Some(arts) = review["tool_artifacts"].as_array().filter(|a| !a.is_empty()) {
+        let _ = writeln!(o, "\n## Artifacts");
+        for a in arts.iter().take(40) {
+            if let Some(p) = a.as_str() {
+                let _ = writeln!(o, "- 📄 {p}");
+            }
+        }
+    }
+
+    // ── validation evidence ─────────────────────────────────────────────────
+    let _ = writeln!(o, "\n## Validation");
+    let mut val_lines = 0;
+    if let Some(events) = doc["events"].as_array() {
+        for e in events {
+            let et = e["event_type"].as_str().unwrap_or("");
+            if et.contains("valid") || et.contains("artifact") || et.contains("truth") || et.contains("gate") {
+                let _ = writeln!(o, "- `{et}` {}", truncate(e["summary"].as_str().unwrap_or(""), 160));
+                val_lines += 1;
+            }
+        }
+    }
+    if val_lines == 0 {
+        let verdict = if t.status.contains("succeed") { "passed (task completed)" } else { "see status above" };
+        let _ = writeln!(o, "- outcome: **{verdict}** — no explicit artifact-validation events for this task");
+    }
+
+    // ── work events timeline ────────────────────────────────────────────────
+    let _ = writeln!(o, "\n## Work events");
+    if let Some(events) = doc["events"].as_array() {
+        let _ = writeln!(o, "_{} events_", events.len());
+        for e in events.iter().rev().take(40).collect::<Vec<_>>().into_iter().rev() {
+            let ts = e["timestamp"].as_str().unwrap_or("").get(11..19).unwrap_or("");
+            let _ = writeln!(
+                o,
+                "- `{ts}` {} {}",
+                e["event_type"].as_str().unwrap_or(""),
+                truncate(e["summary"].as_str().unwrap_or(""), 90),
+            );
+        }
+    }
+    o
+}
+
+/// Compact one-line rendering of a step's tool params for the bundle.
+fn compact_params(params: &serde_json::Value) -> String {
+    match params {
+        serde_json::Value::Object(map) => {
+            let parts: Vec<String> = map
+                .iter()
+                .filter(|(k, _)| *k != "content") // skip giant file bodies
+                .map(|(k, v)| {
+                    let vs = match v {
+                        serde_json::Value::String(s) => truncate(s, 60),
+                        other => truncate(&other.to_string(), 60),
+                    };
+                    format!("{k}={vs}")
+                })
+                .collect();
+            parts.join(" ")
+        }
+        _ => String::new(),
+    }
 }
 
 fn format_transcript_summary(transcript: &TranscriptSummary) -> String {
