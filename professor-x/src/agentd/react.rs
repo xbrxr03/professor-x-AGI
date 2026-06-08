@@ -1075,6 +1075,7 @@ impl ReactLoop {
 
         // Circuit breaker: pause after 3 consecutive tool failures
         let mut consecutive_failures: u8 = 0;
+        let mut escalated = false;
 
         // LCAP: apply context budget
         let mut react_opts = ModelOptions::for_react();
@@ -1419,21 +1420,16 @@ impl ReactLoop {
                         }
                     };
 
-                    // ClawOS circuit breaker: 3 consecutive failures → pause
-                    if consecutive_failures >= 3 {
-                        warn!(
-                            "react: circuit breaker tripped (3 consecutive failures) on task '{}'",
-                            task.description
-                        );
-                        self.emit_event(
-                            Some(session_id),
-                            Some(task.id),
-                            "react.circuit_breaker",
-                            "circuit breaker tripped after 3 consecutive failures",
-                            json!({"step": step_idx + 1}),
-                        );
-                        return Ok(false);
-                    }
+                    let observation = if observation.success {
+                        observation
+                    } else {
+                        augment_with_repair_hint(
+                            observation,
+                            &parsed.tool_name,
+                            &parsed.params,
+                            &scope,
+                        )
+                    };
 
                     // Record step on TaskNode and MermaidCanvas
                     let step = ExecutionStep {
@@ -1464,6 +1460,59 @@ impl ReactLoop {
                     // Check if the observation signals completion
                     if is_completion_signal(&observation) {
                         return Ok(true);
+                    }
+
+                    if consecutive_failures >= 3 {
+                        if !escalated {
+                            escalated = true;
+                            consecutive_failures = 0;
+                            self.emit_event(
+                                Some(session_id),
+                                Some(task.id),
+                                "react.escalation",
+                                "stuck; escalating to self-review for a fresh plan",
+                                json!({"step": step_idx + 1}),
+                            );
+                            let critique = self.critique(task).await;
+                            let guidance = Observation {
+                                success: false,
+                                output: format!(
+                                    "AUTO-REPAIR: several consecutive actions failed. A reviewer diagnosed the current trajectory:\n{}\n\nStep back and try a different approach. Re-read files before editing them, keep paths inside the workspace, and verify each step.",
+                                    critique.output
+                                ),
+                                error: None,
+                                tokens_used: 0,
+                                execution_ms: 0,
+                                artifacts: Vec::new(),
+                            };
+                            task.steps.push(ExecutionStep {
+                                index: (task.steps.len() + 1) as u32,
+                                thought: "auto-repair: stuck, requesting a fresh diagnosis"
+                                    .to_string(),
+                                action: Action {
+                                    tool_name: "auto.repair".to_string(),
+                                    params: json!({}),
+                                    risk_score: 0,
+                                },
+                                observation: guidance,
+                                timestamp: Utc::now(),
+                            });
+                            let _ = TaskRunStore::new(Arc::clone(&self.memory.db))
+                                .step_recorded(task);
+                        } else {
+                            warn!(
+                                "react: circuit breaker tripped (failures persisted after escalation) on task '{}'",
+                                task.description
+                            );
+                            self.emit_event(
+                                Some(session_id),
+                                Some(task.id),
+                                "react.circuit_breaker",
+                                "circuit breaker tripped; failures persisted after self-review",
+                                json!({"step": step_idx + 1}),
+                            );
+                            return Ok(false);
+                        }
                     }
                 }
             }
@@ -2169,6 +2218,66 @@ fn is_completion_signal(obs: &Observation) -> bool {
     lower.contains("task complete") || lower.contains("finished") || lower.contains("done")
 }
 
+fn augment_with_repair_hint(
+    mut obs: Observation,
+    tool: &str,
+    _params: &Value,
+    scope: &PermissionScope,
+) -> Observation {
+    let combined = format!("{} {}", obs.error.clone().unwrap_or_default(), obs.output)
+        .to_lowercase();
+    let root = scope.workspace_root.to_string_lossy();
+    let hint = if combined.contains("outside workspace") || combined.contains("resolves outside") {
+        Some(format!(
+            "FIX: the workspace root is {root}. Use a path inside it, such as a relative path or {root}/<file>."
+        ))
+    } else if tool == "fs.replace"
+        && (combined.contains("found 0") || combined.contains("expected exactly one match"))
+    {
+        Some(
+            "FIX: the old text did not match exactly. Read the file first, copy an exact unique snippet including whitespace, then retry."
+                .to_string(),
+        )
+    } else if combined.contains("no such file")
+        || combined.contains("cannot find")
+        || (combined.contains("not found") && !combined.contains("granted"))
+    {
+        Some(
+            "FIX: that path does not exist. List its parent directory to confirm the name, or create it before reading it."
+                .to_string(),
+        )
+    } else if combined.contains("schema validation") || combined.contains("expects object") {
+        Some(format!(
+            "FIX: {tool} received the wrong parameters. Check the required fields and pass a JSON object."
+        ))
+    } else if tool.starts_with("shell")
+        && (combined.contains("stderr")
+            || combined.contains("exit")
+            || combined.contains("error")
+            || combined.contains("command not found"))
+    {
+        Some(
+            "FIX: the command errored. Read stderr, verify flags and file paths, and give stdin-reading commands an explicit filename."
+                .to_string(),
+        )
+    } else if combined.contains("not in granted_tools")
+        || combined.contains("not implemented")
+        || combined.contains("unknown tool")
+    {
+        Some("FIX: that tool is unavailable. Use one of the tools listed in the prompt.".to_string())
+    } else {
+        None
+    };
+    if let Some(hint) = hint {
+        obs.output = if obs.output.trim().is_empty() {
+            hint
+        } else {
+            format!("{}\n{hint}", obs.output)
+        };
+    }
+    obs
+}
+
 fn extract_keywords(text: &str) -> Vec<String> {
     // Naive keyword extraction: split on whitespace, keep words > 4 chars, dedup
     let mut words: Vec<String> = text
@@ -2351,7 +2460,10 @@ pub(crate) fn effective_memory_ceiling(lcap_ceiling: u32, override_budget: Optio
 
 #[cfg(test)]
 mod tests {
-    use super::{effective_memory_ceiling, predict_success_from_ice};
+    use super::{
+        augment_with_repair_hint, effective_memory_ceiling, predict_success_from_ice, Observation,
+    };
+    use crate::policyd::PermissionScope;
 
     #[test]
     fn override_clamps_below_lcap() {
@@ -2406,5 +2518,35 @@ mod tests {
         let p = predict_success_from_ice(&examples);
         // (0+1)/(2+2) = 0.25
         assert!((p - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn repair_hint_explains_workspace_boundary_failures() {
+        let scope = PermissionScope::default_autonomous();
+        let obs = augment_with_repair_hint(
+            Observation::denied("path resolves outside workspace"),
+            "fs.read",
+            &serde_json::json!({"path": "/tmp/outside.txt"}),
+            &scope,
+        );
+
+        assert!(obs.output.contains("FIX:"));
+        assert!(obs.output.contains("workspace root"));
+    }
+
+    #[test]
+    fn repair_hint_explains_exact_replace_failures() {
+        let scope = PermissionScope::default_autonomous();
+        let mut obs = Observation::denied("expected exactly one match; found 0");
+        obs.output = "replacement failed".to_string();
+        let obs = augment_with_repair_hint(
+            obs,
+            "fs.replace",
+            &serde_json::json!({"path": "src/main.rs"}),
+            &scope,
+        );
+
+        assert!(obs.output.contains("replacement failed"));
+        assert!(obs.output.contains("old text did not match exactly"));
     }
 }
