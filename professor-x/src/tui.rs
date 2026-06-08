@@ -47,6 +47,20 @@ const TUI_QUEUE_STEP_COMMAND: &str = "cargo run -- --prof-x-step-live 1";
 const TUI_QUEUE_REVIEW_COMMAND: &str = "cargo run -- --prof-x-queue-review";
 const TUI_QUEUE_REPLAY_COMMAND: &str = "cargo run -- --prof-x-queue-replay";
 const TUI_QUEUE_PUBLISH_COMMAND: &str = "cargo run -- --prof-x-queue-publish";
+const TUI_BRIEF_COMMAND: &str = "cargo run -- --brief";
+const TUI_COCKPIT_COMMAND: &str = "cargo run -- --cockpit";
+const TUI_WORK_COMMAND: &str = "cargo run -- --work-log";
+const TUI_SESSIONS_COMMAND: &str = "cargo run -- --coding-sessions";
+const TUI_RUNS_COMMAND: &str = "cargo run -- --work-loops";
+const TUI_REVIEW_COMMAND: &str = "cargo run -- --run-review";
+const TUI_REPLAY_COMMAND: &str = "cargo run -- --replay";
+const TUI_PUBLISH_COMMAND: &str = "cargo run -- --publish-run";
+const TUI_TASK_REVIEW_COMMAND: &str = "cargo run -- --task-review";
+const TUI_TASK_EVIDENCE_COMMAND: &str = "cargo run -- --task-evidence";
+const TUI_SESSION_REVIEW_COMMAND: &str = "cargo run -- --session-review";
+const TUI_SESSION_PUBLISH_COMMAND: &str = "cargo run -- --session-publish";
+const TUI_PLAN_COMMAND: &str = "cargo run -- --prof-x-plan";
+const TUI_PREVIEW_COMMAND: &str = "cargo run -- --prof-x-preview-step";
 
 // One-Dark-ish palette.
 const ACCENT: Color = Color::Rgb(198, 120, 221);
@@ -378,6 +392,12 @@ fn tui_help_lines() -> Vec<Line<'static>> {
         styled("   /queue-review [id]    review queue evidence", CYAN),
         styled("   /queue-replay [id]    replay queue timeline", CYAN),
         styled("   /queue-publish [id]   publish linked run evidence", CYAN),
+        styled("   /brief /cockpit       show current work state", CYAN),
+        styled("   /work [n] /runs [n]   inspect events and run ledger", CYAN),
+        styled("   /review [id] /replay [id] /publish [id]", CYAN),
+        styled("   /sessions [n] /session-review [id] /session-publish [id]", CYAN),
+        styled("   /task-review [id] /task-evidence [id] /inspect [id]", CYAN),
+        styled("   /plan /preview        plan or preview autonomous gates", CYAN),
     ]
 }
 
@@ -482,22 +502,182 @@ struct TuiCliCommand {
 
 fn tui_cli_command(input: &str) -> Option<TuiCliCommand> {
     let input = input.trim();
-    let (label, flag, display, rest) =
-        if let Some(rest) = input.strip_prefix("/queue-review") {
-            ("queue review", "--prof-x-queue-review", TUI_QUEUE_REVIEW_COMMAND, rest)
-        } else if let Some(rest) = input.strip_prefix("/queue-replay") {
-            ("queue replay", "--prof-x-queue-replay", TUI_QUEUE_REPLAY_COMMAND, rest)
-        } else if let Some(rest) = input.strip_prefix("/queue-publish") {
-            ("queue publish", "--prof-x-queue-publish", TUI_QUEUE_PUBLISH_COMMAND, rest)
-        } else {
-            return None;
-        };
-    let queue_ref = nonempty_or_latest(rest);
-    Some(TuiCliCommand {
+    if input == "/brief" {
+        return Some(no_arg_tui_command("brief", "--brief", TUI_BRIEF_COMMAND));
+    }
+    if input == "/cockpit" {
+        return Some(no_arg_tui_command("cockpit snapshot", "--cockpit", TUI_COCKPIT_COMMAND));
+    }
+    if input == "/plan" {
+        return Some(no_arg_tui_command("queue planner", "--prof-x-plan", TUI_PLAN_COMMAND));
+    }
+    if input == "/preview" {
+        return Some(no_arg_tui_command(
+            "queue preview",
+            "--prof-x-preview-step",
+            TUI_PREVIEW_COMMAND,
+        ));
+    }
+    if let Some(rest) = strip_tui_command(input, "/work") {
+        return Some(limit_tui_command("work feed", "--work-log", TUI_WORK_COMMAND, rest, 12));
+    }
+    if let Some(rest) = strip_tui_command(input, "/sessions") {
+        return Some(limit_tui_command(
+            "coding sessions",
+            "--coding-sessions",
+            TUI_SESSIONS_COMMAND,
+            rest,
+            10,
+        ));
+    }
+    if let Some(rest) = strip_tui_command(input, "/runs") {
+        return Some(limit_tui_command("run ledger", "--work-loops", TUI_RUNS_COMMAND, rest, 10));
+    }
+    if let Some(rest) = strip_tui_command(input, "/queue-review") {
+        return Some(ref_tui_command(
+            "queue review",
+            "--prof-x-queue-review",
+            TUI_QUEUE_REVIEW_COMMAND,
+            rest,
+        ));
+    }
+    if let Some(rest) = strip_tui_command(input, "/queue-replay") {
+        return Some(ref_tui_command(
+            "queue replay",
+            "--prof-x-queue-replay",
+            TUI_QUEUE_REPLAY_COMMAND,
+            rest,
+        ));
+    }
+    if let Some(rest) = strip_tui_command(input, "/queue-publish") {
+        return Some(ref_tui_command(
+            "queue publish",
+            "--prof-x-queue-publish",
+            TUI_QUEUE_PUBLISH_COMMAND,
+            rest,
+        ));
+    }
+    if let Some(rest) = strip_tui_command(input, "/session-review") {
+        return Some(ref_tui_command(
+            "session review",
+            "--session-review",
+            TUI_SESSION_REVIEW_COMMAND,
+            rest,
+        ));
+    }
+    if let Some(rest) = strip_tui_command(input, "/session-publish") {
+        return Some(ref_tui_command(
+            "session publish",
+            "--session-publish",
+            TUI_SESSION_PUBLISH_COMMAND,
+            rest,
+        ));
+    }
+    if let Some(rest) = strip_tui_command(input, "/task-evidence") {
+        return Some(ref_tui_command(
+            "task evidence",
+            "--task-evidence",
+            TUI_TASK_EVIDENCE_COMMAND,
+            rest,
+        ));
+    }
+    if let Some(rest) = strip_tui_command(input, "/inspect") {
+        return Some(ref_tui_command(
+            "task evidence",
+            "--inspect",
+            "cargo run -- --inspect",
+            rest,
+        ));
+    }
+    if let Some(rest) = strip_tui_command(input, "/task-review") {
+        return Some(ref_tui_command(
+            "task review",
+            "--task-review",
+            TUI_TASK_REVIEW_COMMAND,
+            rest,
+        ));
+    }
+    if let Some(rest) = strip_tui_command(input, "/review") {
+        return Some(ref_tui_command(
+            "run review",
+            "--run-review",
+            TUI_REVIEW_COMMAND,
+            rest,
+        ));
+    }
+    if let Some(rest) = strip_tui_command(input, "/replay") {
+        return Some(ref_tui_command(
+            "run replay",
+            "--replay",
+            TUI_REPLAY_COMMAND,
+            rest,
+        ));
+    }
+    if let Some(rest) = strip_tui_command(input, "/publish") {
+        return Some(ref_tui_command(
+            "run publish",
+            "--publish-run",
+            TUI_PUBLISH_COMMAND,
+            rest,
+        ));
+    }
+    None
+}
+
+fn strip_tui_command<'a>(input: &'a str, command: &str) -> Option<&'a str> {
+    if input == command {
+        Some("")
+    } else {
+        input
+            .strip_prefix(command)
+            .and_then(|rest| rest.strip_prefix(' '))
+    }
+}
+
+fn no_arg_tui_command(
+    label: &'static str,
+    flag: impl Into<String>,
+    display: impl Into<String>,
+) -> TuiCliCommand {
+    TuiCliCommand {
         label,
-        command_display: format!("{display} {queue_ref}"),
-        args: vec![flag.to_string(), queue_ref],
-    })
+        command_display: display.into(),
+        args: vec![flag.into()],
+    }
+}
+
+fn limit_tui_command(
+    label: &'static str,
+    flag: &str,
+    display: &str,
+    rest: &str,
+    default_limit: usize,
+) -> TuiCliCommand {
+    let limit = rest
+        .trim()
+        .parse::<usize>()
+        .unwrap_or(default_limit)
+        .clamp(1, 200)
+        .to_string();
+    TuiCliCommand {
+        label,
+        command_display: format!("{display} {limit}"),
+        args: vec![flag.to_string(), limit],
+    }
+}
+
+fn ref_tui_command(
+    label: &'static str,
+    flag: &str,
+    display: &str,
+    rest: &str,
+) -> TuiCliCommand {
+    let item_ref = nonempty_or_latest(rest);
+    TuiCliCommand {
+        label,
+        command_display: format!("{display} {item_ref}"),
+        args: vec![flag.to_string(), item_ref],
+    }
 }
 
 fn nonempty_or_latest(raw: &str) -> String {
@@ -1217,6 +1397,48 @@ mod tests {
     fn tui_cli_command_sanitizes_queue_ref() {
         let command = tui_cli_command("/queue-replay abc\x00def\n").expect("replay command");
         assert_eq!(command.args, vec!["--prof-x-queue-replay", "abcdef"]);
+    }
+
+    #[test]
+    fn tui_cli_command_builds_operator_inspection_args() {
+        let brief = tui_cli_command("/brief").expect("brief command");
+        assert_eq!(brief.args, vec!["--brief"]);
+
+        let work = tui_cli_command("/work 7").expect("work command");
+        assert_eq!(work.label, "work feed");
+        assert_eq!(work.args, vec!["--work-log", "7"]);
+
+        let runs = tui_cli_command("/runs").expect("runs command");
+        assert_eq!(runs.args, vec!["--work-loops", "10"]);
+
+        let review = tui_cli_command("/review abc123").expect("review command");
+        assert_eq!(review.args, vec!["--run-review", "abc123"]);
+
+        let evidence = tui_cli_command("/inspect").expect("inspect command");
+        assert_eq!(evidence.args, vec!["--inspect", "latest"]);
+    }
+
+    #[test]
+    fn tui_cli_command_builds_session_and_planner_args() {
+        let sessions = tui_cli_command("/sessions 3").expect("sessions command");
+        assert_eq!(sessions.args, vec!["--coding-sessions", "3"]);
+
+        let session_review =
+            tui_cli_command("/session-review cafebabe").expect("session review command");
+        assert_eq!(session_review.args, vec!["--session-review", "cafebabe"]);
+
+        let plan = tui_cli_command("/plan").expect("plan command");
+        assert_eq!(plan.args, vec!["--prof-x-plan"]);
+
+        let preview = tui_cli_command("/preview").expect("preview command");
+        assert_eq!(preview.args, vec!["--prof-x-preview-step"]);
+    }
+
+    #[test]
+    fn tui_cli_command_does_not_match_partial_prefixes() {
+        assert!(tui_cli_command("/workflow").is_none());
+        assert!(tui_cli_command("/reviewer latest").is_none());
+        assert!(tui_cli_command("/session-reviewer latest").is_none());
     }
 
     #[test]
