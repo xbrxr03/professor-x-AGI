@@ -31,6 +31,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::agentd::graph::{TaskNode, TaskType};
 use crate::agentd::react::ReactLoop;
+use crate::memd::autonomy_queue::{AutonomyQueueItem, AutonomyQueueStore};
 use crate::memd::MemoryManager;
 use crate::memd::events::EventStore;
 use crate::ollama::OllamaClient;
@@ -70,6 +71,16 @@ struct App {
     frame: usize,
     model: String,
     vitals: Vitals,
+    queue: QueueSignal,
+}
+
+#[derive(Clone, Debug, Default)]
+struct QueueSignal {
+    pending: i64,
+    latest_status: String,
+    latest_id: String,
+    latest_goal: String,
+    latest_command: String,
 }
 
 impl App {
@@ -104,6 +115,7 @@ impl App {
                 phi_rounds: 0,
                 episodic: 0,
             },
+            queue: QueueSignal::default(),
         }
     }
 
@@ -196,8 +208,29 @@ fn event_to_line(event_type: &str, summary: &str, payload: &Value) -> Option<Lin
         "task.succeeded" => Some(styled("  ✓ done", GREEN)),
         "task.failed" | "task.fail_requested" => Some(styled("  ✗ couldn't complete that", RED)),
         "policy.denied" => Some(styled(format!("  ⛔ {summary}"), RED)),
+        event if event.starts_with("autonomy.queue.") => {
+            Some(styled(format!("  ◇ {}", queue_event_summary(event, summary, payload)), YELLOW))
+        }
         "react.duplicate_action" => None,
         _ => None,
+    }
+}
+
+fn queue_event_summary(event_type: &str, summary: &str, payload: &Value) -> String {
+    let queue = payload
+        .get("queue_id")
+        .and_then(|value| value.as_str())
+        .map(short)
+        .unwrap_or_else(|| "latest".to_string());
+    match event_type {
+        "autonomy.queue.enqueued" | "autonomy.queue.seeded" => {
+            format!("queued work {queue}: {summary}")
+        }
+        "autonomy.queue.started" => format!("started queued work {queue}: {summary}"),
+        "autonomy.queue.completed" => format!("completed queued work {queue}: {summary}"),
+        "autonomy.queue.failed" => format!("queued work {queue} failed: {summary}"),
+        "autonomy.queue.planned" => format!("planned queued work {queue}: {summary}"),
+        _ => format!("{event_type} {queue}: {summary}"),
     }
 }
 
@@ -246,6 +279,54 @@ fn refresh_vitals(memory: &Arc<MemoryManager>, v: &mut Vitals) {
         v.stress = (0.35 * latn + 0.25 * tok + 0.20 * mem + 0.20 * (1.0 - health)) as f32;
     }
     v.episodic = qi("SELECT COUNT(*) FROM episodic");
+}
+
+fn refresh_queue(memory: &Arc<MemoryManager>) -> QueueSignal {
+    let store = AutonomyQueueStore::new(Arc::clone(&memory.db));
+    let pending = store.count_pending().unwrap_or(0);
+    let latest = store.recent(1).ok().and_then(|mut items| items.pop());
+    latest
+        .as_ref()
+        .map(|item| queue_signal_from_item(item, pending))
+        .unwrap_or_else(|| QueueSignal {
+            pending,
+            latest_status: "empty".to_string(),
+            latest_id: String::new(),
+            latest_goal: "no queued autonomous work".to_string(),
+            latest_command: "cargo run -- --prof-x-enqueue \"goal\"".to_string(),
+        })
+}
+
+fn queue_signal_from_item(item: &AutonomyQueueItem, pending: i64) -> QueueSignal {
+    QueueSignal {
+        pending,
+        latest_status: item.status.clone(),
+        latest_id: short(&item.id),
+        latest_goal: item.goal.clone(),
+        latest_command: queue_next_command(item),
+    }
+}
+
+fn queue_next_command(item: &AutonomyQueueItem) -> String {
+    let queue = short(&item.id);
+    match item.status.as_str() {
+        "pending" | "running" => "cargo run -- --prof-x-step-live 1".to_string(),
+        "passed" | "completed" => format!("cargo run -- --prof-x-queue-publish {queue}"),
+        "failed" | "rejected" => format!("cargo run -- --prof-x-queue-review {queue}"),
+        _ => format!("cargo run -- --prof-x-queue-review {queue}"),
+    }
+}
+
+fn short(id: &str) -> String {
+    id.chars().take(8).collect()
+}
+
+fn truncate(text: &str, max_chars: usize) -> String {
+    let mut out = text.chars().take(max_chars).collect::<String>();
+    if text.chars().count() > max_chars {
+        out.push_str("...");
+    }
+    out
 }
 
 fn bar(v: f32, lo: f32, hi: f32, width: usize) -> String {
@@ -391,6 +472,23 @@ fn draw_vitals_panel(f: &mut Frame, area: Rect, app: &App) {
         Line::from(""),
         styled(format!("phi rounds  {}", v.phi_rounds), DIM),
         styled(format!("episodic    {}", v.episodic), DIM),
+        Line::from(""),
+        styled(
+            format!("queue      {} pending", app.queue.pending),
+            DIM,
+        ),
+        styled(
+            format!("latest     {} {}", app.queue.latest_status, app.queue.latest_id),
+            CYAN,
+        ),
+        styled(
+            format!("goal       {}", truncate(&app.queue.latest_goal, 32)),
+            FG,
+        ),
+        styled(
+            format!("next       {}", app.queue.latest_command),
+            DIM,
+        ),
     ];
     let block = Block::default()
         .borders(Borders::ALL)
@@ -416,9 +514,24 @@ fn draw_vitals_footer(f: &mut Frame, area: Rect, app: &App) {
             format!("{:.2}", v.stress),
             Style::default().fg(scol(v.stress)),
         ),
-        Span::styled("        ⇥ Tab for vitals", Style::default().fg(DIM)),
+        Span::styled("  queue ", Style::default().fg(DIM)),
+        Span::styled(
+            format!("{}:{}", app.queue.pending, app.queue.latest_status),
+            Style::default().fg(queue_color(&app.queue.latest_status)),
+        ),
+        Span::styled("        ⇥ Tab for vitals/queue", Style::default().fg(DIM)),
     ]);
     f.render_widget(Paragraph::new(line), area);
+}
+
+fn queue_color(status: &str) -> Color {
+    match status {
+        "passed" | "completed" => GREEN,
+        "running" => CYAN,
+        "failed" | "rejected" => RED,
+        "pending" => YELLOW,
+        _ => DIM,
+    }
 }
 
 fn draw_input(f: &mut Frame, area: Rect, app: &App) {
@@ -493,6 +606,7 @@ fn tui_loop(
         .and_then(|v| v.last().map(|e| e.id))
         .unwrap_or(0);
     refresh_vitals(&memory, &mut app.vitals);
+    app.queue = refresh_queue(&memory);
 
     let res = (|| -> Result<()> {
         loop {
@@ -564,6 +678,7 @@ fn tui_loop(
             app.frame += 1;
             if app.frame % 8 == 0 {
                 refresh_vitals(&memory, &mut app.vitals);
+                app.queue = refresh_queue(&memory);
             }
         }
         Ok(())
@@ -573,4 +688,76 @@ fn tui_loop(
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
     res
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn queue_item(status: &str) -> AutonomyQueueItem {
+        let now = chrono::Utc::now();
+        AutonomyQueueItem {
+            id: "12345678-aaaa-bbbb-cccc-123456789abc".to_string(),
+            goal: "make Prof X feel alive in the terminal".to_string(),
+            kind: "operator_run".to_string(),
+            profile: "commit".to_string(),
+            cycles: 3,
+            priority: 90,
+            status: status.to_string(),
+            result_run_id: Some("87654321-bbbb-cccc-dddd-123456789abc".to_string()),
+            result_report_path: Some("artifacts/work-loop/2026-06-08/loop.json".to_string()),
+            failure_reason: None,
+            queued_at: now,
+            started_at: Some(now),
+            completed_at: if matches!(status, "passed" | "failed" | "completed") {
+                Some(now)
+            } else {
+                None
+            },
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn queue_next_command_steps_pending_work_live() {
+        assert_eq!(
+            queue_next_command(&queue_item("pending")),
+            "cargo run -- --prof-x-step-live 1"
+        );
+    }
+
+    #[test]
+    fn queue_next_command_publishes_passed_work() {
+        assert_eq!(
+            queue_next_command(&queue_item("passed")),
+            "cargo run -- --prof-x-queue-publish 12345678"
+        );
+    }
+
+    #[test]
+    fn queue_event_summary_reads_queue_identity() {
+        let line = queue_event_summary(
+            "autonomy.queue.completed",
+            "completed autonomous queue item",
+            &serde_json::json!({"queue_id": "12345678-aaaa-bbbb-cccc-123456789abc"}),
+        );
+
+        assert!(line.contains("completed queued work 12345678"));
+        assert!(line.contains("completed autonomous queue item"));
+    }
+
+    #[test]
+    fn queue_signal_preserves_latest_goal_and_command() {
+        let item = queue_item("failed");
+        let signal = queue_signal_from_item(&item, 2);
+
+        assert_eq!(signal.pending, 2);
+        assert_eq!(signal.latest_id, "12345678");
+        assert_eq!(signal.latest_status, "failed");
+        assert!(signal.latest_goal.contains("feel alive"));
+        assert_eq!(
+            signal.latest_command,
+            "cargo run -- --prof-x-queue-review 12345678"
+        );
+    }
 }
