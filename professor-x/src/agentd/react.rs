@@ -1078,6 +1078,10 @@ impl ReactLoop {
         // Auto-repair: escalate to the mirror critic ONCE before the circuit
         // breaker gives up, so a stuck run gets a fresh diagnosis not just failure.
         let mut escalated = false;
+        // Toggle (for A/B measurement / opt-out): PROFESSOR_X_AUTOREPAIR=off.
+        let auto_repair_on = std::env::var("PROFESSOR_X_AUTOREPAIR")
+            .map(|v| v.to_lowercase() != "off")
+            .unwrap_or(true);
 
         // LCAP: apply context budget
         let mut react_opts = ModelOptions::for_react();
@@ -1424,7 +1428,7 @@ impl ReactLoop {
 
                     // AUTO-REPAIR: turn a failure into a SPECIFIC correction the
                     // small model can act on next step instead of a bare error.
-                    let observation = if observation.success {
+                    let observation = if observation.success || !auto_repair_on {
                         observation
                     } else {
                         augment_with_repair_hint(observation, &parsed.tool_name, &parsed.params, &scope)
@@ -1465,7 +1469,7 @@ impl ReactLoop {
                     // mirror critic ONCE for a fresh plan before giving up; only if
                     // it stalls again does the circuit breaker trip.
                     if consecutive_failures >= 3 {
-                        if !escalated {
+                        if auto_repair_on && !escalated {
                             escalated = true;
                             consecutive_failures = 0;
                             self.emit_event(
