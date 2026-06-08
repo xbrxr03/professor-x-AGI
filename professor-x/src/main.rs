@@ -90,6 +90,10 @@ struct CliArgs {
     run_log_limit: Option<usize>,
     /// Print one compact Prof X operator brief and exit.
     brief: bool,
+    /// Write a Markdown journal from recent Prof X work events and exit.
+    prof_x_journal_limit: Option<usize>,
+    /// Write and commit a Markdown journal from recent Prof X work events.
+    prof_x_journal_commit_limit: Option<usize>,
     /// Print the consciousness measurement report (phi, interoception, self-prediction, ICS, ...) and exit.
     consciousness_report: bool,
     /// Print a detailed autonomous/work-loop run review by run id prefix, report path, or 'latest'.
@@ -286,6 +290,8 @@ fn parse_args() -> CliArgs {
         work_loops_limit: None,
         run_log_limit: None,
         brief: false,
+        prof_x_journal_limit: None,
+        prof_x_journal_commit_limit: None,
         run_review: None,
         run_replay: None,
         publish_run: None,
@@ -456,6 +462,22 @@ fn parse_args() -> CliArgs {
             "--brief" | "--prof-x-brief" | "--now-brief" => {
                 cli.brief = true;
                 i += 1;
+            }
+            "--prof-x-journal" | "--work-journal" | "--live-journal" => {
+                let limit = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .and_then(|next| next.parse::<usize>().ok());
+                cli.prof_x_journal_limit = Some(limit.unwrap_or(50));
+                i += if limit.is_some() { 2 } else { 1 };
+            }
+            "--prof-x-journal-commit" | "--work-journal-commit" | "--commit-work-journal" => {
+                let limit = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .and_then(|next| next.parse::<usize>().ok());
+                cli.prof_x_journal_commit_limit = Some(limit.unwrap_or(50));
+                i += if limit.is_some() { 2 } else { 1 };
             }
             "--run-review" | "--loop-review" => {
                 let value = args
@@ -987,6 +1009,14 @@ async fn main() -> Result<()> {
 
     if cli.brief {
         return print_prof_x_brief(Arc::clone(&memory), Arc::clone(&events));
+    }
+
+    if let Some(limit) = cli.prof_x_journal_limit {
+        return write_prof_x_journal(Arc::clone(&events), limit, false);
+    }
+
+    if let Some(limit) = cli.prof_x_journal_commit_limit {
+        return write_prof_x_journal(Arc::clone(&events), limit, true);
     }
 
     if cli.consciousness_report {
@@ -8051,6 +8081,8 @@ fn format_operator_help() -> String {
         "  cargo run -- --observe-work",
         "  cargo run -- --cockpit",
         "  cargo run -- --watch-work",
+        "  cargo run -- --prof-x-journal 50",
+        "  cargo run -- --prof-x-journal-commit 50",
         "  cargo run -- --consciousness-report",
         "",
         "Give him a bounded coding-agent task",
@@ -9319,6 +9351,148 @@ fn publish_run_artifacts(memory: Arc<MemoryManager>, run_ref: &str) -> Result<()
         println!("  artifact: {}", path.display());
     }
     Ok(())
+}
+
+fn write_prof_x_journal(events: Arc<EventStore>, limit: usize, commit: bool) -> Result<()> {
+    let repo_root = default_repo_root();
+    let recent_events = events.work_tail(limit)?;
+    let timestamp = chrono::Utc::now();
+    let commit_id = git_head(&repo_root).unwrap_or_else(|_| "unknown".to_string());
+    let journal = format_prof_x_journal_markdown(&repo_root, timestamp, &commit_id, &recent_events);
+    let path = prof_x_journal_path(&repo_root, timestamp);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, journal)?;
+
+    println!("Wrote Professor X journal");
+    println!("  path: {}", display_repo_path(&repo_root, &path));
+    println!("  events: {}", recent_events.len());
+
+    if commit {
+        let relative = repo_relative_existing_path(&repo_root, &path)?;
+        let published = commit_prof_x_journal(&repo_root, &relative, timestamp)?;
+        println!("  commit: {published}");
+    } else {
+        println!(
+            "  publish: cargo run -- --prof-x-journal-commit {}",
+            limit.clamp(1, 500)
+        );
+    }
+    Ok(())
+}
+
+fn prof_x_journal_path(repo_root: &std::path::Path, timestamp: chrono::DateTime<chrono::Utc>) -> PathBuf {
+    repo_root
+        .join("professor-x")
+        .join("artifacts")
+        .join("work-loop")
+        .join("ledger")
+        .join(timestamp.format("%Y-%m-%d").to_string())
+        .join(format!("prof-x-journal-{}.md", timestamp.format("%H%M%S")))
+}
+
+fn format_prof_x_journal_markdown(
+    repo_root: &std::path::Path,
+    timestamp: chrono::DateTime<chrono::Utc>,
+    commit_id: &str,
+    recent_events: &[memd::events::AgentEvent],
+) -> String {
+    let git_line = cockpit_git_line(repo_root);
+    let status_raw = command_stdout(repo_root, "git", &["status", "--short"])
+        .filter(|text| !text.is_empty())
+        .unwrap_or_else(|| "clean".to_string());
+    let latest_activity = cockpit_latest_activity(recent_events);
+    let mut lines = vec![
+        format!("# Professor X Work Journal - {}", timestamp.format("%Y-%m-%d %H:%M:%S UTC")),
+        String::new(),
+        "## Run Context".to_string(),
+        format!("- generated_at: {}", timestamp.to_rfc3339()),
+        format!("- harness_commit: {commit_id}"),
+        format!("- git: {git_line}"),
+        format!("- work_signal: {}", work_signal_summary(recent_events)),
+        format!("- latest_activity: {latest_activity}"),
+        String::new(),
+        "## Working Tree".to_string(),
+    ];
+
+    if status_raw == "clean" {
+        lines.push("- clean".to_string());
+    } else {
+        for line in status_raw.lines().take(40) {
+            lines.push(format!("- `{}`", line));
+        }
+        if status_raw.lines().count() > 40 {
+            lines.push("- ... truncated".to_string());
+        }
+    }
+
+    lines.push(String::new());
+    lines.push("## Timeline".to_string());
+    if recent_events.is_empty() {
+        lines.push("- no work events recorded yet".to_string());
+    } else {
+        for event in recent_events {
+            lines.push(format_work_event(event));
+        }
+    }
+
+    lines.push(String::new());
+    lines.push("## Operator Commands".to_string());
+    lines.push("- `cargo run -- --observe-work`".to_string());
+    lines.push("- `cargo run -- --cockpit`".to_string());
+    lines.push("- `cargo run -- --run-log 10`".to_string());
+    lines.push("- `cargo run -- --prof-x-journal-commit 50`".to_string());
+    lines.push(String::new());
+    lines.join("\n")
+}
+
+fn commit_prof_x_journal(
+    repo_root: &std::path::Path,
+    relative_path: &std::path::Path,
+    timestamp: chrono::DateTime<chrono::Utc>,
+) -> Result<String> {
+    let text = relative_path.to_string_lossy();
+    if !text.starts_with("professor-x/artifacts/work-loop/ledger/") || !text.ends_with(".md") {
+        anyhow::bail!(
+            "refusing to commit non-journal artifact '{}'",
+            relative_path.display()
+        );
+    }
+    let add = std::process::Command::new("git")
+        .arg("add")
+        .arg("--")
+        .arg(relative_path)
+        .current_dir(repo_root)
+        .output()?;
+    if !add.status.success() {
+        anyhow::bail!(
+            "git add journal failed: {}",
+            String::from_utf8_lossy(&add.stderr)
+        );
+    }
+
+    let diff = std::process::Command::new("git")
+        .args(["diff", "--cached", "--quiet", "--"])
+        .arg(relative_path)
+        .current_dir(repo_root)
+        .status()?;
+    if diff.success() {
+        anyhow::bail!("journal is already committed; no staged changes");
+    }
+
+    let message = format!("professor-x: journal {}", timestamp.format("%Y-%m-%d %H:%M:%S UTC"));
+    let commit = std::process::Command::new("git")
+        .args(["commit", "-m", &message])
+        .current_dir(repo_root)
+        .output()?;
+    if !commit.status.success() {
+        anyhow::bail!(
+            "git commit journal failed: {}",
+            String::from_utf8_lossy(&commit.stderr)
+        );
+    }
+    git_head(repo_root)
 }
 
 #[derive(Debug)]
@@ -11831,6 +12005,57 @@ mod tests {
         assert!(line.contains("L report artifacts/coding-smoke/report.json"));
         assert!(line.contains("L transcript artifacts/transcripts/task.json"));
         assert!(line.contains("L artifact artifacts/commands/cargo-test.json"));
+    }
+
+    #[test]
+    fn format_prof_x_journal_markdown_captures_observable_work() {
+        let root = std::env::temp_dir().join(format!("px-journal-root-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let init = std::process::Command::new("git")
+            .arg("init")
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert!(init.status.success());
+
+        let event = memd::events::AgentEvent {
+            id: 42,
+            timestamp: chrono::DateTime::parse_from_rfc3339("2026-06-01T08:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+            session_id: None,
+            task_id: Some("task-abc".to_string()),
+            event_type: "tool.started".to_string(),
+            summary: "running cargo check".to_string(),
+            payload: serde_json::json!({
+                "tool": "shell.restricted",
+                "params_preview": "cargo check",
+                "run_id": "run-12345678"
+            }),
+        };
+
+        let journal = format_prof_x_journal_markdown(&root, event.timestamp, "abc1234", &[event]);
+
+        assert!(journal.contains("# Professor X Work Journal"));
+        assert!(journal.contains("harness_commit: abc1234"));
+        assert!(journal.contains("work_signal: events=1"));
+        assert!(journal.contains("running cargo check"));
+        assert!(journal.contains("tool=shell.restricted"));
+        assert!(journal.contains("cargo run -- --observe-work"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn prof_x_journal_path_stays_inside_work_loop_ledger() {
+        let root = std::path::Path::new("/tmp/professor-x-root");
+        let timestamp = chrono::DateTime::parse_from_rfc3339("2026-06-01T08:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let path = prof_x_journal_path(root, timestamp);
+
+        assert!(path.to_string_lossy().ends_with(
+            "professor-x/artifacts/work-loop/ledger/2026-06-01/prof-x-journal-080000.md"
+        ));
     }
 
     #[test]
