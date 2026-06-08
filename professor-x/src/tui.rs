@@ -41,6 +41,7 @@ use crate::toolbridge::ToolRegistry;
 const TICK: Duration = Duration::from_millis(100);
 const MAX_LINES: usize = 1200;
 const SPINNER: [&str; 4] = ["⠋", "⠙", "⠸", "⠴"];
+const TUI_QUEUE_STEP_COMMAND: &str = "cargo run -- --prof-x-step-live 1";
 
 // One-Dark-ish palette.
 const ACCENT: Color = Color::Rgb(198, 120, 221);
@@ -310,11 +311,148 @@ fn queue_signal_from_item(item: &AutonomyQueueItem, pending: i64) -> QueueSignal
 fn queue_next_command(item: &AutonomyQueueItem) -> String {
     let queue = short(&item.id);
     match item.status.as_str() {
-        "pending" | "running" => "cargo run -- --prof-x-step-live 1".to_string(),
+        "pending" | "running" => TUI_QUEUE_STEP_COMMAND.to_string(),
         "passed" | "completed" => format!("cargo run -- --prof-x-queue-publish {queue}"),
         "failed" | "rejected" => format!("cargo run -- --prof-x-queue-review {queue}"),
         _ => format!("cargo run -- --prof-x-queue-review {queue}"),
     }
+}
+
+fn handle_tui_command(
+    input: &str,
+    memory: &Arc<MemoryManager>,
+    events: &Arc<EventStore>,
+) -> Result<Option<Vec<Line<'static>>>> {
+    let input = input.trim();
+    if input == "/help" {
+        return Ok(Some(tui_help_lines()));
+    }
+    if input == "/queue" || input.starts_with("/queue ") {
+        let limit = input
+            .strip_prefix("/queue")
+            .unwrap_or("")
+            .trim()
+            .parse::<usize>()
+            .unwrap_or(5);
+        return Ok(Some(tui_queue_lines(memory, limit)?));
+    }
+    if let Some(rest) = input.strip_prefix("/enqueue-commit") {
+        return Ok(Some(tui_enqueue_lines(memory, events, rest, "commit", 5, 65)?));
+    }
+    if let Some(rest) = input.strip_prefix("/enqueue") {
+        return Ok(Some(tui_enqueue_lines(memory, events, rest, "core", 4, 55)?));
+    }
+    if input == "/step" || input == "/step-live" {
+        return Ok(Some(vec![
+            styled("Queued work is advanced by the supervised runner:", DIM),
+            styled(format!("   {TUI_QUEUE_STEP_COMMAND}"), CYAN),
+        ]));
+    }
+    if input.starts_with('/') {
+        return Ok(Some(vec![styled(
+            format!("Unknown command: {input}. Try /help"),
+            RED,
+        )]));
+    }
+    Ok(None)
+}
+
+fn tui_help_lines() -> Vec<Line<'static>> {
+    vec![
+        styled("TUI commands", ACCENT),
+        styled("   /queue [n]            show queued autonomous work", CYAN),
+        styled("   /enqueue <goal>       queue a bounded core Prof X goal", CYAN),
+        styled("   /enqueue-commit <goal> queue verified commit-capable work", CYAN),
+        styled("   /step-live            show the live queue step command", CYAN),
+    ]
+}
+
+fn tui_queue_lines(memory: &Arc<MemoryManager>, limit: usize) -> Result<Vec<Line<'static>>> {
+    let items = AutonomyQueueStore::new(Arc::clone(&memory.db)).recent(limit.clamp(1, 20))?;
+    if items.is_empty() {
+        return Ok(vec![styled(
+            "Queue is empty. Use /enqueue <goal> or /enqueue-commit <goal>.",
+            DIM,
+        )]);
+    }
+    let mut lines = vec![styled("Autonomous queue", ACCENT)];
+    for item in items {
+        lines.push(styled(tui_queue_item_line(&item), CYAN));
+        lines.push(styled(format!("      next {}", queue_next_command(&item)), DIM));
+    }
+    Ok(lines)
+}
+
+fn tui_enqueue_lines(
+    memory: &Arc<MemoryManager>,
+    events: &Arc<EventStore>,
+    goal: &str,
+    profile: &str,
+    cycles: u32,
+    priority: u8,
+) -> Result<Vec<Line<'static>>> {
+    let goal = sanitize_tui_goal(goal);
+    if goal.is_empty() {
+        return Ok(vec![styled(
+            "Cannot enqueue an empty goal. Use /enqueue <goal>.",
+            RED,
+        )]);
+    }
+    let item = AutonomyQueueStore::new(Arc::clone(&memory.db)).enqueue(
+        goal.clone(),
+        "operator_run",
+        profile,
+        cycles,
+        priority,
+    )?;
+    events.append(
+        None,
+        None,
+        "autonomy.queue.enqueued",
+        format!(
+            "operator enqueued autonomous work item {}: {}",
+            short(&item.id),
+            truncate(&goal, 100)
+        ),
+        serde_json::json!({
+            "queue_id": item.id,
+            "goal": item.goal,
+            "kind": item.kind,
+            "profile": item.profile,
+            "cycles": item.cycles,
+            "priority": item.priority,
+            "source": "tui",
+            "next_command": TUI_QUEUE_STEP_COMMAND,
+        }),
+    )?;
+    Ok(vec![
+        styled("Queued autonomous Professor X work", GREEN),
+        styled(tui_queue_item_line(&item), CYAN),
+        styled(format!("   execute {TUI_QUEUE_STEP_COMMAND}"), DIM),
+    ])
+}
+
+fn tui_queue_item_line(item: &AutonomyQueueItem) -> String {
+    format!(
+        "{} queue={} priority={} {}:{} cycles={} {}",
+        item.status,
+        short(&item.id),
+        item.priority,
+        item.kind,
+        item.profile,
+        item.cycles,
+        truncate(&item.goal, 72),
+    )
+}
+
+fn sanitize_tui_goal(goal: &str) -> String {
+    goal.chars()
+        .filter(|ch| !ch.is_control())
+        .collect::<String>()
+        .trim()
+        .chars()
+        .take(300)
+        .collect()
 }
 
 fn short(id: &str) -> String {
@@ -627,6 +765,20 @@ fn tui_loop(
                             KeyCode::Tab => app.show_vitals = !app.show_vitals,
                             KeyCode::Enter if !busy && !app.input.trim().is_empty() => {
                                 let typed = app.input.trim().to_string();
+                                if let Some(lines) = handle_tui_command(&typed, &memory, &events)? {
+                                    app.input.clear();
+                                    app.scroll = 0;
+                                    app.push(Line::from(""));
+                                    app.push(Line::from(Span::styled(
+                                        format!("▌ {typed}"),
+                                        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                                    )));
+                                    for line in lines {
+                                        app.push(line);
+                                    }
+                                    app.queue = refresh_queue(&memory);
+                                    continue;
+                                }
                                 let task = crate::util::expand_file_refs(&typed);
                                 app.input.clear();
                                 app.scroll = 0;
@@ -759,5 +911,25 @@ mod tests {
             signal.latest_command,
             "cargo run -- --prof-x-queue-review 12345678"
         );
+    }
+
+    #[test]
+    fn tui_queue_item_line_is_operator_readable() {
+        let line = tui_queue_item_line(&queue_item("pending"));
+
+        assert!(line.contains("pending queue=12345678"));
+        assert!(line.contains("operator_run:commit"));
+        assert!(line.contains("make Prof X feel alive"));
+    }
+
+    #[test]
+    fn sanitize_tui_goal_strips_controls_and_bounds_length() {
+        let raw = format!("  make\x00progress {}\n", "x".repeat(400));
+        let goal = sanitize_tui_goal(&raw);
+
+        assert!(!goal.contains('\0'));
+        assert!(!goal.contains('\n'));
+        assert!(goal.starts_with("makeprogress"));
+        assert!(goal.chars().count() <= 300);
     }
 }
