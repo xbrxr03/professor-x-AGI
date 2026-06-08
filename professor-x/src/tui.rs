@@ -10,6 +10,8 @@
 
 use anyhow::Result;
 use std::io;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -212,6 +214,9 @@ fn event_to_line(event_type: &str, summary: &str, payload: &Value) -> Option<Lin
         event if event.starts_with("autonomy.queue.") => {
             Some(styled(format!("  ◇ {}", queue_event_summary(event, summary, payload)), YELLOW))
         }
+        "tui.command.started" => Some(styled(format!("  ▶ {summary}"), CYAN)),
+        "tui.command.completed" => Some(styled(format!("  ✓ {summary}"), GREEN)),
+        "tui.command.failed" => Some(styled(format!("  ✗ {summary}"), RED)),
         "react.duplicate_action" => None,
         _ => None,
     }
@@ -342,9 +347,9 @@ fn handle_tui_command(
     if let Some(rest) = input.strip_prefix("/enqueue") {
         return Ok(Some(tui_enqueue_lines(memory, events, rest, "core", 4, 55)?));
     }
-    if input == "/step" || input == "/step-live" {
+    if is_tui_step_command(input) {
         return Ok(Some(vec![
-            styled("Queued work is advanced by the supervised runner:", DIM),
+            styled("Queued work is advanced by the supervised runner.", DIM),
             styled(format!("   {TUI_QUEUE_STEP_COMMAND}"), CYAN),
         ]));
     }
@@ -363,7 +368,7 @@ fn tui_help_lines() -> Vec<Line<'static>> {
         styled("   /queue [n]            show queued autonomous work", CYAN),
         styled("   /enqueue <goal>       queue a bounded core Prof X goal", CYAN),
         styled("   /enqueue-commit <goal> queue verified commit-capable work", CYAN),
-        styled("   /step-live            show the live queue step command", CYAN),
+        styled("   /step-live            run one supervised queue step", CYAN),
     ]
 }
 
@@ -453,6 +458,106 @@ fn sanitize_tui_goal(goal: &str) -> String {
         .chars()
         .take(300)
         .collect()
+}
+
+fn is_tui_step_command(input: &str) -> bool {
+    matches!(input.trim(), "/step" | "/step-live")
+}
+
+fn run_tui_queue_step_command(events: Arc<EventStore>) {
+    let command = TUI_QUEUE_STEP_COMMAND;
+    let crate_dir = find_professor_x_crate_dir().unwrap_or_else(|| {
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    });
+    let _ = events.append(
+        None,
+        None,
+        "tui.command.started",
+        "running one supervised autonomous queue step from the TUI",
+        serde_json::json!({
+            "command": command,
+            "cwd": crate_dir.display().to_string(),
+        }),
+    );
+
+    let output = Command::new("cargo")
+        .args(["run", "--", "--prof-x-step-live", "1"])
+        .current_dir(&crate_dir)
+        .output();
+
+    match output {
+        Ok(output) if output.status.success() => {
+            let _ = events.append(
+                None,
+                None,
+                "tui.command.completed",
+                "supervised queue step completed",
+                serde_json::json!({
+                    "command": command,
+                    "status": output.status.code(),
+                    "stdout_tail": tail_text(&String::from_utf8_lossy(&output.stdout), 1600),
+                    "stderr_tail": tail_text(&String::from_utf8_lossy(&output.stderr), 1600),
+                }),
+            );
+        }
+        Ok(output) => {
+            let _ = events.append(
+                None,
+                None,
+                "tui.command.failed",
+                "supervised queue step failed",
+                serde_json::json!({
+                    "command": command,
+                    "status": output.status.code(),
+                    "stdout_tail": tail_text(&String::from_utf8_lossy(&output.stdout), 1600),
+                    "stderr_tail": tail_text(&String::from_utf8_lossy(&output.stderr), 1600),
+                }),
+            );
+        }
+        Err(err) => {
+            let _ = events.append(
+                None,
+                None,
+                "tui.command.failed",
+                format!("could not start supervised queue step: {err}"),
+                serde_json::json!({
+                    "command": command,
+                    "cwd": crate_dir.display().to_string(),
+                    "error": err.to_string(),
+                }),
+            );
+        }
+    }
+}
+
+fn find_professor_x_crate_dir() -> Option<PathBuf> {
+    let mut dir = std::env::current_dir().ok()?;
+    loop {
+        if is_professor_x_crate(&dir) {
+            return Some(dir);
+        }
+        let nested = dir.join("professor-x");
+        if is_professor_x_crate(&nested) {
+            return Some(nested);
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
+}
+
+fn is_professor_x_crate(path: &Path) -> bool {
+    let manifest = path.join("Cargo.toml");
+    let Ok(contents) = std::fs::read_to_string(manifest) else {
+        return false;
+    };
+    contents.contains("name = \"professor-x\"")
+}
+
+fn tail_text(text: &str, max_chars: usize) -> String {
+    let mut chars: Vec<char> = text.chars().rev().take(max_chars).collect();
+    chars.reverse();
+    chars.into_iter().collect()
 }
 
 fn short(id: &str) -> String {
@@ -765,6 +870,31 @@ fn tui_loop(
                             KeyCode::Tab => app.show_vitals = !app.show_vitals,
                             KeyCode::Enter if !busy && !app.input.trim().is_empty() => {
                                 let typed = app.input.trim().to_string();
+                                if is_tui_step_command(&typed) {
+                                    app.input.clear();
+                                    app.scroll = 0;
+                                    app.push(Line::from(""));
+                                    app.push(Line::from(Span::styled(
+                                        format!("▌ {typed}"),
+                                        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                                    )));
+                                    app.push(styled(
+                                        "Running one supervised queue step inside this cockpit.",
+                                        CYAN,
+                                    ));
+                                    app.push(styled(
+                                        "Watch the transcript for queue, tool, and completion events.",
+                                        DIM,
+                                    ));
+                                    app.working.store(true, Ordering::Relaxed);
+                                    let working = Arc::clone(&app.working);
+                                    let step_events = Arc::clone(&events);
+                                    handle.spawn_blocking(move || {
+                                        run_tui_queue_step_command(step_events);
+                                        working.store(false, Ordering::Relaxed);
+                                    });
+                                    continue;
+                                }
                                 if let Some(lines) = handle_tui_command(&typed, &memory, &events)? {
                                     app.input.clear();
                                     app.scroll = 0;
@@ -931,5 +1061,19 @@ mod tests {
         assert!(!goal.contains('\n'));
         assert!(goal.starts_with("makeprogress"));
         assert!(goal.chars().count() <= 300);
+    }
+
+    #[test]
+    fn step_command_variants_are_recognized() {
+        assert!(is_tui_step_command("/step"));
+        assert!(is_tui_step_command(" /step-live "));
+        assert!(!is_tui_step_command("/step-live 2"));
+        assert!(!is_tui_step_command("/queue"));
+    }
+
+    #[test]
+    fn tail_text_keeps_suffix_without_splitting_unicode() {
+        assert_eq!(tail_text("abcdef", 3), "def");
+        assert_eq!(tail_text("αβγδε", 3), "γδε");
     }
 }
