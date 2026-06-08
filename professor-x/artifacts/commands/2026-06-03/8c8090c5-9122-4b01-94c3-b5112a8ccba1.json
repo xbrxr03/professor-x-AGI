@@ -1,0 +1,10 @@
+{
+  "command": "find . -name \"main.rs\" -not -path \"*/target/*\"",
+  "exit_code": 0,
+  "success": true,
+  "stdout": "./_refs/clawos/desktop/command-center/src-tauri/src/main.rs\n./professor-x/src/main.rs\n",
+  "stderr": "",
+  "stdout_bytes": 86,
+  "stderr_bytes": 0,
+  "recorded_at": "2026-06-03T22:59:10.272108312+00:00"
+}

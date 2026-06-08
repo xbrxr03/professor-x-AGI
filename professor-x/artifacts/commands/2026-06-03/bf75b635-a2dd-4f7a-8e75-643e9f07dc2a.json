@@ -1,0 +1,10 @@
+{
+  "command": "find /home/abrar/professor-x-AGI -name \"Cargo.toml\"",
+  "exit_code": 0,
+  "success": true,
+  "stdout": "/home/abrar/professor-x-AGI/_refs/clawos/desktop/command-center/src-tauri/Cargo.toml\n/home/abrar/professor-x-AGI/professor-x/Cargo.toml\n",
+  "stderr": "",
+  "stdout_bytes": 136,
+  "stderr_bytes": 0,
+  "recorded_at": "2026-06-03T21:35:39.751185859+00:00"
+}

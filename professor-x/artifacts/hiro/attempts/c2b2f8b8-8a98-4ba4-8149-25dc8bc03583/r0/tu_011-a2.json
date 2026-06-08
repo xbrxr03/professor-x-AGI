@@ -1,0 +1,13 @@
+{
+  "run_id": "c2b2f8b8-8a98-4ba4-8149-25dc8bc03583",
+  "round": 0,
+  "task_id": "tu_011",
+  "category": "tool_use",
+  "attempt": 2,
+  "passed": false,
+  "failure_reason": "policy denied: shell control fragment '&&' is not allowed",
+  "output_hash": "06de11a53a8da5af61e30909e61edfc90c5f3469704f9cb8fbc0cbd6a6f4d652",
+  "duration_ms": 41273,
+  "harness_commit": "b626fb56c06426e1bc365b33396e40ba715f50f2",
+  "recorded_at": "2026-06-03T19:31:15.403518165Z"
+}

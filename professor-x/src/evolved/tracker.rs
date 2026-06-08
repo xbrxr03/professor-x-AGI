@@ -47,7 +47,8 @@ impl OutcomeTracker {
     /// Identify recurring failure modes across recent outcomes.
     pub fn failure_patterns(&self, window: usize) -> Vec<String> {
         let recent: Vec<_> = self.outcomes.iter().rev().take(window).collect();
-        let failures: Vec<_> = recent.iter()
+        let failures: Vec<_> = recent
+            .iter()
             .filter(|o| !o.success)
             .filter_map(|o| o.failure_mode.as_deref())
             .collect();
@@ -56,16 +57,31 @@ impl OutcomeTracker {
             return Vec::new();
         }
 
-        // Count frequency of each failure mode
-        let mut counts: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
+        // Aggregate by the DHE attribution tag ("[DHE:layer=X,lever=Y]") when
+        // present. The full failure_mode strings are nearly all unique (each
+        // carries a one-off MARS reflection), so exact-string counting always
+        // returned nothing. The DHE tag recurs — grouping by it gives the
+        // Researcher the actual diagnosed weakness ("[DHE:layer=3,lever=3] x6")
+        // instead of a wall of one-off messages.
+        let mut counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
         for f in &failures {
-            *counts.entry(f).or_insert(0) += 1;
+            let key = extract_dhe_tag(f).unwrap_or_else(|| {
+                f.split(['.', '['])
+                    .next()
+                    .unwrap_or(f)
+                    .trim()
+                    .chars()
+                    .take(60)
+                    .collect()
+            });
+            *counts.entry(key).or_insert(0) += 1;
         }
 
-        let mut patterns: Vec<_> = counts.iter().collect();
-        patterns.sort_by(|a, b| b.1.cmp(a.1));
-        patterns.iter()
-            .filter(|(_, count)| **count >= 2)
+        let mut patterns: Vec<_> = counts.into_iter().collect();
+        patterns.sort_by(|a, b| b.1.cmp(&a.1));
+        patterns
+            .into_iter()
+            .take(6)
             .map(|(mode, count)| format!("{mode} (x{count})"))
             .collect()
     }
@@ -80,4 +96,12 @@ impl OutcomeTracker {
         let successes = recent.iter().filter(|o| o.success).count();
         successes as f32 / recent.len() as f32
     }
+}
+
+/// Extract the DHE attribution tag "[DHE:layer=X,lever=Y]" from a failure_mode
+/// string, if present. Used to aggregate diverse failures by diagnosed cause.
+fn extract_dhe_tag(s: &str) -> Option<String> {
+    let start = s.find("[DHE:")?;
+    let end = s[start..].find(']')? + start + 1;
+    Some(s[start..end].to_string())
 }

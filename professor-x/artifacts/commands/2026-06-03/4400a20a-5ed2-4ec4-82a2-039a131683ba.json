@@ -1,0 +1,10 @@
+{
+  "command": "wc -l src/main.rs",
+  "exit_code": 1,
+  "success": false,
+  "stdout": "",
+  "stderr": "wc: src/main.rs: No such file or directory\n",
+  "stdout_bytes": 0,
+  "stderr_bytes": 43,
+  "recorded_at": "2026-06-03T21:00:39.841172777+00:00"
+}

@@ -1,0 +1,13 @@
+{
+  "run_id": "c2b2f8b8-8a98-4ba4-8149-25dc8bc03583",
+  "round": 0,
+  "task_id": "tu_004",
+  "category": "tool_use",
+  "attempt": 1,
+  "passed": false,
+  "failure_reason": "policy denied: shell control fragment '>' is not allowed",
+  "output_hash": "3ba046899f7f5499a7a5740fbeec2d10a1c8cd3980cd3bd0c526994d43a093c6",
+  "duration_ms": 32054,
+  "harness_commit": "b626fb56c06426e1bc365b33396e40ba715f50f2",
+  "recorded_at": "2026-06-03T19:14:18.926897358Z"
+}

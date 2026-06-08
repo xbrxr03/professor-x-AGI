@@ -1,0 +1,10 @@
+{
+  "command": "find /home/abrar/professor-x-AGI/professor-x -name \"proposer.rs\" -o -name \"mod.rs\" -o -name \"README.md\"",
+  "exit_code": 0,
+  "success": true,
+  "stdout": "/home/abrar/professor-x-AGI/professor-x/src/memd/mod.rs\n/home/abrar/professor-x-AGI/professor-x/src/agentd/mod.rs\n/home/abrar/professor-x-AGI/professor-x/src/policyd/mod.rs\n/home/abrar/professor-x-AGI/professor-x/src/toolbridge/mod.rs\n/home/abrar/professor-x-AGI/professor-x/src/evolved/mod.rs\n/home/abrar/professor-x-AGI/professor-x/src/evolved/proposer.rs\n",
+  "stderr": "",
+  "stdout_bytes": 358,
+  "stderr_bytes": 0,
+  "recorded_at": "2026-06-03T22:24:37.450949039+00:00"
+}

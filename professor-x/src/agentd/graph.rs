@@ -118,6 +118,32 @@ impl TaskNode {
     }
 
     /// Format execution steps as ReAct trace for context injection.
+    /// Full thought/action/observation text for the most recent `n` steps.
+    /// Unlike the Mermaid canvas overview, this INCLUDES the observation output
+    /// so the agent can actually act on what its tools returned (prevents the
+    /// loop where it re-runs a tool because it can't see the prior result).
+    pub fn recent_steps_text(&self, n: usize) -> String {
+        let start = self.steps.len().saturating_sub(n);
+        self.steps[start..]
+            .iter()
+            .map(|s| {
+                format!(
+                    "Thought {}: {}\nAction {}: {}({})\nObservation {}: {}",
+                    s.index, s.thought,
+                    s.index, s.action.tool_name,
+                    serde_json::to_string(&s.action.params).unwrap_or_default(),
+                    s.index,
+                    if s.observation.success {
+                        s.observation.output.chars().take(800).collect::<String>()
+                    } else {
+                        format!("ERROR: {}", s.observation.error.as_deref().unwrap_or("unknown"))
+                    }
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     pub fn steps_text(&self) -> String {
         self.steps.iter().map(|s| {
             format!(

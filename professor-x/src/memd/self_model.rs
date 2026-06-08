@@ -127,10 +127,51 @@ impl SelfModelStore {
         rows.map(|r| r.map_err(Into::into)).collect()
     }
 
-    /// TODO: build the update prompt (prior_text + fingerprint history +
-    /// MCA + affect summary), call the Ollama generate API, parse the
-    /// response, embed it, and persist. Wired by the daily-cycle at the
-    /// 10-round boundary.
+    /// Persist an LLM-generated self-description update.
+    ///
+    /// The caller (e.g. `loop_runner`) is responsible for the async Ollama
+    /// call; this method just creates and appends the snapshot. Pattern:
+    ///
+    /// ```ignore
+    /// let prompt = SelfModelStore::build_update_prompt(&prior.text, round, &summary);
+    /// let resp   = ollama.generate(&prompt, …).await?;
+    /// let snap   = memory.self_model.update_with_text(round, resp.text())?;
+    /// ```
+    pub fn update_with_text(
+        &self,
+        round: u32,
+        text: impl Into<String>,
+    ) -> Result<SelfModelSnapshot> {
+        let mut snap = SelfModelSnapshot::new(round, text);
+        let id = self.append(&snap)?;
+        snap.id = Some(id);
+        Ok(snap)
+    }
+
+    /// Build the self-description update prompt.
+    ///
+    /// Pass the result to `OllamaClient::generate`, then call
+    /// `update_with_text` with the model's response.
+    ///
+    /// `behavior_summary` should be a brief string like:
+    /// "improved p_tool by 12pp in rounds 5-10; still weak on Planning tasks"
+    pub fn build_update_prompt(prior_text: &str, round: u32, behavior_summary: &str) -> String {
+        format!(
+            "You are Professor X, an autonomous AI research agent. \
+             This is your self-description from round {}:\n\n{}\n\n\
+             Since then (through round {}), here is a summary of your behaviour:\n\n{}\n\n\
+             Rewrite your self-description to reflect what you have learned and how \
+             you have changed. Keep it to 3-5 sentences. Preserve your core identity. \
+             Describe yourself directly — do not say \"I have evolved\" or refer to \
+             this update process. Write only the updated self-description:",
+            round.saturating_sub(10),
+            prior_text,
+            round,
+            behavior_summary,
+        )
+    }
+
+    /// Deprecated stub — use `update_with_text` + `build_update_prompt` instead.
     pub fn update_via_llm(&self, _round: u32) -> Result<Option<SelfModelSnapshot>> {
         Ok(None)
     }
@@ -198,5 +239,29 @@ mod tests {
         let at_10 = store.at_round(10).unwrap().unwrap();
         assert_eq!(at_10.text, "b");
         assert!(store.at_round(99).unwrap().is_none());
+    }
+
+    #[test]
+    fn update_with_text_persists_and_returns_id() {
+        let store = fresh_store();
+        let snap = store.update_with_text(10, "I am a better Professor X.").unwrap();
+        assert_eq!(snap.round, 10);
+        assert_eq!(snap.text, "I am a better Professor X.");
+        assert!(snap.id.is_some());
+        let latest = store.latest().unwrap().unwrap();
+        assert_eq!(latest.text, "I am a better Professor X.");
+    }
+
+    #[test]
+    fn build_update_prompt_references_round_and_summary() {
+        let prompt = SelfModelStore::build_update_prompt(
+            "I am Professor X.",
+            20,
+            "improved p_tool by 12pp",
+        );
+        assert!(prompt.contains("round 10"), "should reference prior round");
+        assert!(prompt.contains("round 20"), "should reference current round");
+        assert!(prompt.contains("improved p_tool by 12pp"));
+        assert!(prompt.contains("I am Professor X."));
     }
 }

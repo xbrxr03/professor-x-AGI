@@ -10,8 +10,8 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, warn};
 
-use crate::memd::semantic::SemanticEntry;
 use crate::memd::MemoryManager;
+use crate::memd::semantic::SemanticEntry;
 use crate::ollama::OllamaClient;
 use crate::toolbridge::ToolRegistry;
 
@@ -227,14 +227,27 @@ impl ToolExecutor {
             "fs.write" => {
                 let path = req_str(&action.params, "path")?;
                 let content = req_str(&action.params, "content")?;
+                let existed = std::path::Path::new(path).exists();
+                let old = if existed {
+                    std::fs::read_to_string(path).unwrap_or_default()
+                } else {
+                    String::new()
+                };
                 if let Some(p) = std::path::Path::new(path).parent() {
                     std::fs::create_dir_all(p)?;
                 }
                 std::fs::write(path, content)?;
-                Ok(ToolDispatch::output(format!(
-                    "wrote {} bytes to {path}",
-                    content.len()
-                )))
+                // Change visibility: report a diff so the user always sees the edit.
+                let summary = if !existed || old.is_empty() {
+                    format!(
+                        "created {path} ({} lines, {} bytes)",
+                        content.lines().count(),
+                        content.len()
+                    )
+                } else {
+                    format!("edited {path} — {}", diff_summary(&old, content))
+                };
+                Ok(ToolDispatch::output(summary))
             }
             "fs.replace" => {
                 let path = req_str(&action.params, "path")?;
@@ -263,14 +276,12 @@ impl ToolExecutor {
                 let updated = original.replacen(old, new, 1);
                 let diff_artifact = self.write_replace_artifact(path, &original, &updated)?;
                 if mode == "apply" {
-                    std::fs::write(&resolved_path, updated)?;
+                    std::fs::write(&resolved_path, &updated)?;
                 }
                 Ok(ToolDispatch::with_artifact(
                     format!(
-                        "replace {mode} succeeded for {path}; old_bytes={} new_bytes={}; artifact={}",
-                        old.len(),
-                        new.len(),
-                        diff_artifact.display()
+                        "replace {mode} {path} — {}",
+                        diff_summary(&original, &updated)
                     ),
                     diff_artifact,
                 ))
@@ -288,12 +299,27 @@ impl ToolExecutor {
             "shell.restricted" => {
                 let cmd = req_str(&action.params, "command")?;
                 debug!("shell.restricted: {cmd}");
-                let out = tokio::process::Command::new("sh")
+                // stdin = /dev/null so commands that read stdin (awk/sort/cat
+                // with no file arg) get immediate EOF instead of blocking
+                // forever — this hung a 14h baseline run on bare `awk '...'`.
+                // Hard 30s timeout so NO command can ever freeze the agent.
+                let child = tokio::process::Command::new("sh")
                     .arg("-c")
                     .arg(cmd)
                     .current_dir(&self.workspace_root)
-                    .output()
-                    .await?;
+                    .stdin(std::process::Stdio::null())
+                    .output();
+                let out = match tokio::time::timeout(std::time::Duration::from_secs(30), child)
+                    .await
+                {
+                    Ok(result) => result?,
+                    Err(_) => {
+                        anyhow::bail!(
+                            "shell command timed out after 30s (did it wait on stdin or block?): {}",
+                            truncate_text(cmd, 200)
+                        );
+                    }
+                };
                 let stdout = String::from_utf8_lossy(&out.stdout).to_string();
                 let stderr = String::from_utf8_lossy(&out.stderr).to_string();
                 let artifact_path = self.write_command_artifact(
@@ -373,6 +399,20 @@ impl ToolExecutor {
                 let n = action.params["num_results"].as_u64().unwrap_or(5) as usize;
                 Ok(ToolDispatch::output(web_search(query, n).await?))
             }
+            "repo.map" => {
+                let focus = action.params.get("focus").and_then(|v| v.as_str());
+                let max_files = action
+                    .params
+                    .get("max_files")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(25) as usize;
+                let map = crate::toolbridge::repo_map::build_repo_map(
+                    &self.workspace_root,
+                    focus,
+                    max_files,
+                );
+                Ok(ToolDispatch::output(map))
+            }
             "web.fetch" => {
                 let url = req_str(&action.params, "url")?;
                 let body = web_fetch(url).await?;
@@ -387,6 +427,106 @@ impl ToolExecutor {
                 };
                 Ok(ToolDispatch::output(out))
             }
+            "meta.observe" => {
+                // Recursive self-perception. The agent reads its OWN recent
+                // processing stream and is asked to form a higher-order
+                // representation of what it is doing — the strange loop made
+                // literal (Hofstadter; Higher-Order Theory; Global Workspace).
+                // The event stream is the system's own broadcast; this tool is
+                // the spotlight reading it back into the loop.
+                let mem = self
+                    .memory
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("meta.observe requires memory"))?;
+                let store = crate::memd::events::EventStore::new(Arc::clone(&mem.db));
+                let recent = store.tail(24).unwrap_or_default();
+                let trace: Vec<&crate::memd::events::AgentEvent> = recent
+                    .iter()
+                    .filter(|e| {
+                        matches!(
+                            e.event_type.as_str(),
+                            "llm.response"
+                                | "tool.started"
+                                | "tool.succeeded"
+                                | "tool.failed"
+                                | "react.duplicate_action"
+                                | "react.circuit_breaker"
+                                | "policy.denied"
+                        )
+                    })
+                    .collect();
+                let tail: Vec<&&crate::memd::events::AgentEvent> =
+                    trace.iter().rev().take(12).rev().collect();
+                if tail.is_empty() {
+                    return Ok(ToolDispatch::output(
+                        "No processing to observe yet — this is your first action.".to_string(),
+                    ));
+                }
+                // A light computed signal: which tool have you leaned on most?
+                let mut counts: std::collections::HashMap<String, u32> =
+                    std::collections::HashMap::new();
+                for e in &tail {
+                    if e.event_type == "tool.started" {
+                        let tool = e.summary.split('\'').nth(1).unwrap_or("?").to_string();
+                        *counts.entry(tool).or_insert(0) += 1;
+                    }
+                }
+                let mut top: Vec<_> = counts.into_iter().collect();
+                top.sort_by(|a, b| b.1.cmp(&a.1));
+                let pattern = top
+                    .first()
+                    .filter(|(_, n)| *n >= 3)
+                    .map(|(t, n)| format!("\nYou have called '{t}' {n} times recently — are you making progress or repeating yourself?"))
+                    .unwrap_or_default();
+
+                let lines: Vec<String> = tail
+                    .iter()
+                    .map(|e| format!("  {}: {}", e.event_type, truncate_text(&e.summary, 110)))
+                    .collect();
+                Ok(ToolDispatch::output(format!(
+                    "This is YOUR OWN recent processing. Step back and observe yourself: \
+                     what are you actually doing, is it working, are you looping or \
+                     stalling, and what should you do differently?\n{}{}",
+                    lines.join("\n"),
+                    pattern
+                )))
+            }
+            "vision.analyze" => {
+                // Multimodal perception — describe or reason about an image file.
+                // Routes to the primary model (llama4:scout supports vision natively).
+                // Usage: {"path": "/path/to/image.png", "prompt": "what do you see?"}
+                // Also accepts {"url": "https://..."} for web images (fetched first).
+                let prompt = action.params["prompt"]
+                    .as_str()
+                    .unwrap_or("Describe this image in detail.");
+                let ollama = self
+                    .ollama
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("vision.analyze requires ollama client"))?;
+
+                let result = if let Some(path) = action.params["path"].as_str() {
+                    // Local file
+                    let resp = ollama.vision_generate(prompt, &[path], None).await?;
+                    let (_, answer) = resp.split_thinking();
+                    answer
+                } else if let Some(url) = action.params["url"].as_str() {
+                    // Fetch remote image, write to temp file, then analyze
+                    let bytes = reqwest::get(url).await?.bytes().await?;
+                    let tmp = std::env::temp_dir()
+                        .join(format!("px-vision-{}.bin", uuid::Uuid::new_v4()));
+                    std::fs::write(&tmp, &bytes)?;
+                    let resp = ollama
+                        .vision_generate(prompt, &[tmp.to_str().unwrap_or("")], None)
+                        .await?;
+                    let _ = std::fs::remove_file(&tmp);
+                    let (_, answer) = resp.split_thinking();
+                    answer
+                } else {
+                    anyhow::bail!("vision.analyze requires 'path' or 'url' param");
+                };
+
+                Ok(ToolDispatch::output(result))
+            }
             "memory.read" => {
                 let mem = self
                     .memory
@@ -395,13 +535,29 @@ impl ToolExecutor {
                 let query = req_str(&action.params, "query")?;
                 let layer = action.params["layer"].as_str().unwrap_or("episodic");
                 let out = match layer {
-                    "episodic" => mem
-                        .episodic
-                        .search_fts(query, 5)?
-                        .iter()
-                        .map(|e| format!("[{}] {}", e.timestamp.format("%Y-%m-%d"), e.content))
-                        .collect::<Vec<_>>()
-                        .join("\n"),
+                    "episodic" => {
+                        // Prefer semantic search; fall back to FTS when embedding unavailable
+                        let entries = if let Some(ollama) = self.ollama.as_ref() {
+                            if let Ok(vec) = ollama.embed(query).await {
+                                let emb_store =
+                                    crate::embeddings::EmbeddingStore::new(Arc::clone(&mem.db));
+                                mem.episodic
+                                    .search_semantic(&emb_store, &vec, 5)
+                                    .unwrap_or_else(|_| {
+                                        mem.episodic.search_fts(query, 5).unwrap_or_default()
+                                    })
+                            } else {
+                                mem.episodic.search_fts(query, 5).unwrap_or_default()
+                            }
+                        } else {
+                            mem.episodic.search_fts(query, 5).unwrap_or_default()
+                        };
+                        entries
+                            .iter()
+                            .map(|e| format!("[{}] {}", e.timestamp.format("%Y-%m-%d"), e.content))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    }
                     "semantic" => {
                         let words: Vec<String> =
                             query.split_whitespace().map(String::from).collect();
@@ -419,10 +575,7 @@ impl ToolExecutor {
                         .map(|e| {
                             format!(
                                 "[{} q={:.2} uses={}] {}",
-                                e.name,
-                                e.verification_score,
-                                e.times_used,
-                                e.description
+                                e.name, e.verification_score, e.times_used, e.description
                             )
                         })
                         .collect::<Vec<_>>()
@@ -486,9 +639,73 @@ impl ToolExecutor {
                 let (_, answer) = resp.split_thinking();
                 Ok(ToolDispatch::with_tokens(answer, resp.tokens_used()))
             }
+            name if crate::toolbridge::mcp::is_mcp_tool(name) => {
+                // External MCP server tool. Routed to the spawned server over
+                // the stdio JSON-RPC transport; the manager enforces a timeout.
+                let Some(manager) = crate::toolbridge::mcp::global() else {
+                    anyhow::bail!("MCP tool '{name}' called but no MCP servers are connected");
+                };
+                let out = manager.call(name, &action.params).await?;
+                Ok(ToolDispatch::output(out))
+            }
             _ => {
-                warn!("unimplemented tool: {}", action.tool_name);
-                anyhow::bail!("tool '{}' not implemented", action.tool_name)
+                // Cerebellum bypass (Voyager arXiv:2305.16291):
+                // If this is a known procedural skill, serve it without a
+                // full LLM reasoning cycle. High-quality skills (score > 0.85,
+                // ≥ 3 uses) get direct shell execution; others get skill body
+                // returned as context for the next ReAct step.
+                let Some(mem) = self.memory.as_ref() else {
+                    warn!("unimplemented tool: {}", action.tool_name);
+                    anyhow::bail!("tool '{}' not implemented", action.tool_name);
+                };
+
+                let skill = mem.procedural.get_by_name(&action.tool_name)?;
+                match skill {
+                    None => {
+                        warn!("unimplemented tool: {}", action.tool_name);
+                        anyhow::bail!("tool '{}' not implemented", action.tool_name);
+                    }
+                    Some(entry) => {
+                        // High-quality skill: direct execution without extra LLM step
+                        if entry.verification_score > 0.85 && entry.times_used >= 3 {
+                            if let Some(cmd) = extract_skill_command(&entry.skill_body) {
+                                debug!(
+                                    "cerebellum: directly executing skill '{}' (score={:.2}, uses={}): {}",
+                                    entry.name,
+                                    entry.verification_score,
+                                    entry.times_used,
+                                    cmd.chars().take(80).collect::<String>()
+                                );
+                                let output = tokio::process::Command::new("sh")
+                                    .args(["-c", &cmd])
+                                    .current_dir(&self.workspace_root)
+                                    .output()
+                                    .await?;
+                                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                                let combined = if stderr.is_empty() {
+                                    stdout
+                                } else {
+                                    format!("{stdout}\nstderr: {stderr}")
+                                };
+                                return Ok(ToolDispatch::output(format!(
+                                    "cerebellum: skill '{}' executed directly\n{}",
+                                    entry.name,
+                                    combined.chars().take(4096).collect::<String>()
+                                )));
+                            }
+                        }
+                        // Lower-confidence skill: return body as LLM context
+                        Ok(ToolDispatch::output(format!(
+                            "Skill '{}' (score={:.2}, uses={}):\n{}\n\n{}",
+                            entry.name,
+                            entry.verification_score,
+                            entry.times_used,
+                            entry.description,
+                            entry.skill_body.chars().take(2048).collect::<String>()
+                        )))
+                    }
+                }
             }
         }
     }
@@ -612,38 +829,74 @@ fn clean_patch_header_path(raw: &str) -> Option<String> {
 }
 
 async fn web_search(query: &str, n: usize) -> Result<String> {
-    let url = format!("https://html.duckduckgo.com/html/?q={}", url_encode(query));
-    let client = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 (compatible; ProfessorX/0.1)")
-        .timeout(std::time::Duration::from_secs(15))
-        .build()?;
-    let body = client.get(&url).send().await?.text().await?;
-    let mut results = Vec::new();
-    for chunk in body.split("result__body") {
-        if results.len() >= n {
-            break;
+    // Try the lite endpoint first (simpler HTML, more scrape-friendly), then
+    // the html endpoint. Short 8s timeout so a stall doesn't block the agent.
+    // CRUCIAL: on total failure we return a usable MESSAGE (Ok), not an error —
+    // a hard error makes the agent retry-loop; a clear "search unavailable,
+    // proceed without it" observation makes it adapt and move on.
+    let endpoints = [
+        format!("https://lite.duckduckgo.com/lite/?q={}", url_encode(query)),
+        format!("https://html.duckduckgo.com/html/?q={}", url_encode(query)),
+    ];
+    for url in &endpoints {
+        match try_web_search(url, n).await {
+            Ok(Some(text)) => return Ok(text),
+            Ok(None) => continue, // reachable but empty → try fallback
+            Err(_) => break,      // network/timeout → no point retrying same network
         }
-        let text = strip_html(chunk);
-        let t = text.trim();
-        if t.len() > 30 {
-            results.push(t.chars().take(300).collect::<String>());
+    }
+    Ok(format!(
+        "web search is currently unavailable or returned no results for '{query}'. \
+         Do NOT repeat this search. Proceed using your existing knowledge, or take \
+         a different action toward the task."
+    ))
+}
+
+/// Single search attempt against one endpoint. Returns Ok(Some(results)) on
+/// hits, Ok(None) when reachable but empty, Err on network/timeout.
+async fn try_web_search(url: &str, n: usize) -> Result<Option<String>> {
+    let client = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (X11; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0")
+        .timeout(std::time::Duration::from_secs(8))
+        .build()?;
+    let body = client.get(url).send().await?.text().await?;
+    let mut results = Vec::new();
+    // Both DDG variants delimit results with one of these markers.
+    for marker in ["result__body", "result-snippet", "result-link"] {
+        if !body.contains(marker) {
+            continue;
+        }
+        for chunk in body.split(marker).skip(1) {
+            if results.len() >= n {
+                break;
+            }
+            let text = strip_html(chunk);
+            let t = text.trim();
+            if t.len() > 30 {
+                results.push(t.chars().take(300).collect::<String>());
+            }
+        }
+        if !results.is_empty() {
+            break;
         }
     }
     if results.is_empty() {
-        return Ok(format!("no results for '{query}'"));
+        return Ok(None);
     }
-    Ok(results
-        .iter()
-        .enumerate()
-        .map(|(i, r)| format!("{}. {r}", i + 1))
-        .collect::<Vec<_>>()
-        .join("\n\n"))
+    Ok(Some(
+        results
+            .iter()
+            .enumerate()
+            .map(|(i, r)| format!("{}. {r}", i + 1))
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+    ))
 }
 
 async fn web_fetch(url: &str) -> Result<String> {
     let client = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 (compatible; ProfessorX/0.1)")
-        .timeout(std::time::Duration::from_secs(30))
+        .user_agent("Mozilla/5.0 (X11; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0")
+        .timeout(std::time::Duration::from_secs(12))
         .build()?;
     let resp = client.get(url).send().await?;
     if !resp.status().is_success() {
@@ -697,6 +950,33 @@ fn req_str<'a>(p: &'a serde_json::Value, key: &str) -> Result<&'a str> {
         .ok_or_else(|| anyhow::anyhow!("missing param '{key}'"))
 }
 
+/// Extract the primary shell command from a skill body for cerebellum bypass.
+/// Looks for the first non-comment line inside a ```bash/```sh block,
+/// or the first line prefixed with `$ `.
+fn extract_skill_command(skill_body: &str) -> Option<String> {
+    let mut in_bash = false;
+    for line in skill_body.lines() {
+        let trimmed = line.trim();
+        if trimmed == "```bash" || trimmed == "```sh" || trimmed == "```shell" {
+            in_bash = true;
+            continue;
+        }
+        if trimmed == "```" && in_bash {
+            in_bash = false;
+            continue;
+        }
+        if in_bash && !trimmed.is_empty() && !trimmed.starts_with('#') {
+            return Some(trimmed.to_string());
+        }
+        if let Some(cmd) = trimmed.strip_prefix("$ ") {
+            if !cmd.is_empty() {
+                return Some(cmd.to_string());
+            }
+        }
+    }
+    None
+}
+
 /// Built-in tool prefixes the executor dispatches itself. Any name not in this
 /// allow-list might be a SKILL.md-loaded procedural entry; the executor
 /// consults `procedural.is_skill` for those. Centralising the list keeps the
@@ -709,6 +989,10 @@ fn is_known_builtin_tool(tool_name: &str) -> bool {
             | "fs.list"
             | "fs.write"
             | "shell.restricted"
+            | "scratchpad.write"
+            | "plan.write"
+            | "meta.observe"
+            | "vision.analyze"
             | "memory.read"
             | "memory.write"
             | "web.fetch"
@@ -734,6 +1018,37 @@ fn text_preview_diff(before: &str, after: &str) -> String {
     let before = truncate_text(before, 2000);
     let after = truncate_text(after, 2000);
     format!("- before:\n{before}\n+ after:\n{after}")
+}
+
+/// Compact change summary so every file edit is VISIBLE in the activity feed:
+/// "Δ +N -M lines" plus a few added lines. Multiset line diff (a moved line
+/// counts as both) — enough to see what an edit did at a glance, dependency-free.
+fn diff_summary(before: &str, after: &str) -> String {
+    use std::collections::HashMap;
+    let mut counts: HashMap<&str, i32> = HashMap::new();
+    for l in before.lines() {
+        *counts.entry(l).or_insert(0) += 1;
+    }
+    let mut added = 0usize;
+    let mut preview: Vec<String> = Vec::new();
+    for l in after.lines() {
+        let e = counts.entry(l).or_insert(0);
+        if *e > 0 {
+            *e -= 1;
+        } else {
+            added += 1;
+            if preview.len() < 6 && !l.trim().is_empty() {
+                preview.push(format!("  + {}", l.chars().take(80).collect::<String>()));
+            }
+        }
+    }
+    let removed: i32 = counts.values().filter(|v| **v > 0).sum();
+    let mut s = format!("Δ +{added} -{removed} lines");
+    if !preview.is_empty() {
+        s.push('\n');
+        s.push_str(&preview.join("\n"));
+    }
+    s
 }
 
 fn default_workspace_root() -> PathBuf {
@@ -762,7 +1077,11 @@ mod tests {
             .current_dir(&root)
             .output()
             .unwrap();
-        assert!(init.status.success(), "{}", String::from_utf8_lossy(&init.stderr));
+        assert!(
+            init.status.success(),
+            "{}",
+            String::from_utf8_lossy(&init.stderr)
+        );
         root
     }
 
@@ -896,7 +1215,7 @@ mod tests {
             .execute(&replace_action("check", "pub fn x() {}", "pub fn x() { }"))
             .await;
         assert!(check.success, "{:?}", check.error);
-        assert!(check.output.contains("replace check succeeded"));
+        assert!(check.output.contains("replace check src/lib.rs"));
         assert_eq!(
             std::fs::read_to_string(root.join("src/lib.rs")).unwrap(),
             "pub fn x() {}\n"
@@ -906,7 +1225,7 @@ mod tests {
             .execute(&replace_action("apply", "pub fn x() {}", "pub fn x() { }"))
             .await;
         assert!(apply.success, "{:?}", apply.error);
-        assert!(apply.output.contains("replace apply succeeded"));
+        assert!(apply.output.contains("replace apply src/lib.rs"));
         assert_eq!(apply.artifacts.len(), 1);
         assert_eq!(
             std::fs::read_to_string(root.join("src/lib.rs")).unwrap(),
@@ -918,11 +1237,13 @@ mod tests {
             .execute(&replace_action("apply", "same", "changed"))
             .await;
         assert!(!ambiguous.success);
-        assert!(ambiguous
-            .error
-            .as_deref()
-            .unwrap_or_default()
-            .contains("expected exactly one match"));
+        assert!(
+            ambiguous
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("expected exactly one match")
+        );
 
         let _ = std::fs::remove_dir_all(root);
     }

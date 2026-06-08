@@ -1,0 +1,10 @@
+{
+  "command": "sleep 2",
+  "exit_code": 0,
+  "success": true,
+  "stdout": "",
+  "stderr": "",
+  "stdout_bytes": 0,
+  "stderr_bytes": 0,
+  "recorded_at": "2026-06-03T21:30:10.904085742+00:00"
+}

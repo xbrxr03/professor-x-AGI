@@ -1,0 +1,13 @@
+{
+  "run_id": "c2b2f8b8-8a98-4ba4-8149-25dc8bc03583",
+  "round": 0,
+  "task_id": "tu_018",
+  "category": "tool_use",
+  "attempt": 1,
+  "passed": false,
+  "failure_reason": "**What went wrong:** I repeatedly searched only episodic memory and neglected to query semantic memory for \"HIRO benchmark,\" missing potential general knowledge entries.  \n\n**Next steps:** First, check episodic memory for task-specific entries, then explicitly query semantic memory for abstract knowledge. If absent, explain that episodic would require direct experience with HIRO tasks, while semantic would need explicit learning or data input about HIRO benchmarks.",
+  "output_hash": "5a54c5e69e969eba6a9153e547aeb9d2ddb000f91f79be1cb86594a82ecd767d",
+  "duration_ms": 56487,
+  "harness_commit": "b626fb56c06426e1bc365b33396e40ba715f50f2",
+  "recorded_at": "2026-06-03T19:46:01.204469103Z"
+}

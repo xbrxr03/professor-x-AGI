@@ -43,6 +43,7 @@ const BLOCKED_HOSTS: &[&str] = &[
 pub fn tool_risk_score(tool: &str) -> u8 {
     match tool {
         "memory.read" => 5,
+        "repo.map" => 8,
         "fs.list" => 8,
         "fs.read" => 10,
         "web.search" => 15,
@@ -57,6 +58,10 @@ pub fn tool_risk_score(tool: &str) -> u8 {
         "git.commit" => 50,
         "harness.modify" => 85,
         "shell.elevated" => 90,
+        // MCP tools from operator-configured servers: medium risk, auto-approved
+        // under the default 65 threshold but still audited. Refine per-tool later
+        // if a server exposes genuinely destructive operations.
+        t if t.starts_with("mcp.") => 55,
         _ => 50, // Unknown tools treated as medium-risk
     }
 }
@@ -85,8 +90,11 @@ impl PolicyEngine {
     ) -> GateResult {
         let risk = tool_risk_score(tool);
 
-        // 1. Tool must be in granted set
-        if !scope.granted_tools.iter().any(|t| t == tool) {
+        // 1. Tool must be in granted set. MCP tools (`mcp.*`) are exempt from the
+        // static allowlist because they are discovered dynamically from servers
+        // the operator explicitly configured in .mcp.json — but they still pass
+        // through the risk/approval gating below like any other tool.
+        if !tool.starts_with("mcp.") && !scope.granted_tools.iter().any(|t| t == tool) {
             return GateResult {
                 decision: Decision::Deny,
                 reason: format!("tool '{tool}' not in granted_tools"),
@@ -506,6 +514,29 @@ fn allowed_shell_program(program: &str) -> bool {
             | "lspci"
             | "nvidia-smi"
             | "xargs"
+            // Read-only text processing — needed for legitimate count / sort /
+            // extract tasks. All non-destructive; destructive programs are
+            // covered by denied_shell_program and the control-fragment block.
+            | "sort"
+            | "uniq"
+            | "head"
+            | "tail"
+            | "cut"
+            | "tr"
+            | "nl"
+            | "tac"
+            | "comm"
+            | "column"
+            | "awk"
+            | "seq"
+            | "basename"
+            | "dirname"
+            | "realpath"
+            | "stat"
+            | "file"
+            | "tree"
+            | "md5sum"
+            | "sha256sum"
     )
 }
 

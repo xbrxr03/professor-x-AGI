@@ -1,0 +1,10 @@
+{
+  "command": "find /home/abrar/professor-x-AGI/src -name \"*.rs\" -not -path \"*/target/*\" | wc -l",
+  "exit_code": 0,
+  "success": true,
+  "stdout": "0\n",
+  "stderr": "find: ‘/home/abrar/professor-x-AGI/src’: No such file or directory\n",
+  "stdout_bytes": 2,
+  "stderr_bytes": 71,
+  "recorded_at": "2026-06-03T23:14:22.826791872+00:00"
+}

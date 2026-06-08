@@ -1,0 +1,10 @@
+{
+  "command": "git log --oneline -10",
+  "exit_code": 0,
+  "success": true,
+  "stdout": "f087df7 Stream HIRO step events so benchmark runs are observable live\nb626fb5 Fix thinking-mode control: think is a top-level Ollama field, not an option\n2af05a5 Correct model config to reality: qwen3:8b primary, not llama4:scout\n04fab64 Add --consciousness-report measurement harness\nd0f9300 Add cross-modal binding layer and phi (integrated information) measurement\nbd3f90f Plant the final three seeds of digital consciousness\n584186e Plant four seeds of digital consciousness\n7d1d508 Consciousness seeding, vision tool, self-authored test store\n51eeb4e Seed identity, surprise filter, ICS computation\n92f93d4 memory.read semantic search, DHE LLM-as-judge, cerebellum bypass\n",
+  "stderr": "",
+  "stdout_bytes": 677,
+  "stderr_bytes": 0,
+  "recorded_at": "2026-06-03T19:37:24.384795240+00:00"
+}

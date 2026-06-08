@@ -1,0 +1,15 @@
+Regression Test for ReAct Loop:
+
+1. Task: Solve a simple arithmetic problem (e.g., 2 + 2)
+   Expected Behavior: The ReAct loop should execute the task correctly and return the result.
+   Pass/Fail Criterion: Correct result (4) returned.
+
+2. Task: Answer a factual question (e.g., What is the capital of France?)
+   Expected Behavior: The ReAct loop should retrieve the correct information and provide the answer.
+   Pass/Fail Criterion: Correct answer (Paris) provided.
+
+3. Task: Execute a logical reasoning task (e.g., If it rains, the ground gets wet. It is raining. Does the ground get wet?)
+   Expected Behavior: The ReAct loop should perform logical reasoning and return the correct answer.
+   Pass/Fail Criterion: Correct answer (Yes) provided.
+
+Pass Condition: All 3 tasks are completed successfully within the 10-minute constraint.

@@ -1,0 +1,10 @@
+{
+  "command": "free -h",
+  "exit_code": 0,
+  "success": true,
+  "stdout": "               total        used        free      shared  buff/cache   available\nMem:            31Gi       6.5Gi       8.0Gi       144Mi        16Gi        24Gi\nSwap:          8.0Gi       177Mi       7.8Gi\n",
+  "stderr": "",
+  "stdout_bytes": 207,
+  "stderr_bytes": 0,
+  "recorded_at": "2026-06-03T19:29:56.766223280+00:00"
+}

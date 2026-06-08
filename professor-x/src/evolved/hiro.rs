@@ -27,6 +27,7 @@ use uuid::Uuid;
 use crate::agentd::graph::{TaskNode, TaskType};
 use crate::agentd::react::ReactLoop;
 use crate::evolved::bf::BfTracker;
+use crate::evolved::flush_fed_to_memory;
 use crate::evolved::lcap::LcapPolicy;
 use crate::memd::events::EventStore;
 use crate::memd::metacognitive::MetacognitiveStore;
@@ -413,6 +414,18 @@ impl HiroRunner {
             }
         }
 
+        // IIT: compute integrated information (phi) from this round's module
+        // co-activations. The trajectory tests whether the system grows more
+        // unified as the harness evolves.
+        match self.memory.phi.compute_and_record_round(round) {
+            Ok(Some(rec)) => info!(
+                "hiro: round {} phi={:.3} (n={}, mean_active_modules={:.2})",
+                round, rec.phi, rec.n_decisions, rec.mean_active_modules
+            ),
+            Ok(None) => {}
+            Err(e) => warn!("hiro: failed to compute phi for round {}: {e}", round),
+        }
+
         // H13 verification hook: any metacognitive entries logged at
         // (round - 1) become eligible for credit now that we know the
         // per-category fingerprint at `round`. The lever-specific verifier
@@ -587,13 +600,27 @@ impl HiroRunner {
         if let Some(budget) = self.memory_budget_override {
             react = react.with_memory_budget_override(budget);
         }
+        // Stream every thought / tool call / observation to the event store so
+        // the run is watchable live in the observer (--observe / --observe-work).
+        if let Some(events) = &self.events {
+            react = react.with_events(Arc::clone(events));
+        }
 
         let mut task = TaskNode::new(hiro_task.description.clone(), TaskType::Research, 50);
         task.max_attempts = 3; // pass@3
         let start = Instant::now();
         let outcome = react.run(&mut task).await?;
         let duration_ms = start.elapsed().as_millis() as u64;
+
+        // H15 — Free Energy Delta: flush (predicted, actual) pairs to DB
+        flush_fed_to_memory(&react, &self.memory, round, &self.run_id);
         let evaluation = evaluate_task(hiro_task, &task, outcome.success);
+        // Self-distillation corpus: collect ONLY judge-verified-correct
+        // trajectories. The HIRO evaluator is the verdict — agent-finish alone
+        // (outcome.success) is not proof the answer was right.
+        if evaluation.passed {
+            crate::agentd::react::ReactLoop::collect_trajectory(&task);
+        }
         let attempts = summarize_attempts(
             hiro_task,
             &task,

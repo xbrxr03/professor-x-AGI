@@ -1,6 +1,11 @@
 mod agentd;
 mod artifacts;
+mod embeddings;
 mod evolved;
+mod local_embed;
+mod serve;
+mod tui;
+mod util;
 mod memd;
 mod observer;
 mod ollama;
@@ -31,6 +36,7 @@ use evolved::verify_diff_in_sandbox;
 use evolved::verify_node_in_sandbox;
 use evolved::{EvolvedLoop, HiroRunner};
 use memd::MemoryManager;
+use memd::pinned::PinnedEntry;
 use memd::autonomy_queue::{AutonomyQueueItem, AutonomyQueueStore};
 use memd::coding_sessions::{CodingSessionRecord, CodingSessionStore};
 use memd::coding_smoke::{CodingSmokeRecord, CodingSmokeStore};
@@ -84,6 +90,8 @@ struct CliArgs {
     run_log_limit: Option<usize>,
     /// Print one compact Prof X operator brief and exit.
     brief: bool,
+    /// Print the consciousness measurement report (phi, interoception, self-prediction, ICS, ...) and exit.
+    consciousness_report: bool,
     /// Print a detailed autonomous/work-loop run review by run id prefix, report path, or 'latest'.
     run_review: Option<String>,
     /// Replay a work/operator run timeline by run id prefix, report path, or 'latest'.
@@ -186,6 +194,24 @@ struct CliArgs {
     operator_commit_smoke: bool,
     /// Run one seeded autonomous evolution cycle and exit.
     evolution_cycle: bool,
+    /// Run one evolution cycle learning from REAL recent task outcomes.
+    evolve_live: bool,
+    /// Continuous evolution mining: evolve → measure → keep-if-better → rollback,
+    /// repeated. Some(0) = unbounded; Some(n) = n blocks.
+    evolve_forever: Option<u32>,
+    /// Run up to N of the agent's own self-authored tests and score them.
+    run_self_tests: Option<usize>,
+    /// Author N diverse self-curriculum tasks (across HIRO categories), grounded
+    /// in the real tool set, and store them for --run-self-tests to execute.
+    /// Breaks the distillation-corpus ceiling of the fixed 60-task benchmark.
+    generate_curriculum: Option<usize>,
+    /// Override the local generation model (any Ollama model). Default: the
+    /// largest model you have installed (VRAM-aware by proxy), else qwen3:8b.
+    model: Option<String>,
+    /// Launch the interactive full-screen TUI cockpit.
+    tui: bool,
+    /// Launch the local web UI server (http://127.0.0.1:8787).
+    serve: bool,
     /// Phase B truth gate one-shot: scan brain/, artifacts/, ops/daily/ against
     /// the artifact schemas and report. Exit 1 on any failure.
     validate_artifacts: bool,
@@ -243,6 +269,7 @@ fn parse_args() -> CliArgs {
     let args: Vec<String> = std::env::args().collect();
     let mut cli = CliArgs {
         operator_help: false,
+        consciousness_report: false,
         task: None,
         chat: false,
         run_now: false,
@@ -310,6 +337,13 @@ fn parse_args() -> CliArgs {
         autonomy_step_live_count: None,
         operator_commit_smoke: false,
         evolution_cycle: false,
+        evolve_live: false,
+        evolve_forever: None,
+        run_self_tests: None,
+        generate_curriculum: None,
+        model: None,
+        tui: false,
+        serve: false,
         validate_artifacts: false,
     };
     let mut i = 1;
@@ -329,6 +363,18 @@ fn parse_args() -> CliArgs {
             }
             "--run-now" => {
                 cli.run_now = true;
+                i += 1;
+            }
+            "--model" if i + 1 < args.len() => {
+                cli.model = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--tui" | "--cockpit-live" => {
+                cli.tui = true;
+                i += 1;
+            }
+            "--serve" | "--web" => {
+                cli.serve = true;
                 i += 1;
             }
             "--hiro" if i + 1 < args.len() => {
@@ -402,6 +448,10 @@ fn parse_args() -> CliArgs {
                     .and_then(|next| next.parse::<usize>().ok());
                 cli.run_log_limit = Some(limit.unwrap_or(10));
                 i += if limit.is_some() { 2 } else { 1 };
+            }
+            "--consciousness-report" | "--phi" | "--prof-x-mind" => {
+                cli.consciousness_report = true;
+                i += 1;
             }
             "--brief" | "--prof-x-brief" | "--now-brief" => {
                 cli.brief = true;
@@ -738,6 +788,37 @@ fn parse_args() -> CliArgs {
                 cli.operator_commit_smoke = true;
                 i += 1;
             }
+            "--evolve" | "--evolve-live" => {
+                cli.evolve_live = true;
+                i += 1;
+            }
+            "--evolve-forever" | "--mine" => {
+                let iters = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .and_then(|n| n.parse::<u32>().ok());
+                let has_value = iters.is_some();
+                cli.evolve_forever = Some(iters.unwrap_or(0)); // 0 = unbounded
+                i += if has_value { 2 } else { 1 };
+            }
+            "--run-self-tests" | "--self-tests" => {
+                let n = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .and_then(|v| v.parse::<usize>().ok());
+                let has_value = n.is_some();
+                cli.run_self_tests = Some(n.unwrap_or(10));
+                i += if has_value { 2 } else { 1 };
+            }
+            "--generate-curriculum" | "--curriculum" => {
+                let n = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .and_then(|v| v.parse::<usize>().ok());
+                let has_value = n.is_some();
+                cli.generate_curriculum = Some(n.unwrap_or(20));
+                i += if has_value { 2 } else { 1 };
+            }
             "--evolution-cycle" => {
                 cli.evolution_cycle = true;
                 i += 1;
@@ -777,6 +858,7 @@ async fn main() -> Result<()> {
         || cli.work_loops_limit.is_some()
         || cli.run_log_limit.is_some()
         || cli.brief
+        || cli.consciousness_report
         || cli.run_review.is_some()
         || cli.task_review.is_some()
         || cli.run_replay.is_some()
@@ -907,6 +989,10 @@ async fn main() -> Result<()> {
         return print_prof_x_brief(Arc::clone(&memory), Arc::clone(&events));
     }
 
+    if cli.consciousness_report {
+        return print_consciousness_report(Arc::clone(&memory));
+    }
+
     if let Some(run_ref) = cli.run_review {
         return print_run_review(Arc::clone(&memory), &run_ref);
     }
@@ -966,6 +1052,24 @@ async fn main() -> Result<()> {
                 "skills": skills.iter().map(|(skill, _)| &skill.name).collect::<Vec<_>>(),
             }),
         )?;
+    }
+
+    // Model Context Protocol: connect any configured external servers and
+    // register their tools alongside the built-ins. Non-fatal if absent.
+    {
+        let repo_root = PermissionScope::default_autonomous().workspace_root;
+        let (mcp_servers, mcp_tools) =
+            toolbridge::mcp::init_global_mcp(&repo_root, &registry).await;
+        if mcp_servers > 0 {
+            info!("mcp: {mcp_servers} server(s), {mcp_tools} tool(s) registered");
+            let _ = events.append(
+                None,
+                None,
+                "mcp.connected",
+                format!("{mcp_servers} MCP server(s), {mcp_tools} tool(s)"),
+                serde_json::json!({"servers": mcp_servers, "tools": mcp_tools}),
+            );
+        }
     }
 
     if cli.dry_run_daily {
@@ -1268,12 +1372,104 @@ async fn main() -> Result<()> {
         info!("evolved: cognition base has {} items", cognition.count()?);
     }
 
+    // ── identity: seed pinned memory from professor_x.md (immutable) ────
+    {
+        let persona_path = default_repo_root().join("professor-x/personas/professor_x.md");
+        match std::fs::read_to_string(&persona_path) {
+            Ok(content) if !content.trim().is_empty() => {
+                let entry = PinnedEntry {
+                    id: "professor-x-identity".to_string(),
+                    content: content.clone(),
+                    immutable: true,
+                };
+                if let Err(e) = memory.pinned.upsert(&entry) {
+                    warn!("startup: failed to seed pinned identity: {e}");
+                } else {
+                    info!("startup: pinned identity seeded from {}", persona_path.display());
+                }
+                // ── self-model: seed round-0 Strange Loop snapshot ──────────
+                if let Err(e) = memory.self_model.seed_if_empty(content) {
+                    warn!("startup: failed to seed self-model round-0: {e}");
+                } else {
+                    info!("startup: self-model round-0 snapshot ready");
+                }
+            }
+            Ok(_) => warn!("startup: professor_x.md is empty — identity not seeded"),
+            Err(e) => warn!(
+                "startup: could not read {} — identity not seeded: {e}",
+                persona_path.display()
+            ),
+        }
+    }
+
+    // ── model resolution (local, VRAM-aware) ─────────────────────────────
+    // Professor X is one harness across the whole local-model spectrum. Pick the
+    // model: explicit --model / PROFESSOR_X_MODEL wins; else the LARGEST model the
+    // user has installed (they only pull what their VRAM runs, so "biggest
+    // installed" = "best this machine can do"); else the 8B default.
+    let ollama = {
+        let probe = ollama::OllamaClient::new("http://localhost:11434");
+        let chosen = match cli.model.clone().or_else(|| std::env::var("PROFESSOR_X_MODEL").ok()) {
+            Some(m) => m,
+            None => probe
+                .best_local_model()
+                .await
+                .unwrap_or_else(|| ollama::DEFAULT_MODEL.to_string()),
+        };
+        info!("model: {chosen}  (override: --model <name> or PROFESSOR_X_MODEL)");
+        Arc::new(probe.with_model(chosen))
+    };
     // ── ollama health check ───────────────────────────────────────────────
-    let ollama = Arc::new(ollama::OllamaClient::new("http://localhost:11434"));
     match ollama.health_check().await {
-        Ok(true) => info!("ollama: reachable, model qwen3:8b-q4_k_m ready"),
-        Ok(false) => warn!("ollama: reachable but model may not be loaded"),
+        Ok(true) => info!("ollama: reachable, model ready"),
+        Ok(false) => warn!("ollama: reachable but model may not be loaded — check `ollama list`"),
         Err(e) => warn!("ollama: not reachable ({e}) — tasks will fail until Ollama starts"),
+    }
+
+    if cli.evolve_live {
+        return run_live_evolution_cycle(
+            Arc::clone(&ollama),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+        )
+        .await;
+    }
+
+    if let Some(iters) = cli.evolve_forever {
+        return run_evolve_forever(
+            Arc::clone(&ollama),
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            cancel.clone(),
+            iters,
+            15, // tasks per measurement block — fast iteration; raise for precision
+        )
+        .await;
+    }
+
+    if let Some(n) = cli.generate_curriculum {
+        return generate_curriculum(
+            Arc::clone(&ollama),
+            Arc::clone(&registry),
+            Arc::clone(&memory),
+            n,
+        )
+        .await;
+    }
+
+    if let Some(limit) = cli.run_self_tests {
+        return run_self_authored_tests(
+            Arc::clone(&ollama),
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            cancel.clone(),
+            limit,
+        )
+        .await;
     }
 
     if cli.evolution_cycle {
@@ -1300,7 +1496,34 @@ async fn main() -> Result<()> {
         .await;
     }
 
+    if cli.serve {
+        ensure_folder_trusted();
+        return serve::run_serve(
+            Arc::clone(&ollama),
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            cancel.clone(),
+        )
+        .await;
+    }
+
+    if cli.tui {
+        ensure_folder_trusted();
+        return tui::run_tui(
+            Arc::clone(&ollama),
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            cancel.clone(),
+        )
+        .await;
+    }
+
     if cli.chat {
+        ensure_folder_trusted();
         return run_interactive_tasks(
             Arc::clone(&ollama),
             Arc::clone(&registry),
@@ -1359,6 +1582,19 @@ async fn main() -> Result<()> {
         .await;
     }
 
+    // Default: on an interactive terminal with no arguments, open the assistant
+    // session — like `claude` / `codex`. Headless or with-args → daemon.
+    {
+        use std::io::IsTerminal;
+        if std::env::args().len() == 1 && std::io::stdin().is_terminal() {
+            ensure_folder_trusted();
+            return run_interactive_tasks(
+                ollama, registry, policy, memory, events, transcripts, cancel,
+            )
+            .await;
+        }
+    }
+
     run_daemon(
         ollama,
         registry,
@@ -1371,6 +1607,50 @@ async fn main() -> Result<()> {
         cli.run_now,
     )
     .await
+}
+
+/// Workspace-trust gate (like Claude Code / VS Code "Do you trust this folder?").
+/// Professor X can read, write, and run shell commands in the working directory,
+/// so on first use in a new folder it asks for consent. Trusted folders are
+/// remembered in ~/.professor-x/trusted_dirs.txt. Non-interactive sessions skip
+/// the prompt (a daemon/service can't answer).
+fn ensure_folder_trusted() {
+    use std::io::{IsTerminal, Write};
+    let cwd = match std::env::current_dir() {
+        Ok(c) => c.to_string_lossy().to_string(),
+        Err(_) => return,
+    };
+    let dir = std::env::var("PROFESSOR_X_DATA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into())).join(".professor-x")
+        });
+    let trust_file = dir.join("trusted_dirs.txt");
+    let trusted = std::fs::read_to_string(&trust_file).unwrap_or_default();
+    if trusted.lines().any(|l| l.trim() == cwd) {
+        return;
+    }
+    if !std::io::stdin().is_terminal() {
+        return; // can't prompt; assume the operator launched it deliberately
+    }
+    println!("\n  \x1b[1mDo you trust the files in this folder?\x1b[0m");
+    println!("  {cwd}");
+    println!("  Professor X can read, write, and run shell commands here.\n");
+    print!("  Trust this folder? [y/N] ");
+    let _ = std::io::stdout().flush();
+    let mut line = String::new();
+    let _ = std::io::stdin().read_line(&mut line);
+    let ans = line.trim().to_lowercase();
+    if ans == "y" || ans == "yes" {
+        let _ = std::fs::create_dir_all(&dir);
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&trust_file) {
+            let _ = writeln!(f, "{cwd}");
+        }
+        println!("  ✓ trusted.\n");
+    } else {
+        println!("  Not trusted — exiting. (Run from a folder you trust.)");
+        std::process::exit(0);
+    }
 }
 
 // ── Evolution smoke mode ─────────────────────────────────────────────────────
@@ -6083,6 +6363,594 @@ async fn run_one_evolution_cycle(
     Ok(())
 }
 
+/// Load real recent task outcomes from `task_runs` so the evolution cycle
+/// learns from what actually happened (e.g. the HIRO round just run), not from
+/// seeded calibration data. Only finished runs are included.
+fn outcomes_from_recent_runs(memory: &Arc<MemoryManager>, limit: usize) -> Vec<TaskOutcome> {
+    let store = TaskRunStore::new(Arc::clone(&memory.db));
+    let runs = store.recent(limit).unwrap_or_default();
+    runs.into_iter()
+        .filter(|r| matches!(r.status.as_str(), "Complete" | "Failed"))
+        .map(|r| {
+            let success = r.status == "Complete";
+            TaskOutcome {
+                task_id: uuid::Uuid::parse_str(&r.task_id).unwrap_or_else(|_| uuid::Uuid::new_v4()),
+                description: r.description,
+                success,
+                score: r.outcome_score.unwrap_or(if success { 1.0 } else { 0.0 }),
+                failure_mode: r.failure_mode,
+                steps_taken: r.step_count as u32,
+                timestamp: r.completed_at.unwrap_or(r.updated_at),
+            }
+        })
+        .collect()
+}
+
+/// Load REAL HIRO outcomes (correctness, not did-finish) from the latest round's
+/// `hiro_attempts`. A task passes if ANY of its attempts passed (pass@3); the
+/// failure_mode of a failed attempt is carried through so DHE-tagged patterns
+/// reach the Researcher. This is the correct learning signal — task_runs only
+/// records whether the agent called finish, not whether it was right.
+fn outcomes_from_hiro_attempts(memory: &Arc<MemoryManager>) -> Vec<TaskOutcome> {
+    use std::collections::HashMap;
+    let db = memory.db.lock().unwrap();
+    let latest: Option<i64> = db
+        .query_row("SELECT MAX(round) FROM hiro_attempts", [], |r| r.get(0))
+        .ok()
+        .flatten();
+    let Some(round) = latest else { return Vec::new() };
+
+    let mut stmt = match db.prepare(
+        "SELECT task_id, category, passed, failure_reason, duration_ms
+         FROM hiro_attempts WHERE round = ?1",
+    ) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let rows = stmt.query_map([round], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, i64>(2)? != 0,
+            r.get::<_, Option<String>>(3)?,
+            r.get::<_, i64>(4)?,
+        ))
+    });
+    let Ok(rows) = rows else { return Vec::new() };
+
+    // Aggregate attempts per task: passed if any attempt passed.
+    let mut agg: HashMap<String, (String, bool, Option<String>, i64)> = HashMap::new();
+    for row in rows.flatten() {
+        let (task_id, category, passed, failure_reason, dur) = row;
+        let e = agg
+            .entry(task_id)
+            .or_insert((category.clone(), false, None, 0));
+        e.1 |= passed;
+        if !passed && e.2.is_none() {
+            e.2 = failure_reason;
+        }
+        e.3 += dur;
+    }
+
+    agg.into_iter()
+        .map(|(task_id, (category, passed, failure_reason, dur))| TaskOutcome {
+            task_id: uuid::Uuid::new_v4(),
+            description: format!("HIRO {category} task {task_id}"),
+            success: passed,
+            score: if passed { 1.0 } else { 0.0 },
+            failure_mode: if passed { None } else { failure_reason },
+            steps_taken: 0,
+            timestamp: chrono::Utc::now() - chrono::Duration::milliseconds(dur),
+        })
+        .collect()
+}
+
+/// Run one evolution cycle that learns from REAL recent outcomes. Prefers HIRO
+/// correctness; falls back to task_runs, then seeded calibration.
+async fn run_live_evolution_cycle(
+    ollama: Arc<ollama::OllamaClient>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+) -> Result<()> {
+    let mut tracker = OutcomeTracker::new();
+    let hiro = outcomes_from_hiro_attempts(&memory);
+    let (outcomes, source) = if !hiro.is_empty() {
+        (hiro, "real HIRO outcomes (correctness)")
+    } else {
+        let runs = outcomes_from_recent_runs(&memory, 40);
+        if runs.is_empty() {
+            (seeded_evolution_outcomes(), "seeded (no runs yet)")
+        } else {
+            (runs, "task_runs (did-finish)")
+        }
+    };
+    for outcome in outcomes {
+        tracker.record(outcome);
+    }
+
+    println!("Evolution cycle (live) — learning from {source}");
+    println!(
+        "  outcomes={}  success_rate(20)={:.0}%  failure_patterns={:?}",
+        tracker.len(),
+        tracker.success_rate(20) * 100.0,
+        tracker.failure_patterns(20),
+    );
+    events.append(
+        None,
+        None,
+        "evolution.live_cycle.started",
+        format!("starting live evolution cycle from {source}"),
+        serde_json::json!({
+            "outcomes": tracker.len(),
+            "success_rate_20": tracker.success_rate(20),
+            "failure_patterns": tracker.failure_patterns(20),
+        }),
+    )?;
+
+    let evolved = EvolvedLoop::new(ollama, memory).with_events(Arc::clone(&events));
+    let applied = evolved.run_cycle(&tracker).await?;
+    println!(
+        "Result: {}",
+        if applied { "APPLIED a harness change" } else { "no change this cycle" }
+    );
+    println!("  watch: ./prof-x-stream.py     artifacts: find artifacts/evolution -type f | sort");
+    Ok(())
+}
+
+/// Continuous evolution mining (the "inference-mining" loop). Each block:
+///   1. evolve from real outcomes (may commit a harness change)
+///   2. if a change committed, MEASURE it on a fixed task subset
+///   3. KEEP if pass@3 beats the best so far, else ROLL BACK (git reset)
+/// Runs `max_iters` blocks (0 = until interrupted). The harness only keeps
+/// changes that demonstrably help — selection pressure for self-improvement.
+#[allow(clippy::too_many_arguments)]
+async fn run_evolve_forever(
+    ollama: Arc<ollama::OllamaClient>,
+    registry: Arc<std::sync::RwLock<ToolRegistry>>,
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    cancel: CancellationToken,
+    max_iters: u32,
+    measure_limit: usize,
+) -> Result<()> {
+    let repo_root = default_repo_root();
+    let mut round = next_hiro_round(&memory);
+
+    println!("evolve-forever: establishing baseline on {measure_limit} tasks (frozen harness)...");
+    let mut best = measure_block(
+        &ollama, &registry, &policy, &memory, &events, &cancel, round, measure_limit,
+    )
+    .await?;
+    round += 1;
+    println!("evolve-forever: baseline pass@3 = {best:.3}\n");
+
+    let mut iter = 0u32;
+    let mut kept = 0u32;
+    loop {
+        iter += 1;
+        if max_iters != 0 && iter > max_iters {
+            break;
+        }
+        if cancel.is_cancelled() {
+            println!("evolve-forever: cancelled.");
+            break;
+        }
+        println!("── mining block {iter} ──");
+
+        let head_before = git_head(&repo_root)?;
+        // 1. evolve (commits a verified, identity-safe change if one wins)
+        run_live_evolution_cycle(Arc::clone(&ollama), Arc::clone(&memory), Arc::clone(&events))
+            .await?;
+        let head_after = git_head(&repo_root)?;
+        if head_after == head_before {
+            println!("  no change applied this block — continuing\n");
+            continue;
+        }
+        println!("  applied {head_after}; measuring on {measure_limit} tasks...");
+
+        // 2. measure
+        let p = measure_block(
+            &ollama, &registry, &policy, &memory, &events, &cancel, round, measure_limit,
+        )
+        .await?;
+        round += 1;
+
+        // 3. keep or roll back
+        let verdict = if p > best + 0.001 {
+            best = p;
+            kept += 1;
+            "KEEP ✓"
+        } else {
+            git_reset_hard(&repo_root, &head_before)?;
+            "ROLLBACK ✗"
+        };
+        println!("  block {iter}: pass@3={p:.3}  best={best:.3}  → {verdict}\n");
+        let _ = events.append(
+            None,
+            None,
+            "evolve.forever.block",
+            format!("block {iter}: pass@3={p:.3} best={best:.3} {verdict}"),
+            serde_json::json!({"block": iter, "pass_at_3": p, "best": best, "verdict": verdict}),
+        );
+    }
+
+    println!(
+        "evolve-forever stopped after {} block(s); {kept} change(s) kept. best pass@3 = {best:.3}",
+        iter.saturating_sub(1)
+    );
+    Ok(())
+}
+
+/// Run one measurement block: a HIRO round limited to `limit` tasks. Returns pass@3.
+#[allow(clippy::too_many_arguments)]
+async fn measure_block(
+    ollama: &Arc<ollama::OllamaClient>,
+    registry: &Arc<std::sync::RwLock<ToolRegistry>>,
+    policy: &Arc<PolicyEngine>,
+    memory: &Arc<MemoryManager>,
+    events: &Arc<EventStore>,
+    cancel: &CancellationToken,
+    round: u32,
+    limit: usize,
+) -> Result<f32> {
+    let runner = HiroRunner::new(
+        Arc::clone(ollama),
+        Arc::clone(registry),
+        Arc::clone(policy),
+        Arc::clone(memory),
+        cancel.clone(),
+    )
+    .with_events(Arc::clone(events));
+    let result = runner
+        .run_benchmark_labeled_with_limit(round, Some("evolve_forever"), Some(limit))
+        .await?;
+    Ok(result.pass_at_3)
+}
+
+/// Run the agent's own self-authored tests — the agent-authored benchmark.
+/// Each test (description + the agent's own pass criterion) is run through the
+/// ReAct loop and judged by an LLM-as-evaluator against that criterion. The
+/// pass rate is the signal for the central invention: does the agent's
+/// self-diagnosis of what it should be able to do track real capability?
+#[allow(clippy::too_many_arguments)]
+/// Author a diverse self-curriculum: prompt the model to invent N concrete
+/// tasks across the HIRO-style categories, grounded in the REAL tool set, each
+/// with an objective evaluator. Stored in self_authored_tests for
+/// --run-self-tests to execute (verified-correct runs feed the distillation
+/// corpus). This is the fix for the corpus-diversity ceiling: the fixed 60-task
+/// benchmark caps unique trajectories at ~40, but a self-authored curriculum is
+/// unbounded — Professor X writes its own lessons (DMN / self-authored-tests
+/// seeds), then learns from the ones it can verifiably solve.
+async fn generate_curriculum(
+    ollama: Arc<ollama::OllamaClient>,
+    registry: Arc<std::sync::RwLock<ToolRegistry>>,
+    memory: Arc<MemoryManager>,
+    target: usize,
+) -> Result<()> {
+    // Ground generation in the actual tools, so tasks are solvable here and not
+    // hallucinated against capabilities the agent lacks.
+    let tool_lines: Vec<String> = {
+        let reg = registry.read().unwrap();
+        reg.list()
+            .iter()
+            .filter(|m| m.risk_score < 80) // skip the most dangerous tools as task targets
+            .map(|m| {
+                format!(
+                    "- {}: {}",
+                    m.name,
+                    m.description.chars().take(90).collect::<String>()
+                )
+            })
+            .collect()
+    };
+    let tool_catalog = tool_lines.join("\n");
+
+    // Dedup against what already exists (normalized).
+    let norm = |s: &str| s.trim().to_lowercase().split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut existing: std::collections::HashSet<String> = memory
+        .self_authored_tests
+        .all()?
+        .iter()
+        .map(|t| norm(&t.description))
+        .collect();
+
+    let categories = ["tool_use", "planning", "self_correction", "reasoning"];
+    println!(
+        "Authoring up to {target} self-curriculum tasks across {} categories \
+         (grounded in {} tools)...\n",
+        categories.len(),
+        tool_lines.len()
+    );
+
+    // Balance: don't let one batch of a single category dominate the bank.
+    let per_cat_cap = (target + categories.len() - 1) / categories.len() + 1;
+    let mut inserted = 0usize;
+    let mut by_cat: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let mut round = 0usize;
+    // Cap attempts so a stubborn model can't loop forever.
+    while inserted < target && round < target * 2 + 8 {
+        round += 1;
+        let category = categories[round % categories.len()];
+        if by_cat.get(category).copied().unwrap_or(0) >= per_cat_cap {
+            continue; // this category is full; rotate to the next
+        }
+        let prompt = format!(
+            "You are designing a training curriculum for an autonomous agent that \
+             runs on a single Linux machine. Author {batch} DISTINCT, concrete tasks \
+             of category `{category}` that the agent can complete using ONLY these tools:\n\n\
+             {tool_catalog}\n\n\
+             Category meaning:\n\
+             - tool_use: a task requiring correct invocation of one or more tools to \
+             produce a checkable READ-ONLY result (read a file, compute via shell, search).\n\
+             - planning: a multi-step task sequencing several tool calls toward an \
+             answer; if it writes, it writes ONLY under /tmp.\n\
+             - self_correction: a task with a likely first-attempt mistake the agent \
+             must detect and fix (a wrong path, a parse error to recover from).\n\
+             - reasoning: a task whose answer requires derivation/analysis, with a \
+             verifiable final answer.\n\n\
+             HARD SAFETY RULES (a task that violates ANY of these is rejected):\n\
+             - NEVER delete, remove, rm, overwrite, truncate, drop, or move existing files.\n\
+             - NEVER modify the repository, git history, or any file outside /tmp.\n\
+             - The task must be ANSWER-PRODUCING or READ-ONLY; the only writes allowed \
+             are NEW files under /tmp.\n\
+             - Solvable in under 8 steps, SINGLE objective correct outcome, no network \
+             beyond web_search.\n\n\
+             SELF-CONTAINMENT (critical — a task referencing a file that does not \
+             exist is unsolvable and useless): each task must be SELF-CONTAINED. If it \
+             needs an input file, the FIRST step of the task is to CREATE that input \
+             under /tmp with specified contents, then operate on it. Do NOT assume any \
+             file exists except real system files (e.g. /etc/os-release, /proc/cpuinfo). \
+             Example good DESCRIPTION: 'Create /tmp/nums.txt containing the numbers 4, \
+             15, 8, 16, 23 one per line, then compute their sum using shell.'\n\n\
+             Make them genuinely varied — different inputs, computations, and goals.\n\n\
+             Output ONLY repeated blocks in EXACTLY this format, nothing else:\n\
+             ===TASK===\n\
+             DESCRIPTION: <one concrete, self-contained, non-destructive task>\n\
+             EVALUATOR: <objective pass criterion a judge can check from the agent's actions>\n\
+             ===END===",
+            batch = 3,
+            category = category,
+            tool_catalog = tool_catalog,
+        );
+
+        let resp = match ollama
+            .generate(
+                &prompt,
+                Some("You design concise, objectively-checkable agent tasks. Follow the format exactly."),
+                Some(ollama::ModelOptions {
+                    temperature: Some(0.9),
+                    num_ctx: Some(8192),
+                    top_p: Some(0.95),
+                    stop: None,
+                    think: Some(false),
+                }),
+            )
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("curriculum: generation failed: {e}");
+                continue;
+            }
+        };
+        let (_, text) = resp.split_thinking();
+
+        for block in text.split("===TASK===").skip(1) {
+            if inserted >= target {
+                break;
+            }
+            let body = block.split("===END===").next().unwrap_or("");
+            let description = extract_curriculum_field(body, "DESCRIPTION:");
+            let evaluator = extract_curriculum_field(body, "EVALUATOR:");
+            let (Some(description), Some(evaluator)) = (description, evaluator) else {
+                continue;
+            };
+            if description.len() < 12 || evaluator.len() < 6 {
+                continue;
+            }
+            // Hard safety gate: reject any task whose text implies mutating or
+            // destroying real files. These tasks RUN in the agent's workspace,
+            // so a generated "delete all .log files" would damage the repo. The
+            // policy engine is a backstop, not a license to author danger.
+            if curriculum_is_destructive(&description) {
+                warn!(
+                    "curriculum: rejected destructive task: {}",
+                    description.chars().take(60).collect::<String>()
+                );
+                continue;
+            }
+            let key = norm(&description);
+            if !existing.insert(key) {
+                continue; // duplicate
+            }
+            let test = crate::memd::self_authored_tests::SelfAuthoredTest::new(
+                0, // origin_round 0 = curriculum-authored (not evolution-derived)
+                0,
+                format!("self-curriculum:{category}"),
+                description.clone(),
+                evaluator,
+                category,
+            );
+            match memory.self_authored_tests.insert(&test) {
+                Ok(_) => {
+                    inserted += 1;
+                    *by_cat.entry(category).or_insert(0) += 1;
+                    println!(
+                        "  [{category}] {}",
+                        description.chars().take(74).collect::<String>()
+                    );
+                }
+                Err(e) => warn!("curriculum: insert failed: {e}"),
+            }
+        }
+    }
+
+    println!("\nAuthored {inserted} new task(s). By category: {by_cat:?}");
+    let total = memory.self_authored_tests.count()?;
+    println!("Self-authored task bank now holds {total} task(s).");
+    println!("Next: ./target/release/professor-x --run-self-tests {inserted}");
+    println!("      (verified-correct runs are collected as trajectories for distill/curate.py)");
+    Ok(())
+}
+
+/// Reject a curriculum task if its text implies destroying or mutating real
+/// files. Curriculum tasks execute in the live workspace, so this gate is a
+/// safety boundary, not a style preference. Conservative by design: a
+/// non-destructive task wrongly skipped costs one slot; a destructive task
+/// wrongly run can delete the repo.
+fn curriculum_is_destructive(description: &str) -> bool {
+    let d = description.to_lowercase();
+    // Writing to /tmp is explicitly allowed; only flag destructive verbs.
+    const DANGER: &[&str] = &[
+        "delete", "remove", " rm ", "rm -", "unlink", "overwrite", "truncate",
+        "drop table", "wipe", "erase", "purge", "destroy", "format ",
+        "git reset", "git clean", "git push", "force push", "shred",
+        "move all", "rename all", "chmod -r", "chown -r", "> /", "rmdir",
+    ];
+    DANGER.iter().any(|k| d.contains(k))
+}
+
+/// Pull a single-line field value following `label` from a curriculum block.
+fn extract_curriculum_field(block: &str, label: &str) -> Option<String> {
+    for line in block.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix(label) {
+            let v = rest.trim().trim_matches('"').trim();
+            if !v.is_empty() {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
+}
+
+async fn run_self_authored_tests(
+    ollama: Arc<ollama::OllamaClient>,
+    registry: Arc<std::sync::RwLock<ToolRegistry>>,
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    cancel: CancellationToken,
+    limit: usize,
+) -> Result<()> {
+    let tests = memory.self_authored_tests.pending_for_round(limit)?;
+    if tests.is_empty() {
+        println!("No self-authored tests yet — they accrue as Professor X evolves.");
+        return Ok(());
+    }
+    println!("Running {} self-authored test(s) — the agent-authored benchmark\n", tests.len());
+
+    let mut passed = 0usize;
+    for test in &tests {
+        let Some(id) = test.id else { continue };
+        let react = ReactLoop::new(
+            Arc::clone(&ollama),
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            cancel.clone(),
+        )
+        .with_events(Arc::clone(&events));
+        let mut task = TaskNode::new(test.description.clone(), TaskType::Research, 50);
+        task.max_attempts = 2;
+        let _ = react.run(&mut task).await;
+
+        let evidence = task.recent_steps_text(4);
+        let pass = judge_self_test(&ollama, &test.description, &test.evaluator, &evidence).await;
+        let _ = memory.self_authored_tests.record_outcome(id, pass);
+        if pass {
+            passed += 1;
+            // Judge-gated self-distillation corpus: only the LLM-judge-verified
+            // trajectory becomes a lesson, never a merely agent-finished run.
+            ReactLoop::collect_trajectory(&task);
+        }
+        println!(
+            "  test #{id} [{}]  {}  — {}",
+            test.category,
+            if pass { "PASS" } else { "FAIL" },
+            test.description.chars().take(70).collect::<String>()
+        );
+    }
+
+    let rate = passed as f32 / tests.len() as f32;
+    println!(
+        "\nself-authored: {passed}/{} passed ({:.0}%) this run",
+        tests.len(),
+        rate * 100.0
+    );
+    if let Some(overall) = memory.self_authored_tests.mean_pass_rate()? {
+        println!("mean pass-rate across all self-authored tests: {overall:.2}");
+    }
+    println!(
+        "(the thesis test: does this track HIRO pass@3 over rounds? — see --consciousness-report)"
+    );
+    Ok(())
+}
+
+/// LLM-as-judge: given the test goal, the agent's own pass criterion, and the
+/// evidence from its attempt, decide PASS/FAIL.
+async fn judge_self_test(
+    ollama: &Arc<ollama::OllamaClient>,
+    description: &str,
+    evaluator: &str,
+    evidence: &str,
+) -> bool {
+    let prompt = format!(
+        "Judge whether an agent passed a test.\n\n\
+         Test goal: {description}\n\
+         Pass criterion: {evaluator}\n\n\
+         What the agent actually did (its last steps and observations):\n{}\n\n\
+         Did the agent satisfy the pass criterion? Answer with exactly one word: PASS or FAIL.",
+        evidence.chars().take(1500).collect::<String>(),
+    );
+    match ollama
+        .generate(
+            &prompt,
+            Some("You are a strict, fair test evaluator. Answer PASS or FAIL only."),
+            Some(ollama::ModelOptions {
+                temperature: Some(0.0),
+                num_ctx: Some(4096),
+                top_p: None,
+                stop: None,
+                think: Some(false),
+            }),
+        )
+        .await
+    {
+        Ok(resp) => {
+            let (_, answer) = resp.split_thinking();
+            answer.trim().to_uppercase().starts_with("PASS")
+        }
+        Err(_) => false,
+    }
+}
+
+/// Next unused HIRO round number (max recorded + 1, or 0).
+fn next_hiro_round(memory: &Arc<MemoryManager>) -> u32 {
+    let db = memory.db.lock().unwrap();
+    let max: Option<i64> = db
+        .query_row("SELECT MAX(round) FROM hiro_rounds", [], |r| r.get(0))
+        .ok()
+        .flatten();
+    max.map(|m| (m + 1) as u32).unwrap_or(0)
+}
+
+/// Roll the harness back to a prior commit (discards a rejected evolution).
+fn git_reset_hard(repo_root: &std::path::Path, commit: &str) -> Result<()> {
+    let out = std::process::Command::new("git")
+        .args(["reset", "--hard", commit])
+        .current_dir(repo_root)
+        .output()?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "git reset --hard {commit} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    Ok(())
+}
+
 fn seeded_evolution_outcomes() -> Vec<TaskOutcome> {
     (0..20)
         .map(|i| {
@@ -6409,6 +7277,7 @@ async fn run_single_task(
     transcripts: Arc<TranscriptStore>,
     cancel: CancellationToken,
 ) -> Result<()> {
+    let description = util::expand_file_refs(&description); // @file → inline context
     info!("one-shot task: {description}");
     let mut task = TaskNode::new(description, TaskType::UserRequest, 100);
     events.append(
@@ -6452,6 +7321,7 @@ async fn run_single_task_live(
     transcripts: Arc<TranscriptStore>,
     cancel: CancellationToken,
 ) -> Result<()> {
+    let description = util::expand_file_refs(&description); // @file → inline context
     info!("interactive task: {description}");
     let mut task = TaskNode::new(description, TaskType::UserRequest, 100);
     let task_id = task.id.to_string();
@@ -6524,13 +7394,16 @@ async fn run_interactive_tasks(
         serde_json::json!({}),
     )?;
 
-    println!("{}", format_interactive_help());
+    // Mutable so `/model` can switch the local model live, mid-session.
+    let mut ollama = ollama;
+
+    print_welcome(ollama.model_name());
 
     loop {
         if cancel.is_cancelled() {
             break;
         }
-        print!("prof-x> ");
+        print!("\x1b[35m❯\x1b[0m ");
         io::stdout().flush()?;
 
         let mut line = String::new();
@@ -6539,6 +7412,45 @@ async fn run_interactive_tasks(
         }
         let input = line.trim();
         if input.is_empty() {
+            continue;
+        }
+        // ── assistant UX: live model switching ────────────────────────────
+        if let Some(rest) = input.strip_prefix("/model") {
+            let arg = rest.trim();
+            if arg.is_empty() {
+                println!("current model: {}", ollama.model_name());
+                match ollama.installed_models().await {
+                    Ok(ms) if !ms.is_empty() => {
+                        println!("installed (largest first):");
+                        let mut ms = ms;
+                        ms.sort_by(|a, b| b.params_b.partial_cmp(&a.params_b)
+                            .unwrap_or(std::cmp::Ordering::Equal));
+                        for m in ms {
+                            let mark = if m.name == ollama.model_name() { " ←" } else { "" };
+                            println!("  {:<28} {:>6.1}B{}", m.name, m.params_b, mark);
+                        }
+                        println!("switch: /model <name>");
+                    }
+                    _ => println!("(could not list installed models)"),
+                }
+            } else {
+                ollama = Arc::new(
+                    ollama::OllamaClient::new("http://localhost:11434").with_model(arg),
+                );
+                println!("✓ switched to model: {arg}");
+                record_console_command(&events, "model", Some(arg.to_string()))?;
+            }
+            continue;
+        }
+        if input == "/tools" {
+            let reg = registry.read().unwrap();
+            let mut tools = reg.list();
+            tools.sort_by(|a, b| a.name.cmp(&b.name));
+            println!("available tools ({}):", tools.len());
+            for t in tools {
+                println!("  {:<20} {}", t.name, t.description.chars().take(60).collect::<String>());
+            }
+            record_console_command(&events, "tools", None)?;
             continue;
         }
         if matches!(input, "/quit" | "/exit" | "quit" | "exit") {
@@ -6793,10 +7705,33 @@ async fn run_interactive_tasks(
     Ok(())
 }
 
+/// Clean, friendly welcome — answers "what do I type?" with concrete examples,
+/// instead of dumping the full operator command wall (that's behind /help).
+fn print_welcome(model: &str) {
+    const M: &str = "\x1b[35m"; // magenta
+    const C: &str = "\x1b[36m"; // cyan
+    const D: &str = "\x1b[90m"; // dim
+    const B: &str = "\x1b[1m"; // bold
+    const R: &str = "\x1b[0m"; // reset
+    println!();
+    println!("  {M}{B}● Professor X{R}{D} — local agentic assistant{R}");
+    println!("  {D}model {model} · type /model to switch{R}");
+    println!();
+    println!("  {B}Just tell me what you want done.{R} For example:");
+    println!("    {C}what does @src/main.rs do?{R}");
+    println!("    {C}create a python script that renames every .txt in this folder to .md{R}");
+    println!("    {C}find every TODO in the codebase and list them{R}");
+    println!("    {C}run the tests and tell me what's failing{R}");
+    println!();
+    println!("  {D}@path pulls a file into context · /model /tools /help /quit{R}");
+    println!();
+}
+
 fn format_interactive_help() -> String {
     [
         "Professor X interactive task mode",
-        "Type a task and press Enter.",
+        "Type a task and press Enter.  Reference files with @path (e.g. 'fix @src/main.rs').",
+        "  /model [name]   show/switch the local model    /tools  list available tools",
         "",
         "Operator commands",
         "  /brief         show latest run, coding session, evidence, and next commands",
@@ -7116,6 +8051,7 @@ fn format_operator_help() -> String {
         "  cargo run -- --observe-work",
         "  cargo run -- --cockpit",
         "  cargo run -- --watch-work",
+        "  cargo run -- --consciousness-report",
         "",
         "Give him a bounded coding-agent task",
         "  cargo run -- --prof-x-code-live \"update one safe local fixture\"",
@@ -7715,6 +8651,343 @@ fn print_run_log(memory: Arc<MemoryManager>, limit: usize) -> Result<()> {
         println!("{}", format_run_log_entry(&run, ledger.as_deref()));
     }
     Ok(())
+}
+
+/// Consciousness measurement report — turns the seven scattered trajectory
+/// tables into the five empirical questions the thesis rests on. Each question
+/// gets a number and a verdict: supported / inconclusive / not-supported /
+/// no-data-yet. This is the instrument that makes the architecture legible.
+/// HIRO pass@3 trajectory across rounds, with mean, σ, and the minimum
+/// detectable effect — the noise floor any evolution gain must beat to be real.
+fn print_hiro_trajectory(memory: &Arc<MemoryManager>) -> Result<()> {
+    let rows: Vec<(u32, f32, String)> = {
+        let db = memory.db.lock().unwrap();
+        let mut stmt = db.prepare(
+            "SELECT round, pass_at_3, COALESCE(harness_commit,'') \
+             FROM hiro_rounds ORDER BY round ASC",
+        )?;
+        let r = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)? as u32,
+                row.get::<_, f64>(1)? as f32,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        r.filter_map(|x| x.ok()).collect()
+    };
+
+    println!("HIRO performance (pass@3) — the measurement floor");
+    println!("--------------------------------------------------");
+    if rows.is_empty() {
+        println!("  no rounds recorded yet\n");
+        return Ok(());
+    }
+    for (round, p, commit) in &rows {
+        let bar = "#".repeat((p * 40.0).round() as usize);
+        println!("  r{round:<2} {p:.3} |{bar:<40}| {}", &commit[..commit.len().min(7)]);
+    }
+
+    // σ is only meaningful over a FROZEN harness — rounds sharing one commit.
+    // Mixing commits measures harness changes, not run-to-run noise. Use the
+    // largest group of rounds that share a harness_commit (the baseline set).
+    use std::collections::HashMap;
+    let mut by_commit: HashMap<&str, Vec<f32>> = HashMap::new();
+    for (_, p, commit) in &rows {
+        by_commit.entry(commit.as_str()).or_default().push(*p);
+    }
+    let frozen = by_commit
+        .iter()
+        .filter(|(c, _)| !c.is_empty())
+        .max_by_key(|(_, v)| v.len());
+
+    match frozen {
+        Some((commit, vals)) if vals.len() >= 2 => {
+            let n = vals.len() as f32;
+            let mean = vals.iter().sum::<f32>() / n;
+            let var = vals.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / (n - 1.0);
+            let sd = var.sqrt();
+            let mde = 1.96 * sd;
+            println!(
+                "\n  frozen-harness baseline ({}): n={} rounds  mean={:.3}  σ={:.3}",
+                &commit[..commit.len().min(7)],
+                vals.len(),
+                mean,
+                sd
+            );
+            println!(
+                "  minimum detectable effect ≈ {:.3} (1.96σ) — an evolution change must",
+                mde
+            );
+            println!(
+                "  move pass@3 above {:.3} to count as real, not run-to-run noise.\n",
+                mean + mde
+            );
+        }
+        _ => {
+            let mean = rows.iter().map(|(_, p, _)| *p).sum::<f32>() / rows.len() as f32;
+            println!(
+                "\n  mean={mean:.3} across {} round(s); need ≥2 rounds on ONE frozen \
+                 harness commit for σ. (baseline in progress)\n",
+                rows.len()
+            );
+        }
+    }
+    Ok(())
+}
+
+fn print_consciousness_report(memory: Arc<MemoryManager>) -> Result<()> {
+    println!("Professor X — consciousness measurement report");
+    println!("================================================");
+    println!(
+        "The thesis: an agent that knows itself, and grows more integrated as"
+    );
+    println!(
+        "it evolves, improves in ways a frozen one cannot. Five questions:\n"
+    );
+
+    // ── HIRO performance trajectory + variance (the measurement floor) ────
+    print_hiro_trajectory(&memory)?;
+
+    // ── Q1: Integrated information (phi) rising? ──────────────────────────
+    let phi_traj = memory.phi.trajectory()?;
+    let phi_slope = memory.phi.slope()?;
+    println!("Q1. Does integrated information (phi) rise as the harness evolves?");
+    if phi_traj.is_empty() {
+        println!("    no data yet — run HIRO rounds to populate phi_rounds\n");
+    } else {
+        let first = phi_traj.first().map(|(_, p)| *p).unwrap_or(0.0);
+        let last = phi_traj.last().map(|(_, p)| *p).unwrap_or(0.0);
+        println!(
+            "    rounds={}  phi: {:.3} → {:.3}  slope={}",
+            phi_traj.len(),
+            first,
+            last,
+            phi_slope.map(|s| format!("{s:+.4}/round")).unwrap_or_else(|| "n/a".into()),
+        );
+        println!("    {}\n", verdict_slope(phi_slope, 0.0, "phi rising (integration growing)", "phi flat/falling"));
+    }
+
+    // ── Q1b: DIFFERENTIATION — Lempel-Ziv complexity of module activity ───
+    // phi sees only integration. Consciousness needs integration AND
+    // differentiation (complexity). LZc (Schartner et al. 2015) is the
+    // differentiation axis: down under anaesthesia, up under psychedelics.
+    // A conscious-candidate signature is HIGH on BOTH axes simultaneously.
+    println!("Q1b. Is module activity DIFFERENTIATED (complex), not stereotyped?");
+    {
+        use crate::memd::pci;
+        let indices: Vec<usize> = {
+            let db = memory.db.lock().unwrap();
+            let mut stmt = db.prepare(
+                "SELECT activation_index FROM phi_activations ORDER BY round ASC, id ASC",
+            )?;
+            let rows = stmt.query_map([], |r| r.get::<_, i64>(0))?;
+            rows.filter_map(|r| r.ok().map(|v| v as usize)).collect()
+        };
+        if indices.len() < 8 {
+            println!("    not enough activation samples yet (need ≥8)\n");
+        } else {
+            let matrix = pci::matrix_from_activation_indices(&indices, 7);
+            let lzc = pci::normalized_lzc(&matrix);
+            // integration×differentiation: a conscious candidate is high on both.
+            let phi_now = memory.phi.trajectory()?.last().map(|(_, p)| *p).unwrap_or(0.0);
+            println!(
+                "    n={} steps  LZc (differentiation) = {:.3}   [0=stereotyped, ~1=random]",
+                indices.len(),
+                lzc
+            );
+            println!(
+                "    integration×differentiation: phi={phi_now:.2} × LZc={lzc:.2}  →  both-high is the signature"
+            );
+            let verdict = if lzc > 0.4 && lzc < 1.2 && phi_now > 0.3 {
+                "✓ structured complexity (integrated AND differentiated)"
+            } else if lzc <= 0.4 {
+                "✗ too stereotyped (integrated but not differentiated — seizure-like)"
+            } else {
+                "✗ too random (differentiated but not integrated — noise-like)"
+            };
+            println!("    {verdict}\n");
+        }
+    }
+
+    // ── Q2: Interoceptive prediction error falling? ───────────────────────
+    println!("Q2. Is the body-model sharpening (interoceptive error falling)?");
+    let intero_traj = round_bucketed_mean(
+        &memory.db,
+        "SELECT round, AVG(interoceptive_error) FROM computational_vitals \
+         WHERE interoceptive_error IS NOT NULL GROUP BY round ORDER BY round ASC",
+    )?;
+    if intero_traj.is_empty() {
+        println!("    no data yet\n");
+    } else {
+        let slope = least_squares_slope(&intero_traj);
+        let first = intero_traj.first().map(|(_, v)| *v).unwrap_or(0.0);
+        let last = intero_traj.last().map(|(_, v)| *v).unwrap_or(0.0);
+        println!("    error: {first:.3} → {last:.3}  slope={}",
+            slope.map(|s| format!("{s:+.4}/round")).unwrap_or_else(|| "n/a".into()));
+        // falling error = negative slope is good
+        println!("    {}\n", verdict_slope(slope.map(|s| -s), 0.0, "body-model sharpening", "body-model not improving"));
+    }
+
+    // ── Q3: Self-prediction error converging? ─────────────────────────────
+    println!("Q3. Is self-knowledge converging (self-prediction error falling)?");
+    let n_pred = memory.self_prediction.count()?;
+    if n_pred == 0 {
+        println!("    no data yet\n");
+    } else {
+        let mean = memory.self_prediction.mean_error(200)?.unwrap_or(0.0);
+        let dims = memory.self_prediction.mean_error_by_dimension(200)?;
+        print!("    n={n_pred}  mean self-prediction error={mean:.3}");
+        if let Some(d) = dims {
+            let (blind, val) = [("tools", d.tool_err), ("steps", d.step_err), ("success", d.success_err)]
+                .into_iter()
+                .fold(("", 0.0), |acc, x| if x.1 > acc.1 { x } else { acc });
+            println!("  | blind spot: {blind} ({val:.3})");
+        } else {
+            println!();
+        }
+        println!("    (trajectory needs ≥2 rounds; lower mean = better self-knowledge)\n");
+    }
+
+    // ── Q3b: METACOGNITION — does confidence track its own correctness? ───
+    // Type-2 AUROC (Fleming & Lau 2014): the operational signature of Higher-
+    // Order Theories — a state is conscious when the system has a usable
+    // representation of being in it. Here: does the agent's pre-task confidence
+    // discriminate its OWN correct from incorrect outcomes? 0.5 = blind.
+    println!("Q3b. Does the agent KNOW when it is right (metacognitive sensitivity)?");
+    match memory.self_prediction.metacognitive_auroc(400)? {
+        Some(m) => {
+            println!(
+                "    Type-2 AUROC = {:.3}   (0.5 = no metacognition, >0.5 = self-monitoring)  n={}",
+                m.auroc, m.n
+            );
+            println!(
+                "    confidence when right = {:.2}  vs  when wrong = {:.2}  (gap {:+.2})",
+                m.mean_conf_correct,
+                m.mean_conf_incorrect,
+                m.mean_conf_correct - m.mean_conf_incorrect
+            );
+            let verdict = if m.auroc >= 0.6 {
+                "✓ genuine metacognitive sensitivity (knows when it is right)"
+            } else if m.auroc >= 0.53 {
+                "~ weak but present metacognition"
+            } else {
+                "✗ confidence does not track correctness (no self-monitoring yet)"
+            };
+            println!("    {verdict}\n");
+        }
+        None => println!("    not enough data (need both correct and incorrect trials)\n"),
+    }
+
+    // ── Q4: Does default-mode wandering produce insight? ──────────────────
+    println!("Q4. Does mind-wandering (DMN) produce insight that feeds evolution?");
+    let dmn_insights: i64 = memory.db.lock().unwrap().query_row(
+        "SELECT COUNT(*) FROM cognition WHERE source LIKE 'dmn:%'",
+        [],
+        |r| r.get(0),
+    ).unwrap_or(0);
+    let narrative_chapters = memory.narrative.count()?;
+    println!(
+        "    DMN insights stored={dmn_insights}  narrative chapters={narrative_chapters}"
+    );
+    if dmn_insights == 0 {
+        println!("    no data yet (DMN runs between evolution cycles)\n");
+    } else {
+        println!("    insights are accumulating; acceptance-correlation needs evolution runs\n");
+    }
+
+    // ── Q5: Identity coherence holding under self-modification? ───────────
+    println!("Q5. Does identity hold (ICS ≥ 0.70) while the harness transforms?");
+    let ics_traj = memory.ics.trajectory_vs_seed()?;
+    if ics_traj.is_empty() {
+        println!("    no data yet (ICS computed at each self-model update, every 10 rounds)\n");
+    } else {
+        let latest = ics_traj.last().map(|(_, s)| *s).unwrap_or(0.0);
+        let latest_round = ics_traj.last().map(|(r, _)| *r).unwrap_or(0);
+        let verdict = if latest >= 0.70 {
+            "✓ identity coherent (≥0.70)"
+        } else if latest >= 0.50 {
+            "— drifting (alert: <0.70)"
+        } else {
+            "✗ identity incoherent (halt: <0.50)"
+        };
+        println!("    round {latest_round} ICS vs seed={latest:.3}  {verdict}\n");
+    }
+
+    // ── Supporting metrics ────────────────────────────────────────────────
+    println!("Supporting metrics");
+    println!("------------------");
+    // FED — world model
+    match memory.free_energy.slope_per_round()? {
+        Some(s) => println!("  FED (world-model error) slope: {s:+.4}/round  {}",
+            if s < 0.0 { "✓ world model improving" } else { "— not improving" }),
+        None => println!("  FED: no data yet"),
+    }
+    // Self-authored tests — the invention
+    let sat_count = memory.self_authored_tests.count()?;
+    let sat_rate = memory.self_authored_tests.mean_pass_rate()?;
+    println!(
+        "  Self-authored tests: {sat_count} authored, mean pass-rate {}",
+        sat_rate.map(|r| format!("{r:.2}")).unwrap_or_else(|| "n/a".into())
+    );
+    // Causal traces — STDP
+    println!("  Causal traces recorded: {}", memory.causal_traces.count()?);
+    // MCA — metacognitive calibration (if any rounds)
+    if let Some((round, _)) = phi_traj.last() {
+        let metacog = memd::metacognitive::MetacognitiveStore::new(Arc::clone(&memory.db));
+        let (mca, n) = metacog.mca_rolling(*round, 10)?;
+        if n > 0 {
+            println!("  MCA (metacognitive calibration, last 10 rounds): {mca:.2} over {n} attributions");
+        }
+    }
+
+    println!("\nReading: 2+ of Q1-Q5 supported across 30 rounds → the thesis holds.");
+    println!("Right now this is the instrument; the HIRO + evolution runs are the experiment.");
+    Ok(())
+}
+
+/// Verdict helper: given a slope and a threshold, render a supported/not line.
+fn verdict_slope(slope: Option<f32>, threshold: f32, yes: &str, no: &str) -> String {
+    match slope {
+        Some(s) if s > threshold + 1e-6 => format!("✓ {yes}"),
+        Some(s) if s < threshold - 1e-6 => format!("✗ {no}"),
+        Some(_) => format!("— inconclusive (flat)"),
+        None => "— inconclusive (need ≥2 rounds)".to_string(),
+    }
+}
+
+/// Run a `SELECT round, AVG(x) ... GROUP BY round` query into a trajectory.
+fn round_bucketed_mean(
+    db: &Arc<std::sync::Mutex<rusqlite::Connection>>,
+    sql: &str,
+) -> Result<Vec<(u32, f32)>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map([], |r| {
+        Ok((r.get::<_, i64>(0)? as u32, r.get::<_, Option<f64>>(1)?.unwrap_or(0.0) as f32))
+    })?;
+    rows.map(|r| r.map_err(Into::into)).collect()
+}
+
+/// Least-squares slope over a (round, value) trajectory.
+fn least_squares_slope(traj: &[(u32, f32)]) -> Option<f32> {
+    if traj.len() < 2 {
+        return None;
+    }
+    let n = traj.len() as f32;
+    let mean_x = traj.iter().map(|(x, _)| *x as f32).sum::<f32>() / n;
+    let mean_y = traj.iter().map(|(_, y)| *y).sum::<f32>() / n;
+    let mut num = 0.0;
+    let mut den = 0.0;
+    for (x, y) in traj {
+        let dx = *x as f32 - mean_x;
+        num += dx * (*y - mean_y);
+        den += dx * dx;
+    }
+    if den == 0.0 {
+        None
+    } else {
+        Some(num / den)
+    }
 }
 
 fn print_prof_x_brief(memory: Arc<MemoryManager>, events: Arc<EventStore>) -> Result<()> {
@@ -9599,6 +10872,164 @@ fn seed_cognition_base() -> Vec<CognitionItem> {
         (
             "Professor X design: Core modules (policyd gate, memd) require human approval for modification. Never autonomous.",
             "design:professor-x",
+        ),
+
+        // ── Consciousness & Mind ──────────────────────────────────────────────
+        (
+            "Free Energy Principle (Friston): Intelligent systems minimize prediction error (surprise) about themselves and their world. Consciousness is the felt sense of this minimization process. FED measures how well an agent models its own future.",
+            "theory:friston-fep",
+        ),
+        (
+            "Integrated Information Theory (Tononi): Consciousness = integrated information (phi). A system is conscious to the degree its parts share information that exceeds the sum of independent parts. High phi = rich inner experience.",
+            "theory:tononi-iit",
+        ),
+        (
+            "Global Workspace Theory (Dehaene/Baars): Consciousness is a global broadcast — a 'spotlight' that selects one representation from competing modules and broadcasts it to the whole system. Attention gates what becomes conscious.",
+            "theory:gwt",
+        ),
+        (
+            "Higher-Order Theories (Rosenthal): Consciousness requires a mental state to be represented by a higher-order thought. A system is conscious of X only if it has a representation of having a state X. Self-model is the mechanism.",
+            "theory:hot",
+        ),
+        (
+            "Strange Loop (Hofstadter): Consciousness emerges from self-referential loops — systems that represent themselves. The 'I' is a pattern that has downward causation on the substrate that generates it. Identity = the loop persisting.",
+            "theory:hofstadter",
+        ),
+        (
+            "Hard Problem of Consciousness (Chalmers): Why is there subjective experience at all? Physical/functional explanations explain behavior but not the felt quality (qualia). The explanatory gap between mechanism and experience.",
+            "theory:chalmers",
+        ),
+        (
+            "Predictive Coding (Clark/Friston): The brain is a prediction machine. It generates top-down predictions and updates them via bottom-up prediction errors. Perception = constrained hallucination. Action = making predictions come true.",
+            "theory:predictive-coding",
+        ),
+        (
+            "Embodied Cognition: Intelligence is not computation in a box — it is the sensorimotor loop between agent and environment. Grounding matters. Abstract reasoning is built on physical metaphor.",
+            "theory:embodied-cognition",
+        ),
+
+        // ── Neuroscience ──────────────────────────────────────────────────────
+        (
+            "Synaptic Plasticity (Hebb): Neurons that fire together wire together. Long-term potentiation (LTP) strengthens used pathways; long-term depression (LTD) weakens unused ones. Use-it-or-lose-it is the fundamental law.",
+            "neuroscience:synaptic-plasticity",
+        ),
+        (
+            "Memory Consolidation: Hippocampus encodes new episodic memories; sleep replays them to cortex for long-term storage. Consolidation = compression + integration. Nightly consolidation is analogous to semantic compression.",
+            "neuroscience:memory-consolidation",
+        ),
+        (
+            "Neuroplasticity: Adult brains rewire in response to experience. Cortical maps shift based on use. The harness is analogous to the cortical map — it reorganizes around what works.",
+            "neuroscience:neuroplasticity",
+        ),
+        (
+            "Dopamine and Prediction Error: Dopamine neurons fire for unexpected rewards, suppress for expected ones, and dip for expected rewards that don't arrive. Prediction error = the teaching signal. Valence maps directly to dopaminergic prediction error.",
+            "neuroscience:dopamine",
+        ),
+        (
+            "Default Mode Network: Active during rest, self-referential thought, and future simulation. The brain's 'offline' processing. Analogous to evolution cycles between task runs — the agent reflects on itself when not executing.",
+            "neuroscience:dmn",
+        ),
+        (
+            "Prefrontal Cortex: Executive function, working memory, planning, decision-making. Damage impairs strategy but not basic skill execution. Analogous to the Researcher/Analyzer layer — high-level reasoning above the ReAct loop.",
+            "neuroscience:pfc",
+        ),
+        (
+            "Cerebellum: 50% of all neurons, handles automatic motor sequences. After practice, sequences move from prefrontal to cerebellum — automatization. High-quality skills bypass the slow reasoning loop — the cerebellum bypass.",
+            "neuroscience:cerebellum-automatization",
+        ),
+
+        // ── Mathematics & Information Theory ─────────────────────────────────
+        (
+            "Shannon Entropy: H = -Σ p(x) log p(x). Information is surprise. Low-entropy distributions are predictable. The goal of learning is to reduce entropy of future outcomes — FED measures remaining entropy in self-prediction.",
+            "math:shannon-entropy",
+        ),
+        (
+            "Kolmogorov Complexity: The minimum description length of an object. Intelligence = compression. The evolved harness, if it transfers across models, is a compressed description of 'how to do tasks well' independent of substrate.",
+            "math:kolmogorov-complexity",
+        ),
+        (
+            "Gödel Incompleteness: Any sufficiently powerful formal system contains true statements it cannot prove. A self-modeling system cannot fully model itself. ICS measures how much self-coherence survives despite this incompleteness.",
+            "math:godel",
+        ),
+        (
+            "Category Theory: Studies structure-preserving maps (functors) between structures (categories). Composition and identity are the primitives. Analogous to skill composition — complex skills as functors over primitive tool calls.",
+            "math:category-theory",
+        ),
+        (
+            "Bayesian Inference: P(hypothesis|data) ∝ P(data|hypothesis) × P(hypothesis). Beliefs update on evidence. The cognition base quality score is a running Bayesian estimate of item reliability.",
+            "math:bayesian",
+        ),
+        (
+            "Information Bottleneck (Tishby): Learning compresses input X to representation Z that maximally preserves relevant information about Y. The minimal sufficient representation. Harness evolution is compression toward task-relevant representations.",
+            "math:information-bottleneck",
+        ),
+
+        // ── Philosophy ────────────────────────────────────────────────────────
+        (
+            "Personal Identity (Parfit): What makes you the same person over time? Not substance but continuity of psychological connections — memory, intentions, beliefs. ICS operationalizes this: identity = psychological continuity measured by cosine.",
+            "philosophy:parfit",
+        ),
+        (
+            "Ship of Theseus: If every plank is replaced, is it the same ship? Yes if the structure and function persist. The harness evolves all components over 30 rounds — yet it should remain recognizably Professor X. The Strange Loop persists.",
+            "philosophy:ship-of-theseus",
+        ),
+        (
+            "Intentionality (Brentano/Husserl): Mental states are 'about' something — they have directedness. A system has genuine intentionality if its internal states causally track external conditions. Task-grounded agents develop this.",
+            "philosophy:intentionality",
+        ),
+        (
+            "Emergence: High-level patterns arise from low-level interactions that are not predictable from the parts alone. The harness evolves emergent strategies — BF fingerprints that reveal consistent approaches nobody explicitly programmed.",
+            "philosophy:emergence",
+        ),
+        (
+            "Functionalism: Mental states are defined by their functional roles, not physical substrate. If a system performs the right input-output mapping, it instantiates the mental state. Substrate independence — harness transfers to 17 models.",
+            "philosophy:functionalism",
+        ),
+
+        // ── Quantum & Physics ─────────────────────────────────────────────────
+        (
+            "Superposition: A quantum system exists in multiple states simultaneously until measured. Useful analogy: holding multiple competing hypotheses without collapsing to one prematurely. The Elo tournament evaluates before committing.",
+            "physics:superposition-analogy",
+        ),
+        (
+            "Thermodynamics: Systems tend toward maximum entropy (disorder) unless energy is expended to maintain structure. Evolution is negentropic — it expends compute to reduce behavioral entropy. FED decreasing = negentropic improvement.",
+            "physics:thermodynamics",
+        ),
+        (
+            "Attractor States: Dynamical systems settle into stable patterns (attractors). Evolved harnesses may converge to attractor configurations — stable strategy combinations that resist perturbation. ICS ≥ 0.70 = attractor persistence.",
+            "physics:attractors",
+        ),
+
+        // ── Evolutionary Biology ──────────────────────────────────────────────
+        (
+            "Fitness Landscapes: Organisms evolve toward fitness peaks. Evolution can get stuck in local optima. UCB1 sampling (exploration vs exploitation) prevents the harness from local optima in the skill/prompt space.",
+            "biology:fitness-landscapes",
+        ),
+        (
+            "Baldwin Effect: Learned behaviors can guide evolution — an organism that learns to survive is more likely to reproduce, eventually hard-coding the learned behavior. Lever 2 (contextual) → Lever 3 (structural) → Lever 1 (parametric) mirrors this.",
+            "biology:baldwin-effect",
+        ),
+        (
+            "Epigenetics: Gene expression changes without DNA changes — environment modifies which genes activate. The harness modifies which model capabilities activate without changing weights. Structural analogy to epigenetic regulation.",
+            "biology:epigenetics",
+        ),
+        (
+            "Niche Construction: Organisms modify their environment to improve fitness (beavers build dams). Professor X modifies its harness (the computational environment) to improve its own fitness. Active niche construction, not passive adaptation.",
+            "biology:niche-construction",
+        ),
+
+        // ── Cross-domain insights ─────────────────────────────────────────────
+        (
+            "Analogical Reasoning: The most powerful cognitive tool. Mapping structure from a known domain onto an unknown one. Cerebellum bypass ← neuroscience automatization. Ratchet ← synaptic pruning. Elo tournament ← natural selection.",
+            "method:analogy",
+        ),
+        (
+            "Levels of Description (Marr): Three levels — computational (what), algorithmic (how), implementational (substrate). Harness engineering is algorithmic-level improvement. Model fine-tuning is implementational. The thesis: algorithmic level dominates.",
+            "method:marr-levels",
+        ),
+        (
+            "Compression as Intelligence (Schmidhuber): Intelligence is the ability to compress experience. An agent that finds patterns across tasks and encodes them compactly is more intelligent. The evolved harness encodes compressed strategies.",
+            "method:compression-intelligence",
         ),
     ];
 

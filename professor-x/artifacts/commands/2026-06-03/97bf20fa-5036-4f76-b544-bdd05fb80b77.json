@@ -1,0 +1,10 @@
+{
+  "command": "find refs/ -type f -name \"*.rs\" | wc -l",
+  "exit_code": 0,
+  "success": true,
+  "stdout": "0\n",
+  "stderr": "find: ‘refs/’: No such file or directory\n",
+  "stdout_bytes": 2,
+  "stderr_bytes": 45,
+  "recorded_at": "2026-06-03T23:10:53.867358181+00:00"
+}

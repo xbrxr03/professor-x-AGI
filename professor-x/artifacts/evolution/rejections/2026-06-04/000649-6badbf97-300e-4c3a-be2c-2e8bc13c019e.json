@@ -1,0 +1,32 @@
+{
+  "generated_at": "2026-06-04T00:06:49.931005600+00:00",
+  "artifact_id": "6badbf97-300e-4c3a-be2c-2e8bc13c019e",
+  "node_id": null,
+  "status": "Rejected",
+  "target_component": "ToolDescription(\"DHE\")",
+  "motivation": "Explicitly defining lever=3 in DHE's description ensures parameter compatibility with failure-prone layers.",
+  "manifest": {
+    "evidence_cited": [],
+    "root_cause": "[DHE:layer=4,lever=3] and [DHE:layer=0,lever=3] failures stem from ambiguous tool parameter handling.",
+    "fix_description": "```toml  \n[tool_description]  \nname = \"DHE\"  \npurpose = \"Data Handling Engine for layered processing with leveraged resource allocation\"  \nparameters = { layer: \"int\", lever: \"int\" }  \nconstraints = { \"layer >= 0\", \"lever >= 3\" }  \n```",
+    "predicted_fixes": [
+      "Layered DHE operations with lever=3 (e.g., network routing, data compression)"
+    ],
+    "predicted_regressions": [
+      "Tasks requiring lever < 3 or unregistered layer parameters"
+    ],
+    "verification_status": "Rejected",
+    "verified_at": "2026-06-04T00:06:49.930959828Z"
+  },
+  "verification": {
+    "accepted": false,
+    "reason": "component ToolDescription(\"DHE\") is not autonomously mutable yet",
+    "checks": [
+      "reward_hacking_scan",
+      "sandbox_worktree"
+    ]
+  },
+  "analysis": "component ToolDescription(\"DHE\") is not autonomously mutable yet",
+  "diff_hash": "91027e036a2571def34bb26d08cf1cf802ce9d8b993880b7d35f299c194bf130",
+  "diff_bytes": 235
+}

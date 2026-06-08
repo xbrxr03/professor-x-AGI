@@ -1,5 +1,12 @@
 pub mod affect;
 pub mod autonomy_queue;
+pub mod causal_traces;
+pub mod computational_body;
+pub mod narrative;
+pub mod phi;
+pub mod pci;
+pub mod self_authored_tests;
+pub mod self_prediction;
 pub mod coding_sessions;
 pub mod coding_smoke;
 pub mod events;
@@ -22,6 +29,13 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tracing::info;
 
+use crate::embeddings::EmbeddingStore;
+use crate::memd::causal_traces::CausalTraceStore;
+use crate::memd::computational_body::ComputationalBodyStore;
+use crate::memd::narrative::NarrativeStore;
+use crate::memd::phi::PhiStore;
+use crate::memd::self_authored_tests::SelfAuthoredTestStore;
+use crate::memd::self_prediction::SelfPredictionStore;
 use crate::memd::affect::AffectStore;
 use crate::memd::episodic::EpisodicStore;
 use crate::memd::free_energy::FreeEnergyStore;
@@ -417,6 +431,119 @@ CREATE TABLE IF NOT EXISTS fed_records (
     recorded_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_fed_round ON fed_records(round);
+
+-- self_authored_tests: tests written by the Researcher to catch its own failure classes.
+-- The agent-authored benchmark — nobody specified these tasks, the agent discovered them.
+CREATE TABLE IF NOT EXISTS self_authored_tests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    origin_round INTEGER NOT NULL,
+    origin_layer INTEGER NOT NULL,
+    failure_pattern TEXT NOT NULL,
+    description TEXT NOT NULL,
+    evaluator TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT 'other',
+    times_run INTEGER NOT NULL DEFAULT 0,
+    times_passed INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    last_run_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_self_authored_last_run ON self_authored_tests(last_run_at);
+
+-- embeddings: dense vector store for semantic retrieval.
+-- Keyed by (source_table, source_id). Brute-force cosine at query time.
+-- Populated by Ollama nomic-embed-text (768-dim). Falls back to FTS5 if empty.
+CREATE TABLE IF NOT EXISTS embeddings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_table TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    vector BLOB NOT NULL,
+    UNIQUE(source_table, source_id)
+);
+CREATE INDEX IF NOT EXISTS idx_embeddings_table ON embeddings(source_table);
+
+-- causal_traces (Seed 2 — STDP): action sequences with timing relative to outcome.
+-- Learns causal chains, not correlations. Order and timing carry the signal.
+CREATE TABLE IF NOT EXISTS causal_traces (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    task_category TEXT NOT NULL,
+    actions TEXT NOT NULL,
+    outcome INTEGER NOT NULL,
+    outcome_score REAL NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_causal_traces_category ON causal_traces(task_category, created_at);
+
+-- computational_vitals (Seed 4 — interoception): the agent's "body" signals.
+-- Inference latency, token budget, evolution health. The substrate IS the body.
+CREATE TABLE IF NOT EXISTS computational_vitals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    round INTEGER NOT NULL,
+    inference_latency_ms REAL NOT NULL,
+    token_budget_used REAL NOT NULL,
+    memory_pressure REAL NOT NULL,
+    evolution_health REAL NOT NULL,
+    predicted_latency_ms REAL,
+    interoceptive_error REAL,
+    recorded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_vitals_session ON computational_vitals(session_id);
+
+-- narrative_episodes (Seed 6): the autobiographical self as a story.
+-- Each self-model update adds a connected chapter, not a flat description.
+CREATE TABLE IF NOT EXISTS narrative_episodes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    round INTEGER NOT NULL,
+    chapter TEXT NOT NULL,
+    inciting_incident TEXT NOT NULL,
+    turning_point TEXT NOT NULL,
+    lesson TEXT NOT NULL,
+    anticipated_arc TEXT NOT NULL,
+    recorded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_narrative_round ON narrative_episodes(round);
+
+-- self_predictions (Seed 7): the agent predicts its own behaviour before tasks.
+-- Per-dimension error tracks developing self-knowledge; persistent error = blind spot.
+CREATE TABLE IF NOT EXISTS self_predictions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    round INTEGER NOT NULL,
+    task_category TEXT NOT NULL,
+    expected_tools TEXT NOT NULL,
+    expected_steps INTEGER NOT NULL,
+    expected_success REAL NOT NULL,
+    expected_failure_mode TEXT,
+    tool_err REAL NOT NULL,
+    step_err REAL NOT NULL,
+    success_err REAL NOT NULL,
+    recorded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_self_pred_session ON self_predictions(session_id);
+
+-- phi_activations (IIT): which cognitive modules activated per decision.
+-- One row per task; activation_index packs the 7 module bits.
+CREATE TABLE IF NOT EXISTS phi_activations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    round INTEGER NOT NULL,
+    activation_index INTEGER NOT NULL,
+    active_count INTEGER NOT NULL,
+    recorded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_phi_activations_round ON phi_activations(round);
+
+-- phi_rounds (IIT): integrated information (total correlation) per round.
+-- The trajectory tests whether the system grows more unified as it evolves.
+CREATE TABLE IF NOT EXISTS phi_rounds (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    round INTEGER NOT NULL UNIQUE,
+    phi REAL NOT NULL,
+    n_decisions INTEGER NOT NULL,
+    mean_active_modules REAL NOT NULL,
+    recorded_at TEXT NOT NULL
+);
 "#;
 
 pub struct MemoryManager {
@@ -426,13 +553,26 @@ pub struct MemoryManager {
     pub episodic: EpisodicStore,
     pub semantic: SemanticStore,
     pub procedural: ProceduralStore,
-    /// IPE — Identity-Preserving Evolution. Stubs landed in the IPE
-    /// module stubs PR; the LLM update + prompt-injection wiring is
-    /// follow-up work.
     pub self_model: SelfModelStore,
     pub ics: IcsStore,
     pub affect: AffectStore,
     pub free_energy: FreeEnergyStore,
+    /// Dense vector store for semantic retrieval (nomic-embed-text, 768-dim).
+    /// Populated lazily at task write-time; falls back to FTS5 when empty.
+    pub embeddings: EmbeddingStore,
+    /// Agent-authored benchmark: tests the Researcher writes to catch its own failure classes.
+    pub self_authored_tests: SelfAuthoredTestStore,
+    /// Seed 2 (STDP): causal action-sequence traces with timing.
+    pub causal_traces: CausalTraceStore,
+    /// Seed 4 (interoception): the agent's computational "body" signals.
+    pub computational_body: ComputationalBodyStore,
+    /// Seed 6 (narrative self): the autobiographical story, chapter by chapter.
+    pub narrative: NarrativeStore,
+    /// Seed 7 (predictive self-model): the agent's predictions about itself.
+    pub self_prediction: SelfPredictionStore,
+    /// IIT: integrated information (phi) — module co-activation per decision,
+    /// total correlation per round. Tests whether the system grows more unified.
+    pub phi: PhiStore,
 }
 
 impl MemoryManager {
@@ -514,6 +654,13 @@ impl MemoryManager {
             ics: IcsStore::new(Arc::clone(&db)),
             affect: AffectStore::new(Arc::clone(&db)),
             free_energy: FreeEnergyStore::new(Arc::clone(&db)),
+            embeddings: EmbeddingStore::new(Arc::clone(&db)),
+            self_authored_tests: SelfAuthoredTestStore::new(Arc::clone(&db)),
+            causal_traces: CausalTraceStore::new(Arc::clone(&db)),
+            computational_body: ComputationalBodyStore::new(Arc::clone(&db)),
+            narrative: NarrativeStore::new(Arc::clone(&db)),
+            self_prediction: SelfPredictionStore::new(Arc::clone(&db)),
+            phi: PhiStore::new(Arc::clone(&db)),
             db,
         })
     }

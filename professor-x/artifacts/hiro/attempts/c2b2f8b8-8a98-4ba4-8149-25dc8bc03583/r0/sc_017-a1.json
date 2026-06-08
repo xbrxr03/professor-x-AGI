@@ -1,0 +1,13 @@
+{
+  "run_id": "c2b2f8b8-8a98-4ba4-8149-25dc8bc03583",
+  "round": 0,
+  "task_id": "sc_017",
+  "category": "self_correction",
+  "attempt": 1,
+  "passed": false,
+  "failure_reason": "**What went wrong:** I failed to transition from procedural to semantic memory after repeated failures in procedural searches, violating the task's layered protocol.  \n**Fix:** Next time, after exhausting procedural searches, I will immediately check semantic memory, then episodic if needed, before writing the summary. I will avoid redundant procedural checks and strictly follow the layered search sequence.",
+  "output_hash": "a0eaefdf31b9c63bab6dea5df9da486b4cf4514983ba80dca0d0659c921fdb1e",
+  "duration_ms": 56352,
+  "harness_commit": "b626fb56c06426e1bc365b33396e40ba715f50f2",
+  "recorded_at": "2026-06-03T21:04:57.047060783Z"
+}

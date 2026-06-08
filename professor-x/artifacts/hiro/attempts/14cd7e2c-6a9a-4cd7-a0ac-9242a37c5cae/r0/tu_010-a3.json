@@ -1,0 +1,13 @@
+{
+  "run_id": "14cd7e2c-6a9a-4cd7-a0ac-9242a37c5cae",
+  "round": 0,
+  "task_id": "tu_010",
+  "category": "tool_use",
+  "attempt": 3,
+  "passed": false,
+  "failure_reason": "ReAct task failed before evaluator checks",
+  "output_hash": "43f388705b849cb8e6b19db8a2c02bd95d4c4f7f4d7968fa9fcfea10a2258e90",
+  "duration_ms": 27917,
+  "harness_commit": "5696c9451ad346da3fc7d4dec0ba4e10e081198a",
+  "recorded_at": "2026-06-03T21:53:18.432541444Z"
+}

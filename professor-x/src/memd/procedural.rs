@@ -173,6 +173,42 @@ impl ProceduralStore {
         Ok(n > 0)
     }
 
+    /// Ratchet-style skill retirement (arXiv:2605.22148).
+    ///
+    /// Marks skills as `verified = false` when their EvolveR quality score
+    /// falls below `threshold` after at least `min_uses` invocations.
+    /// Returns the names of skills that were retired.
+    ///
+    /// Soft-retire (not delete) preserves history and allows a skill to be
+    /// re-verified if it improves. Without retirement: +0.0pp over the
+    /// no-skill baseline. With it: +0.328pp (Ratchet paper Table 2).
+    ///
+    /// Suggested defaults: `min_uses = 5, threshold = 0.30`.
+    pub fn retire_low_quality(&self, min_uses: u32, threshold: f32) -> Result<Vec<String>> {
+        let db = self.db.lock().unwrap();
+        let mut stmt = db.prepare(
+            "SELECT name FROM procedural
+             WHERE verified = 1
+               AND times_used >= ?1
+               AND (CAST(times_succeeded + 1 AS REAL) / CAST(times_used + 2 AS REAL)) < ?2",
+        )?;
+        let names: Vec<String> = stmt
+            .query_map(params![min_uses as i64, threshold as f64], |row| {
+                row.get(0)
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        for name in &names {
+            db.execute(
+                "UPDATE procedural SET verified = 0 WHERE name = ?1",
+                params![name],
+            )?;
+        }
+
+        Ok(names)
+    }
+
     pub fn delete(&self, name: &str) -> Result<()> {
         let db = self.db.lock().unwrap();
         db.execute("DELETE FROM procedural WHERE name = ?1", params![name])?;
@@ -276,6 +312,53 @@ mod tests {
         seed(&store, "px-experiment-runner");
         assert!(store.is_skill("px-experiment-runner").unwrap());
         assert!(!store.is_skill("fs.read").unwrap());
+    }
+
+    #[test]
+    fn retire_low_quality_soft_retires_failing_skills() {
+        let store = fresh_store();
+        seed(&store, "good");
+        seed(&store, "bad");
+        // Mark both as verified
+        store.record_outcome("good", true).unwrap();
+        store.record_outcome("good", true).unwrap();
+        store.record_outcome("good", true).unwrap();
+        store.record_outcome("good", true).unwrap();
+        store.record_outcome("good", true).unwrap();
+        // bad: 5 uses, 0 successes → quality = 1/7 ≈ 0.14
+        for _ in 0..5 {
+            store.record_outcome("bad", false).unwrap();
+        }
+        // Manually mark both verified
+        {
+            let db = store.db.lock().unwrap();
+            db.execute("UPDATE procedural SET verified = 1", []).unwrap();
+        }
+
+        let retired = store.retire_low_quality(5, 0.30).unwrap();
+        assert_eq!(retired, vec!["bad".to_string()]);
+
+        // "bad" is now unverified; "good" stays verified
+        let still_good = store.get_by_name("good").unwrap().unwrap();
+        assert!(still_good.verified);
+        let now_retired = store.get_by_name("bad").unwrap().unwrap();
+        assert!(!now_retired.verified);
+    }
+
+    #[test]
+    fn retire_low_quality_respects_min_uses() {
+        let store = fresh_store();
+        seed(&store, "newskill");
+        // Only 2 uses — below min_uses=5, should NOT be retired even if quality is low
+        store.record_outcome("newskill", false).unwrap();
+        store.record_outcome("newskill", false).unwrap();
+        {
+            let db = store.db.lock().unwrap();
+            db.execute("UPDATE procedural SET verified = 1", []).unwrap();
+        }
+
+        let retired = store.retire_low_quality(5, 0.30).unwrap();
+        assert!(retired.is_empty());
     }
 }
 

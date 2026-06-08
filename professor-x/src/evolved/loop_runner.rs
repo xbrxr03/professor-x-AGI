@@ -18,12 +18,14 @@ use tracing::{info, warn};
 
 use crate::evolved::analyzer::Analyzer;
 use crate::evolved::cognition_base::CognitionStore;
+use crate::memd::self_authored_tests::SelfAuthoredTest;
 use crate::memd::metacognitive::{MetacognitiveEntry, MetacognitiveStore};
 use crate::evolved::proposer::{
     ChangeManifest, EvolutionNode, HarnessComponent, NodeDatabase, VerificationStatus,
 };
 use crate::evolved::tracker::OutcomeTracker;
 use crate::memd::events::EventStore;
+use crate::memd::free_energy::{compute_fed, FedRecord};
 use crate::memd::MemoryManager;
 use crate::ollama::{ChatMessage, ModelOptions, OllamaClient};
 
@@ -297,30 +299,129 @@ async fn verify_diff_inside_worktree(worktree: &Path, diff: &str) -> Result<Sand
     })
 }
 
+/// Whether a proposal's component can be applied autonomously by the Engineer.
+/// Mirrors the match in `apply_node_change_at`. ToolDescription, ProceduralMemory
+/// and Middleware are not yet autonomously mutable, so proposals targeting them
+/// are dropped before the tournament (they would otherwise win and no-op).
+fn is_autonomously_applyable(component: &HarnessComponent) -> bool {
+    matches!(
+        component,
+        HarnessComponent::SystemPrompt
+            | HarnessComponent::HarnessConfig
+            | HarnessComponent::SkillDefinition(_)
+    )
+}
+
 fn apply_node_change_at(root: &Path, node: &EvolutionNode) -> Result<bool> {
     match &node.target_component {
         HarnessComponent::SystemPrompt => {
             let path = component_relative_path(root, node)
                 .unwrap_or_else(|| PathBuf::from("personas/professor_x.md"));
-            write_workspace_file(root, &path, &sanitize_generated_content(&node.diff))?;
+            // ADDITIVE evolution. The persona grows by accretion, never by
+            // overwrite — exactly how a self-concept actually develops (you add
+            // experience, you don't wipe and rewrite who you are). This also
+            // makes identity destruction structurally impossible: the original
+            // is always retained. The 8B model kept trying to "replace" the
+            // whole persona with a short stub; appending instead of overwriting
+            // turns that failure mode into a safe, useful accretion.
+            let addition = sanitize_generated_content(&node.diff);
+            if addition.trim().len() < 15 {
+                anyhow::bail!("system-prompt addition too short to be meaningful");
+            }
+            let target = root.join(&path);
+            let existing = std::fs::read_to_string(&target).unwrap_or_default();
+            // Avoid unbounded growth: keep at most the last 8 evolved sections.
+            let trimmed = trim_evolved_sections(&existing, 8);
+            let stamp = chrono::Utc::now().format("%Y-%m-%d %H:%M");
+            let combined = format!(
+                "{}\n\n## Evolved guidance ({stamp})\n{}\n",
+                trimmed.trim_end(),
+                addition.trim()
+            );
+            write_workspace_file(root, &path, &combined)?;
             Ok(true)
         }
         HarnessComponent::HarnessConfig => {
             let path = component_relative_path(root, node)
                 .unwrap_or_else(|| PathBuf::from("config/hardware.toml"));
-            write_workspace_file(root, &path, &sanitize_generated_content(&node.diff))?;
+            let content = sanitize_generated_content(&node.diff);
+            preservation_guard(root, &path, &content, 0.5, &[])?;
+            write_workspace_file(root, &path, &content)?;
             Ok(true)
         }
         HarnessComponent::SkillDefinition(name) => {
             let path = component_relative_path(root, node)
                 .unwrap_or_else(|| PathBuf::from("skills").join(format!("{name}.md")));
-            write_workspace_file(root, &path, &sanitize_generated_content(&node.diff))?;
+            let content = sanitize_generated_content(&node.diff);
+            // Existing skills may be revised but not gutted; new skills are free.
+            preservation_guard(root, &path, &content, 0.4, &[])?;
+            write_workspace_file(root, &path, &content)?;
             Ok(true)
         }
         HarnessComponent::ToolDescription(_) => Ok(false),
         HarnessComponent::ProceduralMemory => Ok(false),
         HarnessComponent::Middleware => Ok(false),
     }
+}
+
+/// Keep at most `max` "## Evolved guidance" sections in the persona so it grows
+/// bounded. The original persona (everything before the first evolved section)
+/// is always preserved in full; only the oldest evolved sections are dropped.
+fn trim_evolved_sections(content: &str, max: usize) -> String {
+    const MARKER: &str = "## Evolved guidance";
+    let mut parts: Vec<&str> = content.split(MARKER).collect();
+    // parts[0] = original persona; parts[1..] = evolved sections (sans marker)
+    if parts.len().saturating_sub(1) <= max {
+        return content.to_string();
+    }
+    let base = parts.remove(0);
+    let keep: Vec<&str> = parts.iter().rev().take(max).rev().cloned().collect();
+    let mut out = base.trim_end().to_string();
+    for sec in keep {
+        out.push_str("\n\n");
+        out.push_str(MARKER);
+        out.push_str(sec.trim_end());
+    }
+    out
+}
+
+/// Refuse a destructive overwrite. When the target file already exists, the
+/// replacement must keep at least `min_ratio` of its length and retain every
+/// required anchor substring. New files (no existing target) are unconstrained.
+/// This is the active identity/content gate the first evolution proved necessary.
+fn preservation_guard(
+    root: &Path,
+    relative: &Path,
+    new_content: &str,
+    min_ratio: f32,
+    required_anchors: &[&str],
+) -> Result<()> {
+    let path = root.join(relative);
+    let Ok(existing) = std::fs::read_to_string(&path) else {
+        return Ok(()); // new file — nothing to preserve
+    };
+    let old_len = existing.trim().len().max(1);
+    let new_len = new_content.trim().len();
+    if (new_len as f32) < min_ratio * (old_len as f32) {
+        anyhow::bail!(
+            "preservation guard: replacement for {} is {} chars vs existing {} ({:.0}% < {:.0}% floor) — refusing to gut the file",
+            relative.display(),
+            new_len,
+            old_len,
+            100.0 * new_len as f32 / old_len as f32,
+            100.0 * min_ratio,
+        );
+    }
+    for anchor in required_anchors {
+        if !new_content.contains(anchor) {
+            anyhow::bail!(
+                "preservation guard: replacement for {} drops required identity anchor '{}' — refusing to erase identity",
+                relative.display(),
+                anchor,
+            );
+        }
+    }
+    Ok(())
 }
 
 fn write_workspace_file(root: &Path, relative: &Path, content: &str) -> Result<()> {
@@ -581,18 +682,18 @@ async fn git_head(repo_root: &Path) -> Result<String> {
 }
 
 async fn git_worktree_clean_at(repo_root: &Path) -> Result<bool> {
+    // The evolution cycle only requires that SOURCE / harness files are clean
+    // before it mutates them. The entire artifacts/ tree is runtime output
+    // (HIRO attempts, transcripts, commands, evolution reports, ...) and must
+    // not block autonomous mutation, so the whole tree is excluded.
     let out = tokio::process::Command::new("git")
         .args([
             "status",
             "--porcelain",
             "--",
             ".",
-            ":!professor-x/artifacts/events",
-            ":!professor-x/artifacts/evolution",
-            ":!professor-x/artifacts/work-loop",
-            ":!artifacts/events",
-            ":!artifacts/evolution",
-            ":!artifacts/work-loop",
+            ":!professor-x/artifacts",
+            ":!artifacts",
         ])
         .current_dir(repo_root)
         .output()
@@ -603,7 +704,15 @@ async fn git_worktree_clean_at(repo_root: &Path) -> Result<bool> {
             String::from_utf8_lossy(&out.stderr)
         );
     }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().is_empty())
+    // Only MODIFICATIONS TO TRACKED files block autonomous mutation — they'd
+    // corrupt the commit. Untracked files ("??") are almost always stray
+    // outputs a benchmark task wrote into the workspace; they are harmless to
+    // the mutation and must not block it. Count only non-"??" status lines.
+    let dirty_tracked = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("??"))
+        .any(|line| !line.trim().is_empty());
+    Ok(!dirty_tracked)
 }
 
 async fn cleanup_worktree(repo_root: &Path, worktree: &Path) -> Result<()> {
@@ -628,6 +737,32 @@ fn default_repo_root() -> PathBuf {
         if !dir.pop() {
             return std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         }
+    }
+}
+
+/// Drain accumulated FED samples from a `ReactLoop` and persist a `FedRecord`
+/// to `memory.free_energy` (H15 — Free Energy Delta trajectory).
+///
+/// Call once after each HIRO round or supervised-loop session completes.
+/// A noop if no samples have been collected (e.g. the loop ran no tasks).
+pub fn flush_fed_to_memory(
+    react: &crate::agentd::react::ReactLoop,
+    memory: &MemoryManager,
+    round: u32,
+    session_id: &str,
+) {
+    let samples = react.drain_fed_samples();
+    if samples.is_empty() {
+        return;
+    }
+    let (mae, n) = compute_fed(&samples);
+    let record = FedRecord::new(session_id, round, n as u32, mae);
+    if let Err(e) = memory.free_energy.append(&record) {
+        warn!("evolved: FED flush failed: {e}");
+    } else {
+        info!(
+            "evolved: FED flushed — round={round} n={n} mae={mae:.4}"
+        );
     }
 }
 
@@ -661,6 +796,25 @@ impl EvolvedLoop {
     pub async fn run_cycle(&self, tracker: &OutcomeTracker) -> Result<bool> {
         info!("evolved: starting Researcher/Engineer/Analyzer cycle");
 
+        // ── Ratchet: retire low-quality skills before proposing ──────────
+        // arXiv:2605.22148 — WITHOUT retire_skill: +0.0pp. WITH: +0.328pp.
+        match self.memory.procedural.retire_low_quality(5, 0.30) {
+            Ok(retired) if !retired.is_empty() => {
+                info!(
+                    "evolved: Ratchet retired {} low-quality skill(s): {:?}",
+                    retired.len(),
+                    retired
+                );
+                self.emit_event(
+                    "evolution.ratchet_retired",
+                    format!("Ratchet retired {} low-quality skill(s)", retired.len()),
+                    serde_json::json!({ "retired": retired }),
+                );
+            }
+            Ok(_) => {}
+            Err(e) => warn!("evolved: Ratchet retirement check failed: {e}"),
+        }
+
         // ── Researcher: diagnose and propose ─────────────────────────────
         let recent_outcomes = tracker.recent(20);
         if recent_outcomes.is_empty() {
@@ -678,12 +832,28 @@ impl EvolvedLoop {
         // Sample a node via UCB1 (ASI-Evolve)
         let candidates = self.node_db.sample_ucb1(3)?;
 
-        let proposal = self
-            .researcher_propose(&failure_patterns, &candidates, success_rate)
+        // Generate 3 proposals, run Elo tournament, commit winner
+        // (Co-Scientist pattern — arXiv:2502.18864)
+        let proposals = self
+            .researcher_propose_tournament(&failure_patterns, &candidates, success_rate)
             .await?;
-        let Some(mut node) = proposal else {
-            info!("evolved: Researcher produced no actionable proposal");
+        // Keep only proposals whose component can actually be applied
+        // autonomously (SystemPrompt / HarnessConfig / SkillDefinition). A
+        // ToolDescription / ProceduralMemory / Middleware winner is a no-op —
+        // filtering before the tournament guarantees the winner is applyable.
+        let proposals: Vec<EvolutionNode> = proposals
+            .into_iter()
+            .filter(|n| is_autonomously_applyable(&n.target_component))
+            .collect();
+        if proposals.is_empty() {
+            info!("evolved: no applyable proposals (all targeted non-mutable components)");
             return Ok(false);
+        }
+        let mut node = if proposals.len() == 1 {
+            info!("evolved: single applyable proposal — skipping tournament");
+            proposals.into_iter().next().unwrap()
+        } else {
+            self.elo_tournament(proposals).await?
         };
         let proposal_artifact = self.write_node_artifact(&node, "proposal")?;
         self.emit_event(
@@ -714,6 +884,43 @@ impl EvolvedLoop {
             );
             self.node_db.insert(&mut node)?;
             return Ok(false);
+        }
+
+        // ── Self-authored test: store alongside accepted proposals ───────────
+        // The Researcher included TEST_* fields in its output. Parse and persist
+        // so the agent-authored benchmark grows with every accepted evolution.
+        if node.status == crate::evolved::proposer::NodeStatus::Accepted {
+            let current_round = tracker.len() as u32;
+            let (layer, _lever) = parse_dhe_from_patterns(&failure_patterns);
+            let primary_pattern = failure_patterns.first().map(|s| s.as_str()).unwrap_or("unknown");
+            // We re-derive the test from the node's diff text (contains the full Researcher output)
+            if let Some(test) = Self::parse_self_authored_test(
+                &node.diff,
+                current_round,
+                layer,
+                primary_pattern,
+            ) {
+                match self.memory.self_authored_tests.insert(&test) {
+                    Ok(id) => {
+                        info!(
+                            "evolved: self-authored test #{id} written (round={current_round}, layer={layer}): {}",
+                            test.description.chars().take(80).collect::<String>()
+                        );
+                        self.emit_event(
+                            "evolution.test_authored",
+                            format!("self-authored test #{id} for layer {layer} failure"),
+                            serde_json::json!({
+                                "test_id": id,
+                                "origin_round": current_round,
+                                "origin_layer": layer,
+                                "description": test.description,
+                                "category": test.category,
+                            }),
+                        );
+                    }
+                    Err(e) => warn!("evolved: failed to store self-authored test: {e}"),
+                }
+            }
         }
 
         match node.status {
@@ -765,7 +972,210 @@ impl EvolvedLoop {
             node.id.unwrap_or(0),
             format!("{:?}", node.status)
         );
+
+        // ── Self-model update every 10 rounds (H14/H15) ──────────────────
+        let current_round = tracker.len() as u32;
+        if current_round > 0 && current_round % 10 == 0 {
+            self.maybe_update_self_model(current_round, tracker).await;
+        }
+
+        // ── Sleep consolidation (Seed 3 — CLS) ───────────────────────────
+        // The agent "sleeps" after each cycle: replay episodics, extract
+        // cross-task patterns, promote to semantic memory, decay stale traces.
+        match crate::evolved::sleep::consolidate(&self.memory, &self.ollama, current_round).await {
+            Ok(report) => self.emit_event(
+                "evolution.consolidated",
+                format!(
+                    "sleep consolidation: {} promoted, {} decayed",
+                    report.promoted_to_semantic, report.episodics_decayed
+                ),
+                serde_json::json!({
+                    "replayed": report.episodics_replayed,
+                    "patterns": report.patterns_extracted,
+                    "promoted": report.promoted_to_semantic,
+                    "decayed": report.episodics_decayed,
+                }),
+            ),
+            Err(e) => warn!("evolved: sleep consolidation failed: {e}"),
+        }
+
+        // ── Default Mode Network (Seed 5) ────────────────────────────────
+        // Between cycles, the agent wanders: free-associates across disparate
+        // memories for unexpected insight, and simulates its own near future.
+        // Insights become cognition items the Researcher draws on next cycle.
+        match crate::evolved::dmn::wander(&self.memory, &self.ollama, current_round).await {
+            Ok(report) => {
+                if report.insights_kept > 0 || report.simulations > 0 {
+                    self.emit_event(
+                        "evolution.dmn_wander",
+                        format!(
+                            "default mode: {} insight(s), {} simulation(s)",
+                            report.insights_kept, report.simulations
+                        ),
+                        serde_json::json!({
+                            "fragments": report.fragments_sampled,
+                            "insights": report.insights_kept,
+                            "simulations": report.simulations,
+                        }),
+                    );
+                }
+            }
+            Err(e) => warn!("evolved: default mode wander failed: {e}"),
+        }
+
         Ok(true)
+    }
+
+    /// Generate up to 3 distinct proposals, returning all that parse successfully.
+    /// Called in place of the old single-proposal `researcher_propose`.
+    async fn researcher_propose_tournament(
+        &self,
+        failure_patterns: &[String],
+        candidates: &[EvolutionNode],
+        success_rate: f32,
+    ) -> Result<Vec<EvolutionNode>> {
+        const N: usize = 3;
+        let mut proposals = Vec::with_capacity(N);
+
+        for i in 0..N {
+            // Steer each proposal toward a DIFFERENT applyable component. Without
+            // this the Researcher fixates on ToolDescription (not applyable), and
+            // every proposal gets filtered, yielding no change. Assigning a
+            // distinct applyable component per proposal guarantees the tournament
+            // always has real, applyable candidates.
+            let diversity_hint = match i {
+                0 => "Target COMPONENT: SystemPrompt. Improve the system prompt that guides every task — \
+                      add concrete guidance that addresses the failure patterns above.",
+                1 => "Target COMPONENT: SkillDefinition. Define a NEW reusable skill (a markdown SKILL file) \
+                      that captures the correct procedure for the failing task class.",
+                2 => "Target COMPONENT: HarnessConfig. Adjust a config setting (e.g. context budget, max steps) \
+                      that would reduce the failure patterns above.",
+                _ => "",
+            };
+            match self
+                .researcher_propose_with_hint(
+                    failure_patterns,
+                    candidates,
+                    success_rate,
+                    diversity_hint,
+                )
+                .await
+            {
+                Ok(Some(node)) => {
+                    info!(
+                        "evolved: proposal {}/{N} — {:?}: {}",
+                        i + 1,
+                        node.target_component,
+                        node.motivation.chars().take(60).collect::<String>()
+                    );
+                    proposals.push(node);
+                }
+                Ok(None) => info!("evolved: proposal {}/{N} — no actionable output", i + 1),
+                Err(e) => warn!("evolved: proposal {}/{N} failed: {e}", i + 1),
+            }
+        }
+
+        Ok(proposals)
+    }
+
+    /// Run Elo tournament: every pair compared once, winner has highest Elo.
+    /// K=32, initial rating=1200. Returns the winner node.
+    async fn elo_tournament(&self, mut proposals: Vec<EvolutionNode>) -> Result<EvolutionNode> {
+        let n = proposals.len();
+        let mut ratings = vec![1200.0f32; n];
+        const K: f32 = 32.0;
+
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let score = self
+                    .elo_compare(&proposals[i], &proposals[j])
+                    .await
+                    .unwrap_or(0.5); // tie on error
+
+                // Expected score for i against j
+                let exp_i = 1.0 / (1.0 + 10.0f32.powf((ratings[j] - ratings[i]) / 400.0));
+                let exp_j = 1.0 - exp_i;
+
+                ratings[i] += K * (score - exp_i);
+                ratings[j] += K * ((1.0 - score) - exp_j);
+            }
+        }
+
+        let winner_idx = ratings
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+
+        info!(
+            "evolved: Elo tournament — winner proposal {} (rating={:.0}) of {}",
+            winner_idx + 1,
+            ratings[winner_idx],
+            n
+        );
+        self.emit_event(
+            "evolution.elo_winner",
+            format!(
+                "Elo winner: proposal {} (rating={:.0})",
+                winner_idx + 1,
+                ratings[winner_idx]
+            ),
+            serde_json::json!({
+                "winner_idx": winner_idx,
+                "ratings": ratings,
+                "motivation": proposals[winner_idx].motivation,
+            }),
+        );
+
+        Ok(proposals.swap_remove(winner_idx))
+    }
+
+    /// Ask the LLM which of two proposals is better.
+    /// Returns 1.0 if A wins, 0.0 if B wins, 0.5 on tie/error.
+    async fn elo_compare(
+        &self,
+        a: &EvolutionNode,
+        b: &EvolutionNode,
+    ) -> Result<f32> {
+        let prompt = format!(
+            "Two harness improvement proposals are competing. \
+             Judge which is more likely to improve the agent's task success rate.\n\n\
+             Proposal A:\n  Component: {:?}\n  Motivation: {}\n  Root cause: {}\n\n\
+             Proposal B:\n  Component: {:?}\n  Motivation: {}\n  Root cause: {}\n\n\
+             Answer with exactly one word: A or B",
+            a.target_component,
+            a.motivation.chars().take(120).collect::<String>(),
+            a.manifest.root_cause.chars().take(120).collect::<String>(),
+            b.target_component,
+            b.motivation.chars().take(120).collect::<String>(),
+            b.manifest.root_cause.chars().take(120).collect::<String>(),
+        );
+
+        let resp = self
+            .ollama
+            .generate(
+                &prompt,
+                Some("You are a research judge. Be decisive."),
+                Some(ModelOptions {
+                    temperature: Some(0.1),
+                    num_ctx: Some(2048),
+                    top_p: Some(0.9),
+                    stop: None,
+                    think: Some(false),
+                }),
+            )
+            .await?;
+
+        let (_, answer) = resp.split_thinking();
+        let trimmed = answer.trim().to_uppercase();
+        Ok(if trimmed.starts_with('A') {
+            1.0
+        } else if trimmed.starts_with('B') {
+            0.0
+        } else {
+            0.5 // unclear → tie
+        })
     }
 
     async fn researcher_propose(
@@ -774,10 +1184,36 @@ impl EvolvedLoop {
         candidates: &[EvolutionNode],
         success_rate: f32,
     ) -> Result<Option<EvolutionNode>> {
-        // Retrieve top cognition items for context
-        let cognition_items = self
-            .cognition
-            .query_top_k("harness improvement failure", 5)?;
+        self.researcher_propose_with_hint(failure_patterns, candidates, success_rate, "")
+            .await
+    }
+
+    async fn researcher_propose_with_hint(
+        &self,
+        failure_patterns: &[String],
+        candidates: &[EvolutionNode],
+        success_rate: f32,
+        diversity_hint: &str,
+    ) -> Result<Option<EvolutionNode>> {
+        // Retrieve top cognition items — prefer semantic search, fallback to keyword
+        let query_text = format!(
+            "harness improvement {} failure",
+            failure_patterns.first().map(|s| s.as_str()).unwrap_or("unknown")
+        );
+        let cognition_items = if let Ok(vec) = self.ollama.embed(&query_text).await {
+            let emb_store = crate::embeddings::EmbeddingStore::new(Arc::clone(&self.memory.db));
+            let semantic = self
+                .cognition
+                .search_semantic(&emb_store, &vec, 5)
+                .unwrap_or_default();
+            if semantic.is_empty() {
+                self.cognition.query_top_k(&query_text, 5).unwrap_or_default()
+            } else {
+                semantic
+            }
+        } else {
+            self.cognition.query_top_k(&query_text, 5).unwrap_or_default()
+        };
         let cognition_context = cognition_items
             .iter()
             .map(|c| format!("- {}", c.content))
@@ -802,30 +1238,46 @@ impl EvolvedLoop {
                 .join("\n")
         };
 
+        let diversity_section = if diversity_hint.is_empty() {
+            String::new()
+        } else {
+            format!("\nInstruction: {diversity_hint}\n")
+        };
+
         let prompt = format!(
             "You are the Researcher in an autonomous self-improvement loop.\n\n\
              Current state:\n\
              - Success rate (last 20 tasks): {success_rate:.0}%\n\
              - Failure patterns: {}\n\n\
              Prior evolution nodes (UCB1 sampled):\n{candidates_text}\n\n\
-             Knowledge base:\n{cognition_context}\n\n\
-             Propose ONE specific harness improvement. The improvement must target one of:\n\
+             Knowledge base:\n{cognition_context}\n\
+             {diversity_section}\n\
+             Propose ONE specific harness improvement. It MUST target one of these\n\
+             three applyable components (any other component cannot be applied and\n\
+             will be discarded):\n\
              - SystemPrompt: the system prompt injected before every task\n\
-             - ToolDescription(name): a tool's description in the registry\n\
-             - SkillDefinition(name): a skill in skills/\n\
+             - SkillDefinition(name): a reusable skill in skills/ (new or revised)\n\
              - HarnessConfig: the config/hardware.toml settings\n\n\
-             Do NOT propose changes to:\n\
-             - policyd gate logic (requires human approval)\n\
-             - memd core internals (requires human approval)\n\n\
+             Do NOT propose ToolDescription changes (not applyable yet), nor changes\n\
+             to policyd gate logic or memd internals (require human approval).\n\n\
              Respond in this exact format:\n\
-             COMPONENT: <SystemPrompt|ToolDescription:<name>|SkillDefinition:<name>|HarnessConfig>\n\
+             COMPONENT: <SystemPrompt|SkillDefinition:<name>|HarnessConfig>\n\
              MOTIVATION: <one sentence why this change will help>\n\
              ROOT_CAUSE: <which failure mode this addresses>\n\
              FIX:\n\
-             <complete replacement file content for SystemPrompt, HarnessConfig, or SkillDefinition. \
-             For SkillDefinition, write a complete markdown skill with '# <name>', Purpose, Workflow, and Output Contract.>\n\
+             <For SystemPrompt: write ONLY the new guidance to ADD (2-5 sentences of \
+             concrete instruction addressing the failure pattern) — do NOT rewrite or \
+             restate your identity; it is preserved automatically and your addition is \
+             appended. For HarnessConfig: the complete replacement config file. For \
+             SkillDefinition: a complete markdown skill with '# <name>', Purpose, \
+             Workflow, and Output Contract.>\n\
              PREDICTS_FIX: <what task type should improve>\n\
-             PREDICTS_REGRESSION: <what might get worse, or 'none'>",
+             PREDICTS_REGRESSION: <what might get worse, or 'none'>\n\n\
+             Also propose a NEW TEST that would catch the failure class you just diagnosed.\n\
+             A test is a concrete task description an agent could attempt, plus a clear pass criterion.\n\
+             TEST_DESCRIPTION: <a specific task the agent should complete to demonstrate the fix worked>\n\
+             TEST_EVALUATOR: <how to tell if the agent passed: what output or state counts as success>\n\
+             TEST_CATEGORY: <tool_use|planning|self_correction>",
             failure_patterns.join(", "),
         );
 
@@ -877,6 +1329,30 @@ impl EvolvedLoop {
         Ok(Some(EvolutionNode::new(
             motivation, component, fix, manifest,
         )))
+    }
+
+    /// Parse self-authored test fields from Researcher output.
+    fn parse_self_authored_test(
+        text: &str,
+        origin_round: u32,
+        origin_layer: u8,
+        failure_pattern: &str,
+    ) -> Option<SelfAuthoredTest> {
+        let description = extract_field(text, "TEST_DESCRIPTION")?;
+        let evaluator = extract_field(text, "TEST_EVALUATOR")?;
+        if description.trim().is_empty() || evaluator.trim().is_empty() {
+            return None;
+        }
+        let category = extract_field(text, "TEST_CATEGORY")
+            .unwrap_or_else(|| "other".to_string());
+        Some(SelfAuthoredTest::new(
+            origin_round,
+            origin_layer,
+            failure_pattern,
+            description,
+            evaluator,
+            category,
+        ))
     }
 
     async fn verify_then_apply(
@@ -953,12 +1429,21 @@ impl EvolvedLoop {
         node.manifest.verification_status = VerificationStatus::Confirmed;
         node.manifest.verified_at = Some(Utc::now());
 
-        // Write lesson to cognition base
+        // Write lesson to cognition base and embed it for future semantic retrieval
         if !lesson.is_empty() {
             let node_id = node.id.unwrap_or(0) as u64;
             let item = Analyzer::to_cognition_item(&lesson, node_id);
             self.cognition.insert(&item)?;
             info!("evolved: Analyzer wrote new cognition item");
+            let emb_store = crate::embeddings::EmbeddingStore::new(Arc::clone(&self.memory.db));
+            crate::embeddings::embed_and_store(
+                &self.ollama,
+                &emb_store,
+                "cognition",
+                &item.id.to_string(),
+                &item.content,
+            )
+            .await;
         }
 
         // Record DHE attribution into the metacognitive store. The entry is
@@ -996,6 +1481,206 @@ impl EvolvedLoop {
 
     async fn git_worktree_clean(&self) -> Result<bool> {
         git_worktree_clean_at(&default_repo_root()).await
+    }
+
+    /// Update the Strange Loop self-model snapshot via LLM (H14).
+    /// Called every 10 rounds from run_cycle. Skips silently on Ollama error
+    /// so a transient failure never blocks the evolution cycle.
+    async fn maybe_update_self_model(&self, round: u32, tracker: &OutcomeTracker) {
+        let prior = match self.memory.self_model.latest() {
+            Ok(Some(snap)) => snap,
+            Ok(None) => {
+                info!("evolved: self-model has no baseline snapshot; skipping update at round {round}");
+                return;
+            }
+            Err(e) => {
+                warn!("evolved: failed to load self-model snapshot: {e}");
+                return;
+            }
+        };
+
+        let success_rate = tracker.success_rate(20);
+        let failure_patterns = tracker.failure_patterns(20);
+        let behavior_summary = format!(
+            "success rate over the last 20 tasks: {:.0}%. \
+             Main failure patterns: {}.",
+            success_rate * 100.0,
+            if failure_patterns.is_empty() {
+                "none observed".to_string()
+            } else {
+                failure_patterns.join(", ")
+            }
+        );
+
+        let prompt = crate::memd::self_model::SelfModelStore::build_update_prompt(
+            &prior.text,
+            round,
+            &behavior_summary,
+        );
+
+        let resp = match self
+            .ollama
+            .generate(
+                &prompt,
+                Some("You are Professor X. Update your self-description concisely."),
+                Some(ModelOptions::for_reflection()),
+            )
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("evolved: self-model update LLM call failed: {e}");
+                return;
+            }
+        };
+
+        let (_, text) = resp.split_thinking();
+        let text = text.trim().to_string();
+        if text.is_empty() {
+            warn!("evolved: self-model update response was empty at round {round}");
+            return;
+        }
+
+        match self.memory.self_model.update_with_text(round, text) {
+            Ok(snap) => {
+                info!(
+                    "evolved: self-model updated at round {round} (id={:?})",
+                    snap.id
+                );
+                self.emit_event(
+                    "evolution.self_model_updated",
+                    format!("self-model updated at round {round}"),
+                    serde_json::json!({ "round": round, "snapshot_id": snap.id }),
+                );
+
+                // ── ICS: measure drift from round-0 baseline (H14) ──────────
+                self.compute_and_record_ics(round, &snap.text).await;
+
+                // ── Narrative self (Seed 6): add the next chapter ───────────
+                self.append_narrative_chapter(round, &behavior_summary).await;
+            }
+            Err(e) => warn!("evolved: failed to persist self-model update: {e}"),
+        }
+    }
+
+    /// Seed 6 — narrative self: every self-model update also adds a chapter to
+    /// Professor X's autobiographical story, connected to prior chapters by
+    /// theme. The agent checks whether its last anticipated arc came true (FED
+    /// at the narrative level) and projects where the story heads next.
+    async fn append_narrative_chapter(&self, round: u32, behavior_summary: &str) {
+        let prior_recap = self
+            .memory
+            .narrative
+            .story_recap(5)
+            .unwrap_or_default();
+        let prior_arc = self
+            .memory
+            .narrative
+            .latest()
+            .ok()
+            .flatten()
+            .map(|e| e.anticipated_arc)
+            .unwrap_or_default();
+
+        let prompt = crate::memd::narrative::build_narrative_prompt(
+            &prior_recap,
+            &prior_arc,
+            round,
+            behavior_summary,
+        );
+
+        let resp = match self
+            .ollama
+            .generate(
+                &prompt,
+                Some("You are Professor X narrating your own research journey. Be honest and reflective."),
+                Some(ModelOptions::for_reflection()),
+            )
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("evolved: narrative chapter LLM call failed: {e}");
+                return;
+            }
+        };
+
+        let (_, text) = resp.split_thinking();
+        match crate::memd::narrative::parse_episode(&text, round) {
+            Some(episode) => match self.memory.narrative.append(&episode) {
+                Ok(id) => {
+                    info!(
+                        "evolved: narrative chapter {round} added — '{}'",
+                        episode.chapter
+                    );
+                    self.emit_event(
+                        "evolution.narrative_chapter",
+                        format!("new life-story chapter at round {round}: {}", episode.chapter),
+                        serde_json::json!({
+                            "round": round,
+                            "episode_id": id,
+                            "chapter": episode.chapter,
+                            "anticipated_arc": episode.anticipated_arc,
+                        }),
+                    );
+                }
+                Err(e) => warn!("evolved: failed to persist narrative chapter: {e}"),
+            },
+            None => warn!("evolved: narrative response unparseable at round {round}"),
+        }
+    }
+
+    /// Embed the new snapshot and the round-0 baseline, compute cosine ICS,
+    /// persist the record, and warn at the alert (0.70) and halt (0.50) thresholds.
+    async fn compute_and_record_ics(&self, round: u32, new_text: &str) {
+        let baseline = match self.memory.self_model.at_round(0) {
+            Ok(Some(b)) => b,
+            Ok(None) => {
+                warn!("evolved: ICS skipped — no round-0 baseline snapshot");
+                return;
+            }
+            Err(e) => {
+                warn!("evolved: ICS skipped — baseline load failed: {e}");
+                return;
+            }
+        };
+
+        let (vec_new, vec_base) = match tokio::try_join!(
+            self.ollama.embed(new_text),
+            self.ollama.embed(&baseline.text),
+        ) {
+            Ok(pair) => pair,
+            Err(e) => {
+                warn!("evolved: ICS skipped — embedding failed: {e}");
+                return;
+            }
+        };
+
+        let score = crate::memd::ics::compute_ics(&vec_new, &vec_base);
+        let record = crate::memd::ics::IcsRecord::new(0, round, score);
+
+        match self.memory.ics.append(&record) {
+            Ok(_) => {
+                info!("evolved: ICS round {round} vs baseline = {score:.3}");
+                if score < 0.50 {
+                    warn!(
+                        "evolved: ICS BELOW HALT THRESHOLD (0.50) at round {round}: {score:.3} \
+                         — identity drift is severe"
+                    );
+                } else if score < 0.70 {
+                    warn!(
+                        "evolved: ICS below alert threshold (0.70) at round {round}: {score:.3}"
+                    );
+                }
+                self.emit_event(
+                    "evolution.ics_recorded",
+                    format!("ICS at round {round} = {score:.3}"),
+                    serde_json::json!({ "round": round, "ics": score,
+                        "alert": score < 0.70, "halt": score < 0.50 }),
+                );
+            }
+            Err(e) => warn!("evolved: ICS record write failed: {e}"),
+        }
     }
 
     async fn commit_node(&self, node: &EvolutionNode) -> Result<Option<String>> {

@@ -1,0 +1,10 @@
+{
+  "command": "df -h / | grep -oP '([0-9]+)[a-zA-Z]+'",
+  "exit_code": 0,
+  "success": true,
+  "stdout": "469G\n38G\n408G\n",
+  "stderr": "",
+  "stdout_bytes": 14,
+  "stderr_bytes": 0,
+  "recorded_at": "2026-06-03T21:43:36.633001969+00:00"
+}

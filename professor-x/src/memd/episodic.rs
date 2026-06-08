@@ -74,6 +74,35 @@ impl EpisodicStore {
         rows.map(|r| r.map_err(Into::into)).collect()
     }
 
+    /// Semantic search via pre-computed embeddings.
+    /// Returns entries sorted by cosine similarity to `query_vec`.
+    /// Falls back to empty if no embeddings are stored yet.
+    pub fn search_semantic(
+        &self,
+        emb_store: &crate::embeddings::EmbeddingStore,
+        query_vec: &[f32],
+        limit: usize,
+    ) -> Result<Vec<EpisodicEntry>> {
+        let top = emb_store.top_k("episodic", query_vec, limit)?;
+        if top.is_empty() {
+            return Ok(Vec::new());
+        }
+        let db = self.db.lock().unwrap();
+        let mut results = Vec::new();
+        for (source_id, _sim) in top {
+            let mut stmt = db.prepare(
+                "SELECT id, session_id, task_id, timestamp, content,
+                        keywords, importance, embedding_id, cluster_id
+                 FROM episodic WHERE id = ?1",
+            )?;
+            let mut rows = stmt.query_map(params![source_id], parse_row)?;
+            if let Some(row) = rows.next() {
+                results.push(row?);
+            }
+        }
+        Ok(results)
+    }
+
     pub fn recent(&self, n: usize) -> Result<Vec<EpisodicEntry>> {
         let db = self.db.lock().unwrap();
         let mut stmt = db.prepare(

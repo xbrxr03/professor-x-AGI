@@ -66,6 +66,7 @@ impl ToolRegistry {
             ("shell.restricted", "Run a sandboxed shell command",         60, 60_000),
             ("patch.apply",      "Check or apply a unified diff patch",   62, 30_000),
             ("shell.elevated",   "Run a privileged shell command",        90, 60_000),
+            ("repo.map",         "Ranked map of the codebase's key files and symbols", 10, 20_000),
             ("memory.read",      "Query Professor X memory layers",       5,  5_000),
             ("memory.write",     "Write an entry to Professor X memory",  10, 5_000),
             ("ollama.complete",  "Call the local Ollama LLM",             15, 120_000),

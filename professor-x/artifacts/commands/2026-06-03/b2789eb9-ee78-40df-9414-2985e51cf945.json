@@ -1,0 +1,10 @@
+{
+  "command": "nvidia-smi --query-gpu=name,memory.total,utilization.gpu --format=csv,noheader",
+  "exit_code": 18,
+  "success": false,
+  "stdout": "Failed to initialize NVML: Driver/library version mismatch\nNVML library version: 595.71\n",
+  "stderr": "",
+  "stdout_bytes": 88,
+  "stderr_bytes": 0,
+  "recorded_at": "2026-06-03T20:57:13.483997380+00:00"
+}

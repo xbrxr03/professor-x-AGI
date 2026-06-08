@@ -1,0 +1,13 @@
+{
+  "run_id": "14cd7e2c-6a9a-4cd7-a0ac-9242a37c5cae",
+  "round": 0,
+  "task_id": "pl_005",
+  "category": "planning",
+  "attempt": 1,
+  "passed": true,
+  "failure_reason": null,
+  "output_hash": "3168124f6a959876459d3fb686c2f0656645fbc6224b53b2ba3de67cea24301b",
+  "duration_ms": 12482,
+  "harness_commit": "5696c9451ad346da3fc7d4dec0ba4e10e081198a",
+  "recorded_at": "2026-06-03T22:14:36.876170615Z"
+}

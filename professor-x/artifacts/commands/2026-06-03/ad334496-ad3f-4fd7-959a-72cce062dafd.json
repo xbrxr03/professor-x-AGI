@@ -1,0 +1,10 @@
+{
+  "command": "find brain/ -type f -name \"*.rs\" | wc -l",
+  "exit_code": 0,
+  "success": true,
+  "stdout": "0\n",
+  "stderr": "",
+  "stdout_bytes": 2,
+  "stderr_bytes": 0,
+  "recorded_at": "2026-06-03T23:10:43.243419492+00:00"
+}

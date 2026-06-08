@@ -1,0 +1,10 @@
+{
+  "command": "uname -r",
+  "exit_code": 0,
+  "success": true,
+  "stdout": "6.17.0-29-generic\n",
+  "stderr": "",
+  "stdout_bytes": 18,
+  "stderr_bytes": 0,
+  "recorded_at": "2026-06-03T18:39:20.868119220+00:00"
+}

@@ -1,0 +1,10 @@
+{
+  "command": "find /home/abrar/professor-x-AGI -type d -name \"src\"",
+  "exit_code": 0,
+  "success": true,
+  "stdout": "/home/abrar/professor-x-AGI/_refs/clawos/dashboard/frontend/src\n/home/abrar/professor-x-AGI/_refs/clawos/desktop/command-center/src-tauri/src\n/home/abrar/professor-x-AGI/_refs/AgentEvolver/research/CuES/src\n/home/abrar/professor-x-AGI/_refs/AI-Research-SKILLs/packages/ai-research-skills/src\n/home/abrar/professor-x-AGI/_refs/AI-Research-SKILLs/video-promo/ai-research-skills-promo/src\n/home/abrar/professor-x-AGI/_refs/hermes-agent/web/src\n/home/abrar/professor-x-AGI/_refs/hermes-agent/website/src\n/home/abrar/professor-x-AGI/_refs/hermes-agent/ui-tui/packages/hermes-ink/src\n/home/abrar/professor-x-AGI/_refs/hermes-agent/ui-tui/src\n/home/abrar/professor-x-AGI/professor-x/src\n",
+  "stderr": "",
+  "stdout_bytes": 680,
+  "stderr_bytes": 0,
+  "recorded_at": "2026-06-03T22:12:00.127353079+00:00"
+}

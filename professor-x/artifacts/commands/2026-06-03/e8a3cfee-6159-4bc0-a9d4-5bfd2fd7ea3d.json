@@ -1,0 +1,10 @@
+{
+  "command": "cat /proc/version",
+  "exit_code": 0,
+  "success": true,
+  "stdout": "Linux version 6.17.0-29-generic (buildd@lcy02-amd64-048) (x86_64-linux-gnu-gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, GNU ld (GNU Binutils for Ubuntu) 2.42) #29~24.04.1-Ubuntu SMP PREEMPT_DYNAMIC Mon May 11 10:30:58 UTC 2\n",
+  "stderr": "",
+  "stdout_bytes": 227,
+  "stderr_bytes": 0,
+  "recorded_at": "2026-06-03T22:47:35.128906620+00:00"
+}

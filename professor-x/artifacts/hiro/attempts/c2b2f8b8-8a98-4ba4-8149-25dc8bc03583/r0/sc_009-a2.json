@@ -1,0 +1,13 @@
+{
+  "run_id": "c2b2f8b8-8a98-4ba4-8149-25dc8bc03583",
+  "round": 0,
+  "task_id": "sc_009",
+  "category": "self_correction",
+  "attempt": 2,
+  "passed": false,
+  "failure_reason": "policy denied: git subcommand is not allowed in shell.restricted",
+  "output_hash": "0a04e0f9aa97e6afc5e9c2a20a9f7acdee1a784e20cb9bfeff69028433abb30d",
+  "duration_ms": 17672,
+  "harness_commit": "b626fb56c06426e1bc365b33396e40ba715f50f2",
+  "recorded_at": "2026-06-03T20:51:54.223768627Z"
+}

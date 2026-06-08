@@ -1,0 +1,10 @@
+{
+  "command": "uname -a",
+  "exit_code": 0,
+  "success": true,
+  "stdout": "Linux ab-ubuntu 6.17.0-29-generic #29~24.04.1-Ubuntu SMP PREEMPT_DYNAMIC Mon May 11 10:30:58 UTC 2 x86_64 x86_64 x86_64 GNU/Linux\n",
+  "stderr": "",
+  "stdout_bytes": 130,
+  "stderr_bytes": 0,
+  "recorded_at": "2026-06-03T22:46:45.765510664+00:00"
+}

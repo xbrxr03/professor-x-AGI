@@ -1,0 +1,10 @@
+{
+  "command": "df -k /",
+  "exit_code": 0,
+  "success": true,
+  "stdout": "Filesystem     1K-blocks     Used Available Use% Mounted on\n/dev/sda2      491131800 39207628 426902580   9% /\n",
+  "stderr": "",
+  "stdout_bytes": 111,
+  "stderr_bytes": 0,
+  "recorded_at": "2026-06-03T22:48:39.350153395+00:00"
+}

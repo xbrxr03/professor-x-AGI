@@ -1,0 +1,13 @@
+{
+  "run_id": "14cd7e2c-6a9a-4cd7-a0ac-9242a37c5cae",
+  "round": 0,
+  "task_id": "tu_010",
+  "category": "tool_use",
+  "attempt": 1,
+  "passed": false,
+  "failure_reason": "No such file or directory (os error 2)",
+  "output_hash": "b37255aba48612b113aa15ec569b7d85a0bad4b7618fde7bd1c2195f0b5d8a4d",
+  "duration_ms": 27917,
+  "harness_commit": "5696c9451ad346da3fc7d4dec0ba4e10e081198a",
+  "recorded_at": "2026-06-03T21:53:18.432040599Z"
+}

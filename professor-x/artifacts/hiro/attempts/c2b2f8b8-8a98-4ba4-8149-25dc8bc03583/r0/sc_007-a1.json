@@ -1,0 +1,13 @@
+{
+  "run_id": "c2b2f8b8-8a98-4ba4-8149-25dc8bc03583",
+  "round": 0,
+  "task_id": "sc_007",
+  "category": "self_correction",
+  "attempt": 1,
+  "passed": false,
+  "failure_reason": "**What went wrong:** I repeatedly checked episodic memory without proceeding to semantic memory, skipping the critical step of verifying semantic memory before writing the 'HIRO round marker' entry.  \n\n**What I'll do differently:** Next time, I will immediately check semantic memory after exhausting episodic searches. If both are empty, I will write the entry and re-scan episodic to confirm its presence, ensuring the cold-start confirmation is properly executed.",
+  "output_hash": "83d608ae0c291d57d6aedae3c76e259131c7eb5adcc4db8abae1b6b8b10224fe",
+  "duration_ms": 57339,
+  "harness_commit": "b626fb56c06426e1bc365b33396e40ba715f50f2",
+  "recorded_at": "2026-06-03T20:48:52.482734633Z"
+}

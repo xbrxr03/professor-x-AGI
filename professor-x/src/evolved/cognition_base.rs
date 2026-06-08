@@ -90,6 +90,34 @@ impl CognitionStore {
         Ok(())
     }
 
+    /// Semantic retrieval via pre-computed embeddings (nomic-embed-text).
+    /// Falls back to empty if no cognition embeddings are stored yet.
+    pub fn search_semantic(
+        &self,
+        emb_store: &crate::embeddings::EmbeddingStore,
+        query_vec: &[f32],
+        k: usize,
+    ) -> Result<Vec<CognitionItem>> {
+        let top = emb_store.top_k("cognition", query_vec, k)?;
+        if top.is_empty() {
+            return Ok(Vec::new());
+        }
+        let db = self.db.lock().unwrap();
+        let mut results = Vec::new();
+        for (source_id, _sim) in top {
+            let mut stmt = db.prepare(
+                "SELECT id, content, source, keywords, quality, use_count, success_count,
+                        embedding_id, created_at
+                 FROM cognition WHERE id = ?1",
+            )?;
+            let mut rows = stmt.query_map(params![source_id], parse_item)?;
+            if let Some(row) = rows.next() {
+                results.push(row?);
+            }
+        }
+        Ok(results)
+    }
+
     /// Retrieve top-k items by keyword relevance (FTS fallback until embeddings active).
     pub fn query_top_k(&self, query: &str, k: usize) -> Result<Vec<CognitionItem>> {
         let db = self.db.lock().unwrap();
@@ -107,6 +135,18 @@ impl CognitionStore {
     pub fn count(&self) -> Result<i64> {
         let db = self.db.lock().unwrap();
         Ok(db.query_row("SELECT COUNT(*) FROM cognition", [], |r| r.get(0))?)
+    }
+
+    /// All cognition items — used to backfill embeddings and map ids to content.
+    pub fn all(&self) -> Result<Vec<CognitionItem>> {
+        let db = self.db.lock().unwrap();
+        let mut stmt = db.prepare(
+            "SELECT id, content, source, keywords, quality, use_count, success_count,
+                    embedding_id, created_at
+             FROM cognition",
+        )?;
+        let rows = stmt.query_map([], parse_item)?;
+        rows.map(|r| r.map_err(Into::into)).collect()
     }
 
     pub fn record_use(&self, id: &Uuid, success: bool) -> Result<()> {
