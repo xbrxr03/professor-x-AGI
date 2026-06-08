@@ -10219,11 +10219,16 @@ fn print_task_evidence(
     let task_id = uuid::Uuid::parse_str(&transcript.task_id)
         .with_context(|| format!("stored transcript task id is not a UUID: {}", transcript.task_id))?;
     let task_events = events.for_task(task_id, 2000)?;
-    println!(
-        "{}",
-        format_task_evidence_bundle(&transcript, task_run.as_ref(), &task_events)
-    );
+    let bundle = format_task_evidence_bundle(&transcript, task_run.as_ref(), &task_events);
+    println!("{bundle}");
+    let path = task_evidence_markdown_path(&transcript);
+    std::fs::write(&path, &bundle)?;
+    println!("\nevidence: {}", path.display());
     Ok(())
+}
+
+fn task_evidence_markdown_path(transcript: &TranscriptSummary) -> PathBuf {
+    std::path::Path::new(&transcript.transcript_path).with_extension("evidence.md")
 }
 
 fn format_task_evidence_bundle(
@@ -11941,6 +11946,26 @@ mod tests {
         assert!(bundle.contains("report artifacts/validation/2026-06-08/12345678.json"));
         assert!(bundle.contains("Work events: 1"));
         assert!(bundle.contains("Replay: cargo run -- --task-review 12345678"));
+    }
+
+    #[test]
+    fn task_evidence_markdown_path_sits_next_to_transcript() {
+        let transcript = TranscriptSummary {
+            id: "87654321-bbbb-cccc-dddd-123456789abc".to_string(),
+            task_id: "12345678-aaaa-bbbb-cccc-123456789abc".to_string(),
+            task_description: "Inspect task evidence".to_string(),
+            status: "passed".to_string(),
+            attempt_count: 1,
+            step_count: 2,
+            transcript_path: "artifacts/transcripts/2026-06-08/12345678.json".to_string(),
+            summary: "done".to_string(),
+            recorded_at: chrono::Utc::now(),
+        };
+
+        assert_eq!(
+            task_evidence_markdown_path(&transcript).display().to_string(),
+            "artifacts/transcripts/2026-06-08/12345678.evidence.md"
+        );
     }
 
     #[test]
