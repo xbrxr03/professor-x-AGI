@@ -16,6 +16,7 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::memd::autonomy_queue::{AutonomyQueueItem, AutonomyQueueStore};
 use crate::memd::coding_sessions::{CodingSessionRecord, CodingSessionStore};
 use crate::memd::coding_smoke::{CodingSmokeRecord, CodingSmokeStore};
 use crate::memd::events::{AgentEvent, EventStore};
@@ -128,6 +129,16 @@ pub fn print_snapshot(memory: Arc<MemoryManager>, events: Arc<EventStore>) -> Re
             .unwrap_or_else(|| "waiting; launch with cargo run -- --autonomous-run 4".to_string())
     );
     println!("  work loops: {} runs", snapshot.work_loop_count);
+    println!(
+        "  autonomous queue: {} pending / {} recent",
+        snapshot.pending_autonomy_queue, snapshot.recent_autonomy_queue.len()
+    );
+    for item in snapshot.recent_autonomy_queue.iter().take(3) {
+        println!("    {}", autonomy_queue_item_summary(item, 110));
+        for command in autonomy_queue_commands(item).iter().take(2) {
+            println!("      {command}");
+        }
+    }
     if let Some(gate) = &snapshot.latest_work_loop_gate {
         println!(
             "    current gate: {}",
@@ -396,6 +407,8 @@ struct ObserverSnapshot {
     hiro_attempts: i64,
     latest_pass_at_3: Option<f64>,
     work_loop_count: i64,
+    pending_autonomy_queue: i64,
+    recent_autonomy_queue: Vec<AutonomyQueueItem>,
     coding_smoke_count: i64,
     coding_smoke_passed: i64,
     coding_session_count: i64,
@@ -576,6 +589,9 @@ impl ObserverSnapshot {
         snapshot.work_loop_count = work_loop_store.count()?;
         snapshot.recent_work_loops = work_loop_store.recent(5)?;
         snapshot.latest_work_loop = snapshot.recent_work_loops.first().cloned();
+        let queue_store = AutonomyQueueStore::new(Arc::clone(&memory.db));
+        snapshot.pending_autonomy_queue = queue_store.count_pending()?;
+        snapshot.recent_autonomy_queue = queue_store.recent(5)?;
         let gate_store = WorkLoopGateStore::new(Arc::clone(&memory.db));
         snapshot.recent_work_loop_gates = snapshot
             .latest_work_loop
@@ -791,6 +807,8 @@ impl Default for ObserverSnapshot {
             latest_work_loop_gate: None,
             recent_work_loop_gates: Vec::new(),
             recent_work_loops: Vec::new(),
+            pending_autonomy_queue: 0,
+            recent_autonomy_queue: Vec::new(),
         }
     }
 }
@@ -984,6 +1002,10 @@ fn draw_activity(frame: &mut Frame, area: Rect, app: &ObserverApp) {
     let lines = vec![
         latest_autonomous_run_line(&app.snapshot.latest_autonomous_run),
         latest_work_loop_gate_line(&app.snapshot.latest_work_loop_gate),
+        latest_autonomy_queue_line(
+            app.snapshot.pending_autonomy_queue,
+            &app.snapshot.recent_autonomy_queue,
+        ),
         latest_work_loop_line(&app.snapshot.latest_work_loop),
         latest_run_line(&app.snapshot.latest_run),
         latest_line("task", &app.snapshot.latest_task),
@@ -1073,6 +1095,7 @@ fn draw_science(frame: &mut Frame, area: Rect, app: &ObserverApp) {
         &app.snapshot.latest_work_loop_gate,
         &app.snapshot.recent_work_loop_gates,
     ));
+    note_lines.extend(autonomy_queue_detail(&app.snapshot.recent_autonomy_queue));
     note_lines.extend(latest_work_loop_detail(&app.snapshot.latest_work_loop));
     let note = Paragraph::new(note_lines)
         .style(Style::default().fg(Color::Gray))
@@ -1311,6 +1334,28 @@ fn latest_autonomous_run_line(event: &Option<AgentEvent>) -> Line<'static> {
     }
 }
 
+fn latest_autonomy_queue_line(
+    pending_count: i64,
+    recent: &[AutonomyQueueItem],
+) -> Line<'static> {
+    match recent.first() {
+        Some(item) => Line::from(vec![
+            Span::styled("queue   ", label()),
+            Span::styled(format!("{:<8}", item.status), status_style(&item.status)),
+            Span::raw(format!(
+                "{} pending / {}",
+                pending_count,
+                autonomy_queue_item_summary(item, 70),
+            )),
+        ]),
+        None => Line::from(vec![
+            Span::styled("queue   ", label()),
+            Span::styled("empty  ", Style::default().fg(Color::DarkGray)),
+            Span::raw("enqueue with --prof-x-enqueue or --prof-x-enqueue-commit"),
+        ]),
+    }
+}
+
 fn latest_coding_smoke_line(smoke: &Option<CodingSmokeRecord>) -> Line<'static> {
     match smoke {
         Some(smoke) => Line::from(vec![
@@ -1387,9 +1432,9 @@ fn latest_transcript_line(transcript: &Option<TranscriptSummary>) -> Line<'stati
 
 fn status_style(status: &str) -> Style {
     let color = match status {
-        "Complete" | "succeeded" | "passed" => Color::Green,
-        "Running" => Color::Cyan,
-        "Failed" | "failed" | "Blocked" | "Cancelled" => Color::Red,
+        "Complete" | "succeeded" | "passed" | "completed" => Color::Green,
+        "Running" | "running" => Color::Cyan,
+        "Failed" | "failed" | "Blocked" | "Cancelled" | "rejected" => Color::Red,
         _ => Color::Yellow,
     };
     Style::default().fg(color)
@@ -1491,6 +1536,83 @@ fn latest_autonomous_run_detail(event: &Option<AgentEvent>) -> Line<'static> {
         None => Line::from(
             "Autonomous run: waiting. Start bounded core profile with cargo run -- --autonomous-run 4.",
         ),
+    }
+}
+
+fn autonomy_queue_detail(recent: &[AutonomyQueueItem]) -> Vec<Line<'static>> {
+    if recent.is_empty() {
+        return vec![Line::from(
+            "Autonomy queue: empty. Queue work with cargo run -- --prof-x-enqueue \"goal\".",
+        )];
+    }
+    let mut lines = vec![Line::from(format!(
+        "Autonomy queue: {} recent item(s), newest first.",
+        recent.len()
+    ))];
+    for item in recent.iter().take(4) {
+        lines.push(Line::from(vec![
+            Span::styled(format!("queue {} ", short_id(&item.id)), label()),
+            Span::styled(format!("{:<8}", item.status), status_style(&item.status)),
+            Span::raw(autonomy_queue_item_summary(item, 86)),
+        ]));
+        for command in autonomy_queue_commands(item).iter().take(3) {
+            lines.push(Line::from(vec![
+                Span::styled("cmd     ", label()),
+                Span::raw(command.clone()),
+            ]));
+        }
+    }
+    lines
+}
+
+fn autonomy_queue_item_summary(item: &AutonomyQueueItem, max_chars: usize) -> String {
+    let result = item
+        .result_run_id
+        .as_ref()
+        .map(|run| format!(" / run {}", short_id(run)))
+        .or_else(|| {
+            item.result_report_path
+                .as_ref()
+                .map(|path| format!(" / report {}", truncate(path, 42)))
+        })
+        .unwrap_or_default();
+    let failure = item
+        .failure_reason
+        .as_ref()
+        .map(|reason| format!(" / failure {}", truncate(reason, 42)))
+        .unwrap_or_default();
+    truncate(
+        &format!(
+            "{}:{} p{} c{} {}{}{}",
+            item.kind,
+            item.profile,
+            item.priority,
+            item.cycles,
+            item.goal,
+            result,
+            failure,
+        ),
+        max_chars,
+    )
+}
+
+fn autonomy_queue_commands(item: &AutonomyQueueItem) -> Vec<String> {
+    let queue = short_id(&item.id);
+    match item.status.as_str() {
+        "pending" | "running" => vec![
+            "cargo run -- --prof-x-step-live 1".to_string(),
+            format!("cargo run -- --prof-x-queue-review {queue}"),
+        ],
+        "passed" | "completed" => vec![
+            format!("cargo run -- --prof-x-queue-review {queue}"),
+            format!("cargo run -- --prof-x-queue-replay {queue}"),
+            format!("cargo run -- --prof-x-queue-publish {queue}"),
+        ],
+        "failed" | "rejected" => vec![
+            format!("cargo run -- --prof-x-queue-review {queue}"),
+            format!("cargo run -- --prof-x-queue-replay {queue}"),
+        ],
+        _ => vec![format!("cargo run -- --prof-x-queue-review {queue}")],
     }
 }
 
@@ -1763,7 +1885,7 @@ fn event_style(event_type: &str) -> Style {
         Color::Yellow
     } else if event_type.starts_with("evolution.") {
         Color::Magenta
-    } else if event_type.starts_with("autonomous_run.") {
+    } else if event_type.starts_with("autonomous_run.") || event_type.starts_with("autonomy.queue.") {
         Color::LightCyan
     } else if event_type.starts_with("hiro.") {
         Color::Blue
@@ -1808,4 +1930,62 @@ fn format_event_line(event: &AgentEvent) -> String {
 
 fn short_id(id: &str) -> &str {
     &id[..8.min(id.len())]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn queue_item(status: &str) -> AutonomyQueueItem {
+        let now = chrono::Utc::now();
+        AutonomyQueueItem {
+            id: "12345678-aaaa-bbbb-cccc-123456789abc".to_string(),
+            goal: "make Prof X work visible like a coding CLI".to_string(),
+            kind: "operator_run".to_string(),
+            profile: "commit".to_string(),
+            cycles: 3,
+            priority: 90,
+            status: status.to_string(),
+            result_run_id: Some("87654321-bbbb-cccc-dddd-123456789abc".to_string()),
+            result_report_path: Some("artifacts/work-loop/2026-06-08/loop.json".to_string()),
+            failure_reason: None,
+            queued_at: now,
+            started_at: Some(now),
+            completed_at: if matches!(status, "passed" | "failed" | "completed") {
+                Some(now)
+            } else {
+                None
+            },
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn autonomy_queue_commands_surface_live_step_for_pending_work() {
+        let item = queue_item("pending");
+        let commands = autonomy_queue_commands(&item);
+
+        assert_eq!(commands[0], "cargo run -- --prof-x-step-live 1");
+        assert!(commands[1].contains("--prof-x-queue-review 12345678"));
+    }
+
+    #[test]
+    fn autonomy_queue_commands_surface_review_replay_publish_for_passed_work() {
+        let item = queue_item("passed");
+        let commands = autonomy_queue_commands(&item);
+
+        assert!(commands.iter().any(|cmd| cmd.contains("--prof-x-queue-review 12345678")));
+        assert!(commands.iter().any(|cmd| cmd.contains("--prof-x-queue-replay 12345678")));
+        assert!(commands.iter().any(|cmd| cmd.contains("--prof-x-queue-publish 12345678")));
+    }
+
+    #[test]
+    fn autonomy_queue_summary_includes_goal_and_result_run() {
+        let item = queue_item("passed");
+        let summary = autonomy_queue_item_summary(&item, 140);
+
+        assert!(summary.contains("operator_run:commit"));
+        assert!(summary.contains("make Prof X work visible"));
+        assert!(summary.contains("run 87654321"));
+    }
 }
