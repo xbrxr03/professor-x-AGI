@@ -1075,6 +1075,9 @@ impl ReactLoop {
 
         // Circuit breaker: pause after 3 consecutive tool failures
         let mut consecutive_failures: u8 = 0;
+        // Auto-repair: escalate to the mirror critic ONCE before the circuit
+        // breaker gives up, so a stuck run gets a fresh diagnosis not just failure.
+        let mut escalated = false;
 
         // LCAP: apply context budget
         let mut react_opts = ModelOptions::for_react();
@@ -1419,21 +1422,13 @@ impl ReactLoop {
                         }
                     };
 
-                    // ClawOS circuit breaker: 3 consecutive failures → pause
-                    if consecutive_failures >= 3 {
-                        warn!(
-                            "react: circuit breaker tripped (3 consecutive failures) on task '{}'",
-                            task.description
-                        );
-                        self.emit_event(
-                            Some(session_id),
-                            Some(task.id),
-                            "react.circuit_breaker",
-                            "circuit breaker tripped after 3 consecutive failures",
-                            json!({"step": step_idx + 1}),
-                        );
-                        return Ok(false);
-                    }
+                    // AUTO-REPAIR: turn a failure into a SPECIFIC correction the
+                    // small model can act on next step instead of a bare error.
+                    let observation = if observation.success {
+                        observation
+                    } else {
+                        augment_with_repair_hint(observation, &parsed.tool_name, &parsed.params, &scope)
+                    };
 
                     // Record step on TaskNode and MermaidCanvas
                     let step = ExecutionStep {
@@ -1464,6 +1459,59 @@ impl ReactLoop {
                     // Check if the observation signals completion
                     if is_completion_signal(&observation) {
                         return Ok(true);
+                    }
+
+                    // AUTO-REPAIR ESCALATION: at 3 consecutive failures, summon the
+                    // mirror critic ONCE for a fresh plan before giving up; only if
+                    // it stalls again does the circuit breaker trip.
+                    if consecutive_failures >= 3 {
+                        if !escalated {
+                            escalated = true;
+                            consecutive_failures = 0;
+                            self.emit_event(
+                                Some(session_id),
+                                Some(task.id),
+                                "react.escalation",
+                                "stuck — escalating to self-review for a fresh plan",
+                                json!({"step": step_idx + 1}),
+                            );
+                            let critique = self.critique(task).await;
+                            let guidance = Observation {
+                                success: false,
+                                output: format!(
+                                    "AUTO-REPAIR — you have failed several times in a row. A reviewer looked at your trajectory:\n{}\n\nStep back and try a DIFFERENT approach. Re-read any file before editing it, use paths inside the workspace, and verify each step.",
+                                    critique.output
+                                ),
+                                error: None,
+                                tokens_used: 0,
+                                execution_ms: 0,
+                                artifacts: Vec::new(),
+                            };
+                            task.steps.push(ExecutionStep {
+                                index: (step_idx + 1) as u32,
+                                thought: "auto-repair: stuck, requesting a fresh diagnosis".to_string(),
+                                action: Action {
+                                    tool_name: "auto.repair".to_string(),
+                                    params: json!({}),
+                                    risk_score: 0,
+                                },
+                                observation: guidance,
+                                timestamp: Utc::now(),
+                            });
+                        } else {
+                            warn!(
+                                "react: circuit breaker tripped (failures persisted after escalation) on '{}'",
+                                task.description
+                            );
+                            self.emit_event(
+                                Some(session_id),
+                                Some(task.id),
+                                "react.circuit_breaker",
+                                "circuit breaker tripped — failures persisted after self-review",
+                                json!({"step": step_idx + 1}),
+                            );
+                            return Ok(false);
+                        }
                     }
                 }
             }
@@ -2167,6 +2215,37 @@ fn is_completion_signal(obs: &Observation) -> bool {
     }
     let lower = obs.output.to_lowercase();
     lower.contains("task complete") || lower.contains("finished") || lower.contains("done")
+}
+
+/// AUTO-REPAIR: map a failed observation to a SPECIFIC, actionable correction so a
+/// small local model can recover next step, instead of re-feeding a bare error.
+fn augment_with_repair_hint(
+    mut obs: Observation,
+    tool: &str,
+    _params: &Value,
+    scope: &PermissionScope,
+) -> Observation {
+    let combined = format!("{} {}", obs.error.clone().unwrap_or_default(), obs.output).to_lowercase();
+    let root = scope.workspace_root.to_string_lossy().to_string();
+    let hint: Option<String> = if combined.contains("outside workspace") || combined.contains("resolves outside") {
+        Some(format!("FIX: the workspace root is {0}. Use a path INSIDE it — a relative name like 'notes.txt' or '{0}/notes.txt' — not /tmp or an absolute path elsewhere.", root))
+    } else if tool == "fs.replace" && (combined.contains("found 0") || combined.contains("expected exactly one match")) {
+        Some("FIX: the 'old' text did not match exactly (whitespace and indentation count, and it must be unique). fs.read the file first, copy the exact snippet with enough surrounding context to be unique, then retry.".to_string())
+    } else if combined.contains("no such file") || combined.contains("cannot find") || (combined.contains("not found") && !combined.contains("granted")) {
+        Some("FIX: that path does not exist. Use fs.list on its parent directory to see the real names, or create it with fs.write first.".to_string())
+    } else if combined.contains("schema validation") || combined.contains("expects object") {
+        Some(format!("FIX: '{tool}' got the wrong parameters. Check its required fields in the tool list and pass them as a JSON object."))
+    } else if tool.starts_with("shell") && (combined.contains("stderr") || combined.contains("exit") || combined.contains("error") || combined.contains("command not found")) {
+        Some("FIX: the command errored — read the stderr above. Verify the command, flags, and that referenced files exist. Give awk/sort/uniq/wc a FILENAME (a bare pipe-less invocation hangs on stdin).".to_string())
+    } else if combined.contains("not in granted_tools") || combined.contains("not implemented") || combined.contains("unknown tool") {
+        Some("FIX: that tool is not available. Use one of the tools listed in the prompt.".to_string())
+    } else {
+        None
+    };
+    if let Some(h) = hint {
+        obs.output = if obs.output.trim().is_empty() { h } else { format!("{}\n{h}", obs.output) };
+    }
+    obs
 }
 
 fn extract_keywords(text: &str) -> Vec<String> {
