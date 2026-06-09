@@ -1,0 +1,11 @@
+{
+  "generated_at": "2026-06-09T08:39:31.294836553+00:00",
+  "tasks_path": "hiro/tasks.json",
+  "harness_commit": "bbbd89c",
+  "passed": true,
+  "task_count": 60,
+  "tool_use": 20,
+  "planning": 20,
+  "self_correction": 20,
+  "duplicate_ids": []
+}

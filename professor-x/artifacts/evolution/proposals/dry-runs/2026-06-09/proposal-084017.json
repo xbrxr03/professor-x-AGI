@@ -1,0 +1,21 @@
+{
+  "generated_at": "2026-06-09T08:40:17.153898818+00:00",
+  "mode": "dry_run",
+  "operator_goal": "review the next observability gap without executing it yet",
+  "workspace": "repo-root",
+  "harness_commit": "bbbd89c",
+  "target_component": "SkillDefinition(\"px-operator-proposal-dry-run\")",
+  "motivation": "operator queued goal proposal: review the next observability gap without executing it yet",
+  "accepted": true,
+  "applied": false,
+  "commit": null,
+  "reason": "sandbox verification passed",
+  "checks": [
+    "reward_hacking_scan",
+    "sandbox_worktree",
+    "material_diff",
+    "cargo_check"
+  ],
+  "diff_hash": "6aa269ad2b97837f91c583325d4c27f3844d6b8fd9535d48a8677c7b0c04d733",
+  "diff_bytes": 1284
+}
