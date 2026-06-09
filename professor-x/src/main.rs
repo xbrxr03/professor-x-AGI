@@ -272,7 +272,15 @@ impl WorkLoopProfile {
 }
 
 fn parse_args() -> CliArgs {
-    let args: Vec<String> = std::env::args().collect();
+    parse_args_from(std::env::args())
+}
+
+fn parse_args_from<I, S>(args: I) -> CliArgs
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let args: Vec<String> = args.into_iter().map(Into::into).collect();
     let mut cli = CliArgs {
         operator_help: false,
         consciousness_report: false,
@@ -358,7 +366,7 @@ fn parse_args() -> CliArgs {
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
-            "--prof-x-help" | "--operator-help" | "--commands" => {
+            "-h" | "--help" | "--prof-x-help" | "--operator-help" | "--commands" => {
                 cli.operator_help = true;
                 i += 1;
             }
@@ -11681,6 +11689,16 @@ mod tests {
         assert!(help.contains("--coding-sessions 5"));
         assert!(help.contains("--replay latest"));
         assert!(help.contains("--validate-artifacts"));
+    }
+
+    #[test]
+    fn standard_help_flags_exit_before_daemon_startup() {
+        for flag in ["--help", "-h"] {
+            let cli = parse_args_from(["professor-x", flag]);
+            assert!(cli.operator_help, "{flag} should print help and exit");
+            assert!(!cli.run_now);
+            assert!(!cli.lab);
+        }
     }
 
     #[test]
