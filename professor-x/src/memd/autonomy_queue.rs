@@ -191,6 +191,89 @@ impl AutonomyQueueStore {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutonomyQueueBrief {
+    pub queue_id: String,
+    pub summary: String,
+    pub next_command: String,
+    pub commands: Vec<String>,
+}
+
+pub fn short_queue_id(id: &str) -> String {
+    id.chars().take(8).collect()
+}
+
+pub fn autonomy_queue_brief(item: &AutonomyQueueItem, max_summary_chars: usize) -> AutonomyQueueBrief {
+    let commands = autonomy_queue_commands(item);
+    AutonomyQueueBrief {
+        queue_id: short_queue_id(&item.id),
+        summary: autonomy_queue_summary(item, max_summary_chars),
+        next_command: commands
+            .first()
+            .cloned()
+            .unwrap_or_else(|| format!("cargo run -- --prof-x-queue-review {}", short_queue_id(&item.id))),
+        commands,
+    }
+}
+
+pub fn autonomy_queue_summary(item: &AutonomyQueueItem, max_chars: usize) -> String {
+    let result = item
+        .result_run_id
+        .as_ref()
+        .map(|run| format!(" / run {}", short_queue_id(run)))
+        .or_else(|| {
+            item.result_report_path
+                .as_ref()
+                .map(|path| format!(" / report {}", truncate_for_queue(path, 42)))
+        })
+        .unwrap_or_default();
+    let failure = item
+        .failure_reason
+        .as_ref()
+        .map(|reason| format!(" / failure {}", truncate_for_queue(reason, 42)))
+        .unwrap_or_default();
+    truncate_for_queue(
+        &format!(
+            "{}:{} p{} c{} {}{}{}",
+            item.kind, item.profile, item.priority, item.cycles, item.goal, result, failure
+        ),
+        max_chars,
+    )
+}
+
+pub fn autonomy_queue_commands(item: &AutonomyQueueItem) -> Vec<String> {
+    let queue = short_queue_id(&item.id);
+    match item.status.as_str() {
+        "pending" | "running" => vec![
+            "cargo run -- --prof-x-step-live 1".to_string(),
+            format!("cargo run -- --prof-x-queue-review {queue}"),
+        ],
+        "passed" | "completed" => vec![
+            format!("cargo run -- --prof-x-queue-review {queue}"),
+            format!("cargo run -- --prof-x-queue-replay {queue}"),
+            format!("cargo run -- --prof-x-queue-publish {queue}"),
+        ],
+        "failed" | "rejected" => vec![
+            format!("cargo run -- --prof-x-queue-review {queue}"),
+            format!("cargo run -- --prof-x-queue-replay {queue}"),
+        ],
+        _ => vec![format!("cargo run -- --prof-x-queue-review {queue}")],
+    }
+}
+
+pub fn autonomy_queue_next_command(item: &AutonomyQueueItem) -> String {
+    autonomy_queue_brief(item, 96).next_command
+}
+
+fn truncate_for_queue(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let mut out = text.chars().take(max_chars).collect::<String>();
+    out.push_str("...");
+    out
+}
+
 fn parse_item(row: &rusqlite::Row) -> rusqlite::Result<AutonomyQueueItem> {
     let queued_at_raw: String = row.get(10)?;
     let started_at_raw: Option<String> = row.get(11)?;
@@ -336,5 +419,53 @@ mod tests {
         }
 
         assert!(store.resolve_ref("abc").is_err());
+    }
+
+    fn display_item(status: &str) -> AutonomyQueueItem {
+        let now = Utc::now();
+        AutonomyQueueItem {
+            id: "12345678-90ab-cdef-1234-567890abcdef".to_string(),
+            goal: "make Professor X observable like a coding CLI".to_string(),
+            kind: "operator_run".to_string(),
+            profile: "commit".to_string(),
+            cycles: 5,
+            priority: 65,
+            status: status.to_string(),
+            result_run_id: Some("abcdef12-3456-7890-abcd-ef1234567890".to_string()),
+            result_report_path: None,
+            failure_reason: None,
+            queued_at: now,
+            started_at: None,
+            completed_at: None,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn queue_brief_surfaces_summary_and_next_command_for_pending_work() {
+        let brief = autonomy_queue_brief(&display_item("pending"), 120);
+
+        assert_eq!(brief.queue_id, "12345678");
+        assert!(brief.summary.contains("operator_run:commit"));
+        assert!(brief.summary.contains("run abcdef12"));
+        assert_eq!(brief.next_command, "cargo run -- --prof-x-step-live 1");
+        assert!(brief
+            .commands
+            .iter()
+            .any(|cmd| cmd == "cargo run -- --prof-x-queue-review 12345678"));
+    }
+
+    #[test]
+    fn queue_brief_surfaces_review_replay_publish_for_passed_work() {
+        let brief = autonomy_queue_brief(&display_item("passed"), 120);
+
+        assert_eq!(
+            brief.next_command,
+            "cargo run -- --prof-x-queue-review 12345678"
+        );
+        assert!(brief
+            .commands
+            .iter()
+            .any(|cmd| cmd == "cargo run -- --prof-x-queue-publish 12345678"));
     }
 }

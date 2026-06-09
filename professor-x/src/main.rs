@@ -37,7 +37,7 @@ use evolved::verify_node_in_sandbox;
 use evolved::{EvolvedLoop, HiroRunner};
 use memd::MemoryManager;
 use memd::pinned::PinnedEntry;
-use memd::autonomy_queue::{AutonomyQueueItem, AutonomyQueueStore};
+use memd::autonomy_queue::{autonomy_queue_brief, AutonomyQueueItem, AutonomyQueueStore};
 use memd::coding_sessions::{CodingSessionRecord, CodingSessionStore};
 use memd::coding_smoke::{CodingSmokeRecord, CodingSmokeStore};
 use memd::events::EventStore;
@@ -8777,16 +8777,13 @@ fn publish_autonomy_queue_run(memory: Arc<MemoryManager>, queue_ref: &str) -> Re
 }
 
 fn format_autonomy_queue_item(item: &AutonomyQueueItem) -> String {
+    let brief = autonomy_queue_brief(item, 96);
     format!(
-        "{} {} queue={} priority={} {}:{} cycles={} {}",
+        "{} {} queue={} {}",
         item.updated_at.format("%Y-%m-%d %H:%M:%S"),
         item.status,
-        short_fragment(&item.id),
-        item.priority,
-        item.kind,
-        item.profile,
-        item.cycles,
-        truncate(&item.goal, 96),
+        brief.queue_id,
+        brief.summary,
     )
 }
 
@@ -10560,22 +10557,11 @@ fn format_work_cockpit(
         lines.push("  empty; add work with --prof-x-enqueue \"goal\" or --prof-x-enqueue-commit \"goal\"".to_string());
     } else {
         for item in recent_queue.iter().take(5) {
-            lines.push(format!(
-                "  {}",
-                format_autonomy_queue_item(item)
-            ));
-            let queue = short_fragment(&item.id);
-            match item.status.as_str() {
-                "pending" | "running" => lines.push(format!(
-                    "      next --prof-x-step-live 1  review --prof-x-queue-review {queue}"
-                )),
-                "passed" | "completed" => lines.push(format!(
-                    "      review --prof-x-queue-review {queue}  replay --prof-x-queue-replay {queue}  publish --prof-x-queue-publish {queue}"
-                )),
-                "failed" | "rejected" => lines.push(format!(
-                    "      inspect --prof-x-queue-review {queue}  replay --prof-x-queue-replay {queue}"
-                )),
-                _ => lines.push(format!("      inspect --prof-x-queue-review {queue}")),
+            let brief = autonomy_queue_brief(item, 96);
+            lines.push(format!("  {}", format_autonomy_queue_item(item)));
+            lines.push(format!("      next {}", brief.next_command));
+            if brief.commands.len() > 1 {
+                lines.push(format!("      inspect {}", brief.commands[1..].join("  ")));
             }
             if let Some(report) = &item.result_report_path {
                 lines.push(format!("      report {}", truncate(report, 120)));
@@ -13106,8 +13092,8 @@ mod tests {
         assert!(screen.contains("Evidence bundle"));
         assert!(screen.contains("Autonomous queue"));
         assert!(screen.contains("make Prof X work visible in the cockpit"));
-        assert!(screen.contains("next --prof-x-step-live 1"));
-        assert!(screen.contains("review --prof-x-queue-review 12345678"));
+        assert!(screen.contains("next cargo run -- --prof-x-step-live 1"));
+        assert!(screen.contains("inspect cargo run -- --prof-x-queue-review 12345678"));
         assert!(screen.contains("Latest coding session"));
         assert!(screen.contains("passed session=session-"));
         assert!(screen.contains("commit=eedcd3e1"));

@@ -33,7 +33,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::agentd::graph::{TaskNode, TaskType};
 use crate::agentd::react::ReactLoop;
-use crate::memd::autonomy_queue::{AutonomyQueueItem, AutonomyQueueStore};
+use crate::memd::autonomy_queue::{
+    autonomy_queue_brief, autonomy_queue_next_command, short_queue_id, AutonomyQueueItem,
+    AutonomyQueueStore,
+};
 use crate::memd::MemoryManager;
 use crate::memd::events::EventStore;
 use crate::ollama::OllamaClient;
@@ -329,20 +332,14 @@ fn queue_signal_from_item(item: &AutonomyQueueItem, pending: i64) -> QueueSignal
     QueueSignal {
         pending,
         latest_status: item.status.clone(),
-        latest_id: short(&item.id),
+        latest_id: short_queue_id(&item.id),
         latest_goal: item.goal.clone(),
         latest_command: queue_next_command(item),
     }
 }
 
 fn queue_next_command(item: &AutonomyQueueItem) -> String {
-    let queue = short(&item.id);
-    match item.status.as_str() {
-        "pending" | "running" => TUI_QUEUE_STEP_COMMAND.to_string(),
-        "passed" | "completed" => format!("{TUI_QUEUE_PUBLISH_COMMAND} {queue}"),
-        "failed" | "rejected" => format!("{TUI_QUEUE_REVIEW_COMMAND} {queue}"),
-        _ => format!("{TUI_QUEUE_REVIEW_COMMAND} {queue}"),
-    }
+    autonomy_queue_next_command(item)
 }
 
 fn handle_tui_command(
@@ -415,7 +412,7 @@ fn tui_queue_lines(memory: &Arc<MemoryManager>, limit: usize) -> Result<Vec<Line
     let mut lines = vec![styled("Autonomous queue", ACCENT)];
     for item in items {
         lines.push(styled(tui_queue_item_line(&item), CYAN));
-        lines.push(styled(format!("      next {}", queue_next_command(&item)), DIM));
+        lines.push(styled(format!("      next {}", autonomy_queue_brief(&item, 96).next_command), DIM));
     }
     Ok(lines)
 }
@@ -470,15 +467,12 @@ fn tui_enqueue_lines(
 }
 
 fn tui_queue_item_line(item: &AutonomyQueueItem) -> String {
+    let brief = autonomy_queue_brief(item, 72);
     format!(
-        "{} queue={} priority={} {}:{} cycles={} {}",
+        "{} queue={} {}",
         item.status,
-        short(&item.id),
-        item.priority,
-        item.kind,
-        item.profile,
-        item.cycles,
-        truncate(&item.goal, 72),
+        brief.queue_id,
+        brief.summary,
     )
 }
 
@@ -1360,10 +1354,10 @@ mod tests {
     }
 
     #[test]
-    fn queue_next_command_publishes_passed_work() {
+    fn queue_next_command_reviews_passed_work_before_publish() {
         assert_eq!(
             queue_next_command(&queue_item("passed")),
-            "cargo run -- --prof-x-queue-publish 12345678"
+            "cargo run -- --prof-x-queue-review 12345678"
         );
     }
 

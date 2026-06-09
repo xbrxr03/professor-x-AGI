@@ -16,7 +16,10 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::memd::autonomy_queue::{AutonomyQueueItem, AutonomyQueueStore};
+use crate::memd::autonomy_queue::{
+    autonomy_queue_brief, autonomy_queue_commands, autonomy_queue_summary, AutonomyQueueItem,
+    AutonomyQueueStore,
+};
 use crate::memd::coding_sessions::{CodingSessionRecord, CodingSessionStore};
 use crate::memd::coding_smoke::{CodingSmokeRecord, CodingSmokeStore};
 use crate::memd::events::{AgentEvent, EventStore};
@@ -1550,12 +1553,13 @@ fn autonomy_queue_detail(recent: &[AutonomyQueueItem]) -> Vec<Line<'static>> {
         recent.len()
     ))];
     for item in recent.iter().take(4) {
+        let brief = autonomy_queue_brief(item, 86);
         lines.push(Line::from(vec![
-            Span::styled(format!("queue {} ", short_id(&item.id)), label()),
+            Span::styled(format!("queue {} ", brief.queue_id), label()),
             Span::styled(format!("{:<8}", item.status), status_style(&item.status)),
-            Span::raw(autonomy_queue_item_summary(item, 86)),
+            Span::raw(brief.summary),
         ]));
-        for command in autonomy_queue_commands(item).iter().take(3) {
+        for command in brief.commands.iter().take(3) {
             lines.push(Line::from(vec![
                 Span::styled("cmd     ", label()),
                 Span::raw(command.clone()),
@@ -1566,54 +1570,7 @@ fn autonomy_queue_detail(recent: &[AutonomyQueueItem]) -> Vec<Line<'static>> {
 }
 
 fn autonomy_queue_item_summary(item: &AutonomyQueueItem, max_chars: usize) -> String {
-    let result = item
-        .result_run_id
-        .as_ref()
-        .map(|run| format!(" / run {}", short_id(run)))
-        .or_else(|| {
-            item.result_report_path
-                .as_ref()
-                .map(|path| format!(" / report {}", truncate(path, 42)))
-        })
-        .unwrap_or_default();
-    let failure = item
-        .failure_reason
-        .as_ref()
-        .map(|reason| format!(" / failure {}", truncate(reason, 42)))
-        .unwrap_or_default();
-    truncate(
-        &format!(
-            "{}:{} p{} c{} {}{}{}",
-            item.kind,
-            item.profile,
-            item.priority,
-            item.cycles,
-            item.goal,
-            result,
-            failure,
-        ),
-        max_chars,
-    )
-}
-
-fn autonomy_queue_commands(item: &AutonomyQueueItem) -> Vec<String> {
-    let queue = short_id(&item.id);
-    match item.status.as_str() {
-        "pending" | "running" => vec![
-            "cargo run -- --prof-x-step-live 1".to_string(),
-            format!("cargo run -- --prof-x-queue-review {queue}"),
-        ],
-        "passed" | "completed" => vec![
-            format!("cargo run -- --prof-x-queue-review {queue}"),
-            format!("cargo run -- --prof-x-queue-replay {queue}"),
-            format!("cargo run -- --prof-x-queue-publish {queue}"),
-        ],
-        "failed" | "rejected" => vec![
-            format!("cargo run -- --prof-x-queue-review {queue}"),
-            format!("cargo run -- --prof-x-queue-replay {queue}"),
-        ],
-        _ => vec![format!("cargo run -- --prof-x-queue-review {queue}")],
-    }
+    autonomy_queue_summary(item, max_chars)
 }
 
 fn latest_coding_smoke_detail(smoke: &Option<CodingSmokeRecord>) -> Line<'static> {
