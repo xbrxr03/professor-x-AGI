@@ -15,7 +15,7 @@ mod toolbridge;
 use anyhow::{Context, Result};
 use std::collections::BTreeSet;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -5104,6 +5104,25 @@ async fn run_coding_smoke_exercise(
     artifacts.extend(final_test.artifacts.clone());
     let final_test_passed = final_test.success;
     let passed = initial_test_failed && edit.success && final_test_passed;
+    let durable_artifacts = persist_coding_smoke_artifacts(&workspace, task.id, &artifacts)?;
+    if durable_artifacts != artifacts {
+        rewrite_task_artifacts(&mut task, &artifacts, &durable_artifacts);
+        events.append(
+            None,
+            Some(task.id),
+            "coding.smoke.artifacts.persisted",
+            format!(
+                "persisted {} coding smoke artifact(s) into repo evidence",
+                durable_artifacts.len()
+            ),
+            serde_json::json!({
+                "workspace": workspace,
+                "original_artifacts": artifacts,
+                "artifacts": durable_artifacts,
+            }),
+        )?;
+    }
+    artifacts = durable_artifacts;
     task.status = if passed {
         TaskStatus::Complete
     } else {
@@ -6269,6 +6288,54 @@ fn write_coding_smoke_report(report: &CodingSmokeReport) -> Result<PathBuf> {
     ));
     std::fs::write(&path, serde_json::to_string_pretty(report)?)?;
     Ok(path)
+}
+
+fn persist_coding_smoke_artifacts(
+    workspace: &Path,
+    task_id: uuid::Uuid,
+    artifacts: &[String],
+) -> Result<Vec<String>> {
+    let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let task_short = short_fragment(&task_id.to_string()).to_string();
+    let dest_dir = PathBuf::from("artifacts")
+        .join("coding-smoke")
+        .join(date)
+        .join(task_short)
+        .join("evidence");
+    let mut durable = Vec::with_capacity(artifacts.len());
+    for artifact in artifacts {
+        let source = PathBuf::from(artifact);
+        if !source.starts_with(workspace) {
+            durable.push(artifact.clone());
+            continue;
+        }
+        let relative = source.strip_prefix(workspace).unwrap_or(&source);
+        let destination = dest_dir.join(relative);
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::copy(&source, &destination).with_context(|| {
+            format!(
+                "copy coding smoke artifact {} to {}",
+                source.display(),
+                destination.display()
+            )
+        })?;
+        durable.push(destination.to_string_lossy().to_string());
+    }
+    Ok(durable)
+}
+
+fn rewrite_task_artifacts(task: &mut TaskNode, original: &[String], durable: &[String]) {
+    for step in &mut task.steps {
+        for artifact in &mut step.observation.artifacts {
+            if let Some(index) = original.iter().position(|candidate| candidate == artifact) {
+                if let Some(replacement) = durable.get(index) {
+                    *artifact = replacement.clone();
+                }
+            }
+        }
+    }
 }
 
 fn write_coding_session_report(report: &CodingSessionReport) -> Result<PathBuf> {
@@ -8583,6 +8650,26 @@ fn publishable_coding_session_artifact_path(path: &std::path::Path) -> bool {
             .starts_with("artifacts/repo-patches/")
 }
 
+fn git_add_publishable_artifacts(
+    repo_root: &std::path::Path,
+    paths: &[PathBuf],
+    label: &str,
+) -> Result<()> {
+    let mut add = std::process::Command::new("git");
+    add.arg("add").arg("-f").arg("--");
+    for path in paths {
+        add.arg(path);
+    }
+    let add = add.current_dir(repo_root).output()?;
+    if !add.status.success() {
+        anyhow::bail!(
+            "git add {label} failed: {}",
+            String::from_utf8_lossy(&add.stderr)
+        );
+    }
+    Ok(())
+}
+
 fn commit_coding_session_artifacts(
     repo_root: &std::path::Path,
     paths: &[PathBuf],
@@ -8591,18 +8678,7 @@ fn commit_coding_session_artifacts(
     if paths.is_empty() {
         anyhow::bail!("no coding session artifacts selected for publish");
     }
-    let mut add = std::process::Command::new("git");
-    add.arg("add").arg("--");
-    for path in paths {
-        add.arg(path);
-    }
-    let add = add.current_dir(repo_root).output()?;
-    if !add.status.success() {
-        anyhow::bail!(
-            "git add coding session artifacts failed: {}",
-            String::from_utf8_lossy(&add.stderr)
-        );
-    }
+    git_add_publishable_artifacts(repo_root, paths, "coding session artifacts")?;
     let diff = std::process::Command::new("git")
         .args(["diff", "--cached", "--quiet", "--"])
         .args(paths)
@@ -9850,18 +9926,7 @@ fn commit_run_artifacts(
     if paths.is_empty() {
         anyhow::bail!("no run artifacts selected for publish");
     }
-    let mut add = std::process::Command::new("git");
-    add.arg("add").arg("--");
-    for path in paths {
-        add.arg(path);
-    }
-    let add = add.current_dir(repo_root).output()?;
-    if !add.status.success() {
-        anyhow::bail!(
-            "git add run artifacts failed: {}",
-            String::from_utf8_lossy(&add.stderr)
-        );
-    }
+    git_add_publishable_artifacts(repo_root, paths, "run artifacts")?;
     let diff = std::process::Command::new("git")
         .args(["diff", "--cached", "--quiet", "--"])
         .args(paths)
@@ -11702,6 +11767,84 @@ mod tests {
     }
 
     #[test]
+    fn coding_smoke_artifacts_are_copied_into_repo_evidence() {
+        let original_cwd = std::env::current_dir().unwrap();
+        let repo = std::env::temp_dir().join(format!("px-smoke-repo-{}", uuid::Uuid::new_v4()));
+        let workspace =
+            std::env::temp_dir().join(format!("px-smoke-workspace-{}", uuid::Uuid::new_v4()));
+        let command_artifact = workspace
+            .join("artifacts")
+            .join("commands")
+            .join("2026-06-09")
+            .join("cargo-test.json");
+        let patch_artifact = workspace
+            .join("artifacts")
+            .join("replacements")
+            .join("2026-06-09")
+            .join("change.diff");
+        std::fs::create_dir_all(command_artifact.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(patch_artifact.parent().unwrap()).unwrap();
+        std::fs::write(&command_artifact, "{}\n").unwrap();
+        std::fs::write(&patch_artifact, "diff --git a/src/lib.rs b/src/lib.rs\n").unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        std::env::set_current_dir(&repo).unwrap();
+
+        let task_id = uuid::Uuid::new_v4();
+        let durable = persist_coding_smoke_artifacts(
+            &workspace,
+            task_id,
+            &[
+                command_artifact.display().to_string(),
+                patch_artifact.display().to_string(),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(durable.len(), 2);
+        assert!(
+            durable
+                .iter()
+                .all(|path| path.starts_with("artifacts/coding-smoke/"))
+        );
+        assert!(durable.iter().all(|path| !path.starts_with("/tmp/")));
+        assert!(durable.iter().all(|path| repo.join(path).exists()));
+
+        std::env::set_current_dir(original_cwd).unwrap();
+        let _ = std::fs::remove_dir_all(repo);
+        let _ = std::fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn rewrite_task_artifacts_updates_step_observations() {
+        let mut task = TaskNode::new("fix failing test".to_string(), TaskType::UserRequest, 100);
+        let action = Action {
+            tool_name: "shell.restricted".to_string(),
+            params: serde_json::json!({"command": "cargo test"}),
+            risk_score: 60,
+        };
+        let observation = Observation {
+            success: true,
+            output: "ok".to_string(),
+            error: None,
+            tokens_used: 0,
+            execution_ms: 1,
+            artifacts: vec!["/tmp/px/artifacts/commands/a.json".to_string()],
+        };
+        record_smoke_step(&mut task, 1, "run tests", action, &observation);
+
+        rewrite_task_artifacts(
+            &mut task,
+            &["/tmp/px/artifacts/commands/a.json".to_string()],
+            &["artifacts/coding-smoke/2026-06-09/task/evidence/a.json".to_string()],
+        );
+
+        assert_eq!(
+            task.steps[0].observation.artifacts,
+            vec!["artifacts/coding-smoke/2026-06-09/task/evidence/a.json"]
+        );
+    }
+
+    #[test]
     fn interactive_help_surfaces_observer_commands() {
         let help = format_interactive_help();
 
@@ -12856,6 +12999,47 @@ mod tests {
         assert!(!publishable_run_artifact_path(std::path::Path::new(
             "professor-x/src/main.rs"
         )));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn git_add_publishable_artifacts_force_adds_ignored_evidence() {
+        let root = std::env::temp_dir().join(format!("px-force-add-{}", uuid::Uuid::new_v4()));
+        let artifact = root
+            .join("professor-x")
+            .join("artifacts")
+            .join("transcripts")
+            .join("2026-06-09")
+            .join("task.json");
+        std::fs::create_dir_all(artifact.parent().unwrap()).unwrap();
+        std::fs::write(root.join(".gitignore"), "professor-x/artifacts/transcripts/\n").unwrap();
+        std::fs::write(&artifact, "{}\n").unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .arg("init")
+                .current_dir(&root)
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+
+        git_add_publishable_artifacts(
+            &root,
+            &[PathBuf::from(
+                "professor-x/artifacts/transcripts/2026-06-09/task.json",
+            )],
+            "test artifacts",
+        )
+        .unwrap();
+        let staged = std::process::Command::new("git")
+            .args(["diff", "--cached", "--name-only"])
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&staged.stdout);
+
+        assert!(stdout.contains("professor-x/artifacts/transcripts/2026-06-09/task.json"));
         let _ = std::fs::remove_dir_all(root);
     }
 
