@@ -12,10 +12,14 @@ scripts/autonomy-readiness.sh
 
 The readiness script verifies:
 
+- The working tree is clean. Set `PROFESSOR_X_ALLOW_DIRTY=1` only for advisory
+  checks while developing.
+- Whitespace checks pass for unstaged and staged diffs.
+- Required harness, test, audit, evolution, and paper-output directories exist.
 - Rust compile checks pass.
-- Rust tests pass.
+- Rust binary tests pass.
+- HIRO task inventory smoke passes.
 - The daily-cycle schedule parses and loads project skills.
-- The working tree status is visible before launch.
 
 ## Static Baseline
 
