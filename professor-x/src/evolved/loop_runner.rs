@@ -351,7 +351,7 @@ fn apply_node_change_at(root: &Path, node: &EvolutionNode) -> Result<bool> {
         }
         HarnessComponent::SkillDefinition(name) => {
             let path = component_relative_path(root, node)
-                .unwrap_or_else(|| PathBuf::from("skills").join(format!("{name}.md")));
+                .unwrap_or_else(|| skill_definition_path(name));
             let content = sanitize_generated_content(&node.diff);
             // Existing skills may be revised but not gutted; new skills are free.
             preservation_guard(root, &path, &content, 0.4, &[])?;
@@ -452,13 +452,19 @@ fn component_relative_path(root: &Path, node: &EvolutionNode) -> Option<PathBuf>
     let path = match &node.target_component {
         HarnessComponent::SystemPrompt => PathBuf::from("personas/professor_x.md"),
         HarnessComponent::HarnessConfig => PathBuf::from("config/hardware.toml"),
-        HarnessComponent::SkillDefinition(name) => PathBuf::from("skills").join(format!("{name}.md")),
+        HarnessComponent::SkillDefinition(name) => skill_definition_path(name),
         _ => return None,
     };
     Some(match nested_prefix {
         Some(prefix) => prefix.join(path),
         None => path,
     })
+}
+
+fn skill_definition_path(name: &str) -> PathBuf {
+    PathBuf::from("skills")
+        .join("conductor")
+        .join(format!("{name}.md"))
 }
 
 fn sanitize_generated_content(content: &str) -> String {
@@ -1927,7 +1933,7 @@ mod tests {
     fn temp_git_repo() -> PathBuf {
         let root = std::env::temp_dir().join(format!("px-evolve-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(root.join("src")).unwrap();
-        std::fs::create_dir_all(root.join("skills")).unwrap();
+        std::fs::create_dir_all(root.join("skills/conductor")).unwrap();
         std::fs::write(
             root.join("Cargo.toml"),
             "[package]\nname = \"px-evolve-test\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
@@ -1935,7 +1941,7 @@ mod tests {
         .unwrap();
         std::fs::write(root.join("src/lib.rs"), "pub fn ok() -> bool { true }\n").unwrap();
         std::fs::write(
-            root.join("skills/existing.md"),
+            root.join("skills/conductor/existing.md"),
             "When a tool fails, inspect the observation and retry with a narrower input.\n",
         )
         .unwrap();
@@ -1973,8 +1979,8 @@ mod tests {
         let verified = verify_node_in_sandbox(&root, &node).await.unwrap();
 
         assert!(verified.outcome.accepted, "{}", verified.outcome.reason);
-        assert!(verified.diff.contains("skills/fallback.md"));
-        assert!(!root.join("skills/fallback.md").exists());
+        assert!(verified.diff.contains("skills/conductor/fallback.md"));
+        assert!(!root.join("skills/conductor/fallback.md").exists());
 
         let _ = std::fs::remove_dir_all(root);
     }
@@ -2014,13 +2020,14 @@ mod tests {
     #[tokio::test]
     async fn patch_sandbox_verifier_accepts_safe_diff() {
         let root = temp_git_repo();
-        let patch = "diff --git a/skills/existing.md b/skills/existing.md\n--- a/skills/existing.md\n+++ b/skills/existing.md\n@@ -1 +1,2 @@\n When a tool fails, inspect the observation and retry with a narrower input.\n+Record the fallback reason so later review can compare the failure pattern.\n";
+        let patch = "diff --git a/skills/conductor/existing.md b/skills/conductor/existing.md\n--- a/skills/conductor/existing.md\n+++ b/skills/conductor/existing.md\n@@ -1 +1,2 @@\n When a tool fails, inspect the observation and retry with a narrower input.\n+Record the fallback reason so later review can compare the failure pattern.\n";
 
         let verified = verify_diff_in_sandbox(&root, patch).await.unwrap();
 
         assert!(verified.outcome.accepted, "{}", verified.outcome.reason);
         assert!(verified.diff.contains("Record the fallback reason"));
-        let original = std::fs::read_to_string(root.join("skills/existing.md")).unwrap();
+        let original =
+            std::fs::read_to_string(root.join("skills/conductor/existing.md")).unwrap();
         assert!(!original.contains("Record the fallback reason"));
 
         let _ = std::fs::remove_dir_all(root);
@@ -2103,11 +2110,13 @@ mod tests {
     fn component_paths_follow_repo_layout_and_strip_code_fences() {
         let root = std::env::temp_dir().join(format!("px-path-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(root.join("professor-x/skills")).unwrap();
-        let node = skill_node("RetryPlanGeneration", "content");
+        let node = skill_node("retry-plan-generation", "content");
 
         assert_eq!(
             changed_paths_for_node_at(&root, &node),
-            vec![PathBuf::from("professor-x/skills/RetryPlanGeneration.md")]
+            vec![PathBuf::from(
+                "professor-x/skills/conductor/retry-plan-generation.md"
+            )]
         );
         assert_eq!(
             sanitize_generated_content("```markdown\n# Skill\nbody\n```"),

@@ -3286,6 +3286,7 @@ fn commit_operator_proposal(
     let skill_path = match &node.target_component {
         HarnessComponent::SkillDefinition(name) => PathBuf::from("professor-x")
             .join("skills")
+            .join("conductor")
             .join(format!("{name}.md")),
         _ => anyhow::bail!("operator commit smoke only supports skill proposals"),
     };

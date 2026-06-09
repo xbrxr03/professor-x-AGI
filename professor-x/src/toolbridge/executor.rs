@@ -1127,7 +1127,7 @@ mod tests {
         for name in [
             "px-experiment-runner",
             "px-literature-search",
-            "RetryPlanGeneration",
+            "retry-plan-generation",
         ] {
             assert!(
                 !is_known_builtin_tool(name),

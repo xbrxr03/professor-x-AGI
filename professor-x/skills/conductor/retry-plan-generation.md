@@ -1,4 +1,4 @@
-# RetryPlanGeneration  
+# retry-plan-generation
 Purpose: Analyze failed tool observations and generate a bounded retry plan with parameter adjustments and safety constraints.  
 Workflow:  
 1. Parse the tool's observation for error type (e.g., timeout, invalid output, partial success)  
