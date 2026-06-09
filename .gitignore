@@ -33,4 +33,10 @@ professor-x/artifacts/patches/
 # Stray test files written by benchmark tasks
 px-test.txt
 professor-x/px-test.txt
+px-sc*-test.txt
+px-sc*-counter.txt
+px-sc*-regression-test.txt
+tmp/px-sc*-test.txt
+tmp/px-sc*-counter.txt
+df_output.txt
 *.tmp

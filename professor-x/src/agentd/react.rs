@@ -1076,6 +1076,7 @@ impl ReactLoop {
         // Circuit breaker: pause after 3 consecutive tool failures
         let mut consecutive_failures: u8 = 0;
         let mut escalated = false;
+        let auto_repair_on = auto_repair_enabled_from_env();
 
         // LCAP: apply context budget
         let mut react_opts = ModelOptions::for_react();
@@ -1420,7 +1421,7 @@ impl ReactLoop {
                         }
                     };
 
-                    let observation = if observation.success {
+                    let observation = if observation.success || !auto_repair_on {
                         observation
                     } else {
                         augment_with_repair_hint(
@@ -1463,7 +1464,7 @@ impl ReactLoop {
                     }
 
                     if consecutive_failures >= 3 {
-                        if !escalated {
+                        if auto_repair_on && !escalated {
                             escalated = true;
                             consecutive_failures = 0;
                             self.emit_event(
@@ -2278,6 +2279,19 @@ fn augment_with_repair_hint(
     obs
 }
 
+fn auto_repair_enabled_from_env() -> bool {
+    std::env::var("PROFESSOR_X_AUTOREPAIR")
+        .map(|value| auto_repair_enabled_value(&value))
+        .unwrap_or(true)
+}
+
+fn auto_repair_enabled_value(value: &str) -> bool {
+    !matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "0" | "false" | "no" | "off" | "disable" | "disabled"
+    )
+}
+
 fn extract_keywords(text: &str) -> Vec<String> {
     // Naive keyword extraction: split on whitespace, keep words > 4 chars, dedup
     let mut words: Vec<String> = text
@@ -2461,7 +2475,8 @@ pub(crate) fn effective_memory_ceiling(lcap_ceiling: u32, override_budget: Optio
 #[cfg(test)]
 mod tests {
     use super::{
-        augment_with_repair_hint, effective_memory_ceiling, predict_success_from_ice, Observation,
+        augment_with_repair_hint, auto_repair_enabled_value, effective_memory_ceiling,
+        predict_success_from_ice, Observation,
     };
     use crate::policyd::PermissionScope;
 
@@ -2518,6 +2533,19 @@ mod tests {
         let p = predict_success_from_ice(&examples);
         // (0+1)/(2+2) = 0.25
         assert!((p - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn auto_repair_toggle_defaults_on_except_explicit_off_values() {
+        assert!(auto_repair_enabled_value(""));
+        assert!(auto_repair_enabled_value("on"));
+        assert!(auto_repair_enabled_value("true"));
+        assert!(auto_repair_enabled_value("1"));
+        assert!(!auto_repair_enabled_value("off"));
+        assert!(!auto_repair_enabled_value(" OFF "));
+        assert!(!auto_repair_enabled_value("false"));
+        assert!(!auto_repair_enabled_value("0"));
+        assert!(!auto_repair_enabled_value("disabled"));
     }
 
     #[test]
