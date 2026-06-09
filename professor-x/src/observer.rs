@@ -1160,38 +1160,54 @@ fn draw_timeline(frame: &mut Frame, area: Rect, app: &ObserverApp) {
 fn draw_event_detail(frame: &mut Frame, area: Rect, app: &ObserverApp) {
     let selected = app.snapshot.events.get(app.selected_offset);
     let lines = match selected {
-        Some(event) => vec![
-            Line::from(vec![
-                Span::styled("id      ", label()),
-                Span::raw(format!("#{}", event.id)),
-                Span::raw("   "),
-                Span::styled("time ", label()),
-                Span::raw(event.timestamp.format("%Y-%m-%d %H:%M:%S").to_string()),
-            ]),
-            Line::from(vec![
-                Span::styled("type    ", label()),
-                Span::styled(event.event_type.clone(), event_style(&event.event_type)),
-            ]),
-            Line::from(vec![
-                Span::styled("task    ", label()),
-                Span::raw(event.task_id.clone().unwrap_or_else(|| "-".to_string())),
-            ]),
-            Line::from(vec![
-                Span::styled("session ", label()),
-                Span::raw(event.session_id.clone().unwrap_or_else(|| "-".to_string())),
-            ]),
-            Line::from(vec![
-                Span::styled("summary ", label()),
-                Span::raw(event.summary.clone()),
-            ]),
-            Line::from(vec![
+        Some(event) => {
+            let mut lines = vec![
+                Line::from(vec![
+                    Span::styled("id      ", label()),
+                    Span::raw(format!("#{}", event.id)),
+                    Span::raw("   "),
+                    Span::styled("time ", label()),
+                    Span::raw(event.timestamp.format("%Y-%m-%d %H:%M:%S").to_string()),
+                ]),
+                Line::from(vec![
+                    Span::styled("type    ", label()),
+                    Span::styled(event.event_type.clone(), event_style(&event.event_type)),
+                ]),
+                Line::from(vec![
+                    Span::styled("task    ", label()),
+                    Span::raw(event.task_id.clone().unwrap_or_else(|| "-".to_string())),
+                ]),
+                Line::from(vec![
+                    Span::styled("session ", label()),
+                    Span::raw(event.session_id.clone().unwrap_or_else(|| "-".to_string())),
+                ]),
+                Line::from(vec![
+                    Span::styled("summary ", label()),
+                    Span::raw(event.summary.clone()),
+                ]),
+            ];
+            let evidence = event_evidence_links(event);
+            if !evidence.is_empty() {
+                lines.push(Line::from(vec![
+                    Span::styled("evidence", label()),
+                    Span::raw(format!(" {} linked artifact(s)", evidence.len())),
+                ]));
+                for (kind, path) in evidence.iter().take(6) {
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("{kind:<8}"), label()),
+                        Span::raw(truncate(path, area.width.saturating_sub(10) as usize)),
+                    ]));
+                }
+            }
+            lines.push(Line::from(vec![
                 Span::styled("payload ", label()),
                 Span::raw(truncate(
                     &event.payload.to_string(),
                     area.width.saturating_mul(3) as usize,
                 )),
-            ]),
-        ],
+            ]));
+            lines
+        }
         None => vec![Line::from("No events recorded yet.")],
     };
 
@@ -1885,6 +1901,55 @@ fn format_event_line(event: &AgentEvent) -> String {
     )
 }
 
+fn event_evidence_links(event: &AgentEvent) -> Vec<(String, String)> {
+    let mut links = Vec::new();
+    push_event_payload_link(&mut links, "report", event.payload["report_path"].as_str());
+    push_event_payload_link(&mut links, "result", event.payload["result_report_path"].as_str());
+    push_event_payload_link(&mut links, "journal", event.payload["result_journal_path"].as_str());
+    push_event_payload_link(&mut links, "session", event.payload["session_report_path"].as_str());
+    push_event_payload_link(&mut links, "smoke", event.payload["smoke_report_path"].as_str());
+    push_event_payload_link(&mut links, "transcript", event.payload["transcript_path"].as_str());
+    push_event_payload_link(&mut links, "patch", event.payload["patch_path"].as_str());
+    push_event_payload_array(&mut links, "artifact", event.payload["artifacts"].as_array());
+    push_event_payload_array(
+        &mut links,
+        "verify",
+        event.payload["verification_artifacts"].as_array(),
+    );
+    dedupe_evidence_links(links)
+}
+
+fn push_event_payload_link(links: &mut Vec<(String, String)>, kind: &str, value: Option<&str>) {
+    if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
+        links.push((kind.to_string(), value.to_string()));
+    }
+}
+
+fn push_event_payload_array(
+    links: &mut Vec<(String, String)>,
+    kind: &str,
+    values: Option<&Vec<serde_json::Value>>,
+) {
+    if let Some(values) = values {
+        for value in values.iter().filter_map(|value| value.as_str()) {
+            push_event_payload_link(links, kind, Some(value));
+        }
+    }
+}
+
+fn dedupe_evidence_links(links: Vec<(String, String)>) -> Vec<(String, String)> {
+    let mut unique = Vec::new();
+    for (kind, path) in links {
+        if !unique
+            .iter()
+            .any(|(_, existing): &(String, String)| existing == &path)
+        {
+            unique.push((kind, path));
+        }
+    }
+    unique
+}
+
 fn short_id(id: &str) -> &str {
     &id[..8.min(id.len())]
 }
@@ -1944,5 +2009,51 @@ mod tests {
         assert!(summary.contains("operator_run:commit"));
         assert!(summary.contains("make Prof X work visible"));
         assert!(summary.contains("run 87654321"));
+    }
+
+    #[test]
+    fn selected_event_evidence_links_extract_reviewable_artifacts() {
+        let event = AgentEvent {
+            id: 42,
+            timestamp: chrono::Utc::now(),
+            session_id: None,
+            task_id: Some("task-12345678".to_string()),
+            event_type: "artifact.daily_update.invalid".to_string(),
+            summary: "daily update artifact rejected".to_string(),
+            payload: serde_json::json!({
+                "report_path": "artifacts/validation/2026-06-09/report.json",
+                "transcript_path": "artifacts/transcripts/2026-06-09/task.json",
+                "patch_path": "artifacts/patches/fix.diff",
+                "artifacts": [
+                    "professor-x/ops/daily/2026-06-09.md",
+                    "artifacts/validation/2026-06-09/report.json"
+                ],
+                "verification_artifacts": [
+                    "artifacts/commands/2026-06-09/cargo-test.json"
+                ]
+            }),
+        };
+
+        let links = event_evidence_links(&event);
+
+        assert!(links.iter().any(|(kind, path)| {
+            kind == "report" && path == "artifacts/validation/2026-06-09/report.json"
+        }));
+        assert!(links.iter().any(|(kind, path)| {
+            kind == "transcript" && path == "artifacts/transcripts/2026-06-09/task.json"
+        }));
+        assert!(links.iter().any(|(kind, path)| {
+            kind == "artifact" && path == "professor-x/ops/daily/2026-06-09.md"
+        }));
+        assert!(links.iter().any(|(kind, path)| {
+            kind == "verify" && path == "artifacts/commands/2026-06-09/cargo-test.json"
+        }));
+        assert_eq!(
+            links
+                .iter()
+                .filter(|(_, path)| path == "artifacts/validation/2026-06-09/report.json")
+                .count(),
+            1
+        );
     }
 }
