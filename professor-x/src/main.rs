@@ -10566,6 +10566,7 @@ fn render_work_cockpit(
     let recent_events = events.work_tail(limit)?;
     let latest_run = WorkLoopRunStore::new(Arc::clone(&memory.db)).latest()?;
     let latest_coding_session = CodingSessionStore::new(Arc::clone(&memory.db)).latest()?;
+    let latest_coding_smoke = CodingSmokeStore::new(Arc::clone(&memory.db)).latest()?;
     let recent_queue = AutonomyQueueStore::new(Arc::clone(&memory.db)).recent(5)?;
     let runtime_line = cockpit_runtime_line(&repo_root);
     let gate_store = WorkLoopGateStore::new(Arc::clone(&memory.db));
@@ -10582,6 +10583,7 @@ fn render_work_cockpit(
         &recent_events,
         latest_run.as_ref(),
         latest_coding_session.as_ref(),
+        latest_coding_smoke.as_ref(),
         latest_gate.as_ref(),
         &recent_gates,
         &recent_queue,
@@ -10594,6 +10596,7 @@ fn format_work_cockpit(
     recent_events: &[memd::events::AgentEvent],
     latest_run: Option<&WorkLoopRunRecord>,
     latest_coding_session: Option<&CodingSessionRecord>,
+    latest_coding_smoke: Option<&CodingSmokeRecord>,
     latest_gate: Option<&WorkLoopGateRecord>,
     recent_gates: &[WorkLoopGateRecord],
     recent_queue: &[AutonomyQueueItem],
@@ -10731,6 +10734,31 @@ fn format_work_cockpit(
             ));
         }
         None => lines.push("  no coding-agent sessions recorded yet".to_string()),
+    }
+
+    lines.push(String::new());
+    lines.push("Latest coding smoke".to_string());
+    match latest_coding_smoke {
+        Some(smoke) => {
+            lines.push(format!(
+                "  {} generated={} workspace={}",
+                if smoke.passed { "passed" } else { "failed" },
+                smoke.generated_at.format("%Y-%m-%d %H:%M:%S"),
+                truncate(&smoke.workspace, 96),
+            ));
+            lines.push(format!(
+                "  gates initial_failed={} edit_applied={} final_passed={}",
+                smoke.initial_test_failed, smoke.edit_applied, smoke.final_test_passed
+            ));
+            lines.push(format!("  report {}", truncate(&smoke.report_path, 130)));
+            if let Some(transcript) = &smoke.transcript_path {
+                lines.push(format!("  transcript {}", truncate(transcript, 130)));
+            }
+            for artifact in smoke.artifacts.iter().take(3) {
+                lines.push(format!("  artifact {}", truncate(artifact, 130)));
+            }
+        }
+        None => lines.push("  no coding smoke records recorded yet".to_string()),
     }
 
     lines.push(String::new());
@@ -13328,6 +13356,27 @@ mod tests {
             failure_reason: None,
             recorded_at: now,
         };
+        let smoke = CodingSmokeRecord {
+            id: Some(12),
+            generated_at: now,
+            workspace: "artifacts/coding-smoke/2026-06-10/69c32462/evidence".to_string(),
+            passed: true,
+            initial_test_failed: true,
+            edit_applied: true,
+            final_test_passed: true,
+            report_path: "artifacts/coding-smoke/2026-06-10/smoke-075320.json".to_string(),
+            transcript_path: Some(
+                "artifacts/transcripts/2026-06-10/69c32462-5fa6-4731-a49e-b1aa5263a3fa.json"
+                    .to_string(),
+            ),
+            artifacts: vec![
+                "artifacts/coding-smoke/2026-06-10/69c32462/evidence/artifacts/commands/run.json"
+                    .to_string(),
+                "artifacts/coding-smoke/2026-06-10/69c32462/evidence/artifacts/replacements/change.diff"
+                    .to_string(),
+            ],
+            recorded_at: now,
+        };
         let event = memd::events::AgentEvent {
             id: 10,
             timestamp: now,
@@ -13358,6 +13407,7 @@ mod tests {
             &[event],
             Some(&run),
             Some(&session),
+            Some(&smoke),
             Some(&gate),
             std::slice::from_ref(&gate),
             std::slice::from_ref(&queued),
@@ -13380,6 +13430,11 @@ mod tests {
         assert!(screen.contains("commit=eedcd3e1"));
         assert!(screen.contains("report artifacts/coding-sessions/2026-06-01/session-135052-0aeff8ac.json"));
         assert!(screen.contains("commands sessions=--coding-sessions 5"));
+        assert!(screen.contains("Latest coding smoke"));
+        assert!(screen.contains("gates initial_failed=true edit_applied=true final_passed=true"));
+        assert!(screen.contains("report artifacts/coding-smoke/2026-06-10/smoke-075320.json"));
+        assert!(screen.contains("transcript artifacts/transcripts/2026-06-10/69c32462-5fa6-4731-a49e-b1aa5263a3fa.json"));
+        assert!(screen.contains("artifact artifacts/coding-smoke/2026-06-10/69c32462/evidence/artifacts/commands/run.json"));
         assert!(screen.contains("proof report artifacts/coding-smoke/report.json"));
         assert!(screen.contains("proof transcript artifacts/transcripts/task.json"));
         assert!(screen.contains("Recent signal events=1"));
