@@ -1058,6 +1058,8 @@ impl ReactLoop {
         num_ctx: u32,
     ) -> Result<bool> {
         const MAX_STEPS: usize = 20;
+        const SYNTHESIS_CHECKPOINT_STEP: usize = 14;
+        const FORFEIT_AFTER_SYNTHESIS_STEP: usize = 18;
         let scope = PermissionScope::default_autonomous();
         let executor = ToolExecutor::new(Arc::clone(&self.registry))
             .with_workspace_root(scope.workspace_root.clone())
@@ -1077,6 +1079,7 @@ impl ReactLoop {
         let mut consecutive_failures: u8 = 0;
         let mut escalated = false;
         let auto_repair_on = auto_repair_enabled_from_env();
+        let mut synthesis_forced = false;
 
         // LCAP: apply context budget
         let mut react_opts = ModelOptions::for_react();
@@ -1085,6 +1088,47 @@ impl ReactLoop {
         for step_idx in 0..MAX_STEPS {
             if self.cancel.is_cancelled() {
                 return Ok(false);
+            }
+
+            if should_forfeit_after_synthesis(step_idx, synthesis_forced, FORFEIT_AFTER_SYNTHESIS_STEP) {
+                warn!(
+                    "react: synthesis/forfeit guard stopped task '{}' before max steps",
+                    task.description
+                );
+                self.emit_event(
+                    Some(session_id),
+                    Some(task.id),
+                    "react.forfeit",
+                    "synthesis/forfeit guard stopped task before max steps",
+                    json!({"step": step_idx + 1, "max_steps": MAX_STEPS}),
+                );
+                return Ok(false);
+            }
+
+            if should_force_synthesis(step_idx, synthesis_forced, SYNTHESIS_CHECKPOINT_STEP) {
+                synthesis_forced = true;
+                let guidance = synthesis_guidance(task);
+                self.emit_event(
+                    Some(session_id),
+                    Some(task.id),
+                    "react.synthesis_required",
+                    "forcing synthesis or explicit failure before max steps",
+                    json!({"step": step_idx + 1, "max_steps": MAX_STEPS}),
+                );
+                task.steps.push(ExecutionStep {
+                    index: (task.steps.len() + 1) as u32,
+                    thought: "loop guard: enough actions have run; forcing synthesis or forfeit"
+                        .to_string(),
+                    action: Action {
+                        tool_name: "auto.synthesize".to_string(),
+                        params: json!({}),
+                        risk_score: 0,
+                    },
+                    observation: guidance,
+                    timestamp: Utc::now(),
+                });
+                let _ = TaskRunStore::new(Arc::clone(&self.memory.db)).step_recorded(task);
+                continue;
             }
 
             // Build the full prompt for this step
@@ -2260,6 +2304,65 @@ fn finish_answer_from_params(params: &Value) -> Option<String> {
     None
 }
 
+fn should_force_synthesis(step_idx: usize, already_forced: bool, checkpoint_step: usize) -> bool {
+    !already_forced && step_idx >= checkpoint_step
+}
+
+fn should_forfeit_after_synthesis(
+    step_idx: usize,
+    synthesis_forced: bool,
+    forfeit_step: usize,
+) -> bool {
+    synthesis_forced && step_idx >= forfeit_step
+}
+
+fn synthesis_guidance(task: &TaskNode) -> Observation {
+    let summary = successful_observation_summary(task, 5, 900);
+    let output = if summary.trim().is_empty() {
+        "SYNTHESIS REQUIRED — no successful observations are available yet. Stop exploring. If you cannot answer from the current evidence, call `fail` with a specific reason. Do not continue tool use unless it is the single missing command named in the task.".to_string()
+    } else {
+        format!(
+            "SYNTHESIS REQUIRED — stop exploring and answer from the successful observations already gathered. Call `finish` with `{{\"answer\":\"...\"}}` if the requested facts are present, or call `fail` with a specific missing fact. Do not use more tools unless one clearly missing required fact remains.\n\nSuccessful observations:\n{}",
+            summary
+        )
+    };
+    Observation {
+        success: false,
+        output,
+        error: Some("synthesis required before max steps".to_string()),
+        tokens_used: 0,
+        execution_ms: 0,
+        artifacts: Vec::new(),
+    }
+}
+
+fn successful_observation_summary(task: &TaskNode, limit: usize, max_chars: usize) -> String {
+    let mut lines = Vec::new();
+    for step in task.steps.iter().rev() {
+        if !step.observation.success {
+            continue;
+        }
+        let out = step.observation.output.trim();
+        if out.is_empty() {
+            continue;
+        }
+        let preview = out
+            .replace('\n', " ")
+            .chars()
+            .take(max_chars)
+            .collect::<String>();
+        lines.push(format!(
+            "- step {} `{}`: {}",
+            step.index, step.action.tool_name, preview
+        ));
+        if lines.len() >= limit {
+            break;
+        }
+    }
+    lines.reverse();
+    lines.join("\n")
+}
+
 fn extract_field(text: &str, field: &str) -> Option<String> {
     let prefix = format!("{field}:");
     for line in text.lines() {
@@ -2561,9 +2664,13 @@ pub(crate) fn effective_memory_ceiling(lcap_ceiling: u32, override_budget: Optio
 mod tests {
     use super::{
         augment_with_repair_hint, auto_repair_enabled_value, effective_memory_ceiling,
-        finish_answer_from_params, predict_success_from_ice, Observation,
+        finish_answer_from_params, predict_success_from_ice, should_force_synthesis,
+        should_forfeit_after_synthesis, successful_observation_summary, Observation,
     };
+    use crate::agentd::graph::{ExecutionStep, TaskNode, TaskType};
     use crate::policyd::PermissionScope;
+    use crate::toolbridge::executor::Action;
+    use chrono::Utc;
     use serde_json::json;
 
     #[test]
@@ -2615,6 +2722,59 @@ mod tests {
             ),
             Some("Task passed after running cargo check.".to_string())
         );
+    }
+
+    #[test]
+    fn synthesis_guard_triggers_once_at_checkpoint() {
+        assert!(!should_force_synthesis(13, false, 14));
+        assert!(should_force_synthesis(14, false, 14));
+        assert!(!should_force_synthesis(15, true, 14));
+    }
+
+    #[test]
+    fn synthesis_forfeit_waits_until_threshold() {
+        assert!(!should_forfeit_after_synthesis(17, true, 18));
+        assert!(should_forfeit_after_synthesis(18, true, 18));
+        assert!(!should_forfeit_after_synthesis(18, false, 18));
+    }
+
+    #[test]
+    fn successful_observation_summary_uses_recent_successes_only() {
+        let mut task = TaskNode::new("summarize observations".to_string(), TaskType::Research, 1);
+        task.steps.push(ExecutionStep {
+            index: 1,
+            thought: "read".to_string(),
+            action: Action {
+                tool_name: "fs.read".to_string(),
+                params: json!({"path": "Cargo.toml"}),
+                risk_score: 0,
+            },
+            observation: Observation {
+                success: true,
+                output: "package name is professor-x\nversion is 0.1.0".to_string(),
+                error: None,
+                tokens_used: 0,
+                execution_ms: 0,
+                artifacts: Vec::new(),
+            },
+            timestamp: Utc::now(),
+        });
+        task.steps.push(ExecutionStep {
+            index: 2,
+            thought: "bad".to_string(),
+            action: Action {
+                tool_name: "shell.restricted".to_string(),
+                params: json!({"command": "bad"}),
+                risk_score: 0,
+            },
+            observation: Observation::err("command failed"),
+            timestamp: Utc::now(),
+        });
+
+        let summary = successful_observation_summary(&task, 5, 200);
+        assert!(summary.contains("step 1 `fs.read`"));
+        assert!(summary.contains("package name is professor-x"));
+        assert!(!summary.contains("command failed"));
     }
 
     #[test]

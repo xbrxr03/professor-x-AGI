@@ -1,0 +1,13 @@
+{
+  "run_id": "f1c8a72c-d601-4591-ad44-f1b2e6310187",
+  "round": 0,
+  "task_id": "tu_005",
+  "category": "tool_use",
+  "attempt": 2,
+  "passed": false,
+  "failure_reason": "duplicate action blocked",
+  "output_hash": "884fc3c8bd66840862cb0040f8bb5aca6b4e50e039392110e8f4f6983ac9b902",
+  "duration_ms": 60013,
+  "harness_commit": "c0f404d9e434e38ac32248220717f2bbfcb7642f",
+  "recorded_at": "2026-06-10T17:42:38.441828887Z"
+}

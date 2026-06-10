@@ -1,0 +1,16 @@
+{
+  "run_id": "f1c8a72c-d601-4591-ad44-f1b2e6310187",
+  "harness_commit": "c0f404d9e434e38ac32248220717f2bbfcb7642f",
+  "frozen_harness": true,
+  "rounds": [
+    {
+      "round": 0,
+      "p_tool": 0.33333334,
+      "p_plan": 0.0,
+      "p_correct": 0.0,
+      "pass_at_3": 0.33333334,
+      "recorded_at": "2026-06-10T17:59:03.854358730Z"
+    }
+  ],
+  "recorded_at": "2026-06-10T17:59:03.854359563Z"
+}
