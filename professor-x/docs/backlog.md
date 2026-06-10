@@ -79,5 +79,6 @@ Assistant-grade interactive experience (the REPL today is operator-grade):
   `/api/task`) is the contract for an OpenUI-generated frontend.
 
 ## Consolidation
-- ◐ **PR #10** (`harness-gaps` → `main`) — open, awaiting review/merge. Do not
-  merge without explicit instruction.
+- ✓ **PR #12** (`harness-gaps` → `main`) — merged into `main`; added
+  `NEXT_STEPS.md`, the 2026-06-08 trajectory corpus, and the Frankenstein harness
+  master plan.

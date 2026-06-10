@@ -9,7 +9,8 @@ into FINISHED tasks — edit interface + anti-thrash + context governance first.
 1. **Do tasks in number order.** Do NOT start a task whose `Blocked by` is unfinished.
 2. **One task in progress at a time.** Mark `[~]` when you start, `[x]` when done with
    the commit hash. Never mark `[x]` unless its *Done-when* is literally true.
-3. **Branch:** stay on `harness-gaps`. Do NOT merge to main. Commit + push freely.
+3. **Branch:** work from `main`. The `harness-gaps` research branch has been merged;
+   keep future work on the single clean tree unless a specific PR branch is needed.
 4. **Every build task ends with a measurement**, not a vibe. If you can't measure it,
    it's not done.
 5. **Local-first.** Never add multi-provider/frontier-API reach. Ollama only.
@@ -123,4 +124,5 @@ thrash/over-stepping is still a top failure.*
 ---
 
 ## Status log (append one line per completed task)
-- _(none yet — Phase 0.1 is next)_
+- 2026-06-10: `harness-gaps` research plan and trajectory corpus merged into `main`;
+  Phase 0.1 remains the next ordered task.
