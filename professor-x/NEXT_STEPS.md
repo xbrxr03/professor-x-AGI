@@ -83,10 +83,16 @@ this remains high-value but no longer precedes answer/loop reliability.*
   intact. `cargo run -- --coding-smoke` still passes with the verifier active in
   `artifacts/coding-smoke/2026-06-10/smoke-225252.json`.
   **Commit:** `dd69aae`.
-- [ ] **1.3 Windowed file ACI.** New `src/toolbridge/window.rs`: `open/scroll/goto` a
+- [x] **1.3 Windowed file ACI.** New `src/toolbridge/window.rs`: `open/scroll/goto` a
   bounded, line-numbered window instead of whole-file reads. Reference: SWE-agent
   `tools/windowed`. **Done-when:** edits use stable line ranges; tokens-per-file-touch drop.
   **Blocked by:** 1.1.
+  **Result:** Added `fs.window_open`, `fs.window_goto`, and `fs.window_scroll`, each returning
+  bounded `L<number>|hash| content` windows. ReAct prompt now prefers windowed reads for code,
+  policy treats window tools as workspace-bound reads, and coding smoke uses `fs.window_open`
+  before `fs.hash_edit`. Evidence: `artifacts/coding-smoke/2026-06-10/smoke-225830.json`
+  and transcript `artifacts/transcripts/2026-06-10/93667d27-248b-45a6-916c-2b32a029b133.json`.
+  **Commit:** `5a2e0b1`.
 - [ ] **1.4 Fuzzy apply-patch fallback.** Mirror codex
   `_refs/harnesses/codex/codex-rs/apply-patch/src/{parser,seek_sequence,streaming_parser}.rs`
   (uses `similar`). New `src/toolbridge/apply_patch.rs`. Retire exact-match `fs.replace`.
@@ -172,3 +178,6 @@ thrash/over-stepping is still a top failure.*
 - 2026-06-10: Phase 1.2 edit-time verification implemented in `dd69aae`;
   broken Rust/JSON edits are rejected before final write and the hash-edit coding smoke
   still passes with verifier evidence in `artifacts/coding-smoke/2026-06-10/smoke-225252.json`.
+- 2026-06-10: Phase 1.3 windowed file ACI implemented in `5a2e0b1`;
+  coding smoke now reads `src/lib.rs` through `fs.window_open` and then applies `fs.hash_edit`,
+  with evidence in `artifacts/coding-smoke/2026-06-10/smoke-225830.json`.
