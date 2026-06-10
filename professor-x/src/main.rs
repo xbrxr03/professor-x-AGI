@@ -8606,6 +8606,9 @@ fn print_coding_session_review(memory: Arc<MemoryManager>, session_ref: &str) ->
         }
     }
 
+    println!("Publish readiness");
+    print_coding_session_publish_readiness(&repo_root, &session)?;
+
     println!("Commands");
     println!(
         "  replay transcript: cargo run -- --task-review {}",
@@ -8625,6 +8628,31 @@ fn print_coding_session_review(memory: Arc<MemoryManager>, session_ref: &str) ->
     );
     println!("  watch: cargo run -- --observe-work");
     Ok(())
+}
+
+fn print_coding_session_publish_readiness(
+    repo_root: &std::path::Path,
+    session: &CodingSessionRecord,
+) -> Result<()> {
+    match coding_session_publish_readiness(repo_root, session) {
+        Ok(paths) => {
+            println!("  ready: {} artifact(s) selected", paths.len());
+            for path in paths {
+                println!("  publishable: {}", path.display());
+            }
+        }
+        Err(err) => {
+            println!("  blocked: {err}");
+        }
+    }
+    Ok(())
+}
+
+fn coding_session_publish_readiness(
+    repo_root: &std::path::Path,
+    session: &CodingSessionRecord,
+) -> Result<Vec<PathBuf>> {
+    publishable_coding_session_artifact_paths(repo_root, session)
 }
 
 fn publish_coding_session_artifacts(memory: Arc<MemoryManager>, session_ref: &str) -> Result<()> {
@@ -13197,8 +13225,10 @@ mod tests {
         };
 
         let paths = publishable_coding_session_artifact_paths(&root, &session).unwrap();
+        let readiness = coding_session_publish_readiness(&root, &session).unwrap();
 
         assert_eq!(paths.len(), 3);
+        assert_eq!(readiness, paths);
         assert!(paths.iter().any(|path| path.ends_with("session-12345678.json")));
         assert!(paths.iter().any(|path| path.ends_with("task-12345678.json")));
         assert!(paths.iter().any(|path| path.ends_with("cargo-check.json")));
@@ -13211,6 +13241,7 @@ mod tests {
 
         session.artifacts.push(source_file.display().to_string());
         assert!(publishable_coding_session_artifact_paths(&root, &session).is_err());
+        assert!(coding_session_publish_readiness(&root, &session).is_err());
         let _ = std::fs::remove_dir_all(root);
     }
 
