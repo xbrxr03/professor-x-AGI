@@ -5488,9 +5488,7 @@ async fn run_coding_session_inner(
             .unwrap_or_default(),
         failure_reason,
     };
-    let report_path = write_coding_session_report(&report)?;
-    report.session_report_path = Some(report_path.display().to_string());
-    std::fs::write(&report_path, serde_json::to_string_pretty(&report)?)?;
+    let report_path = finalize_coding_session_report(&mut report)?;
 
     CodingSessionStore::new(Arc::clone(&memory.db)).insert(&CodingSessionRecord {
         id: session_id.clone(),
@@ -5769,9 +5767,7 @@ async fn run_repo_patch_coding_session_with_goal(
             Some(verification.reason.clone())
         },
     };
-    let report_path = write_coding_session_report(&report)?;
-    report.session_report_path = Some(report_path.display().to_string());
-    std::fs::write(&report_path, serde_json::to_string_pretty(&report)?)?;
+    let report_path = finalize_coding_session_report(&mut report)?;
 
     CodingSessionStore::new(Arc::clone(&memory.db)).insert(&CodingSessionRecord {
         id: session_key.clone(),
@@ -6068,9 +6064,7 @@ async fn run_repo_patch_commit_coding_session_with_goal(
             Some(verification.reason.clone())
         },
     };
-    let report_path = write_coding_session_report(&report)?;
-    report.session_report_path = Some(report_path.display().to_string());
-    std::fs::write(&report_path, serde_json::to_string_pretty(&report)?)?;
+    let report_path = finalize_coding_session_report(&mut report)?;
 
     CodingSessionStore::new(Arc::clone(&memory.db)).insert(&CodingSessionRecord {
         id: session_key.clone(),
@@ -6401,6 +6395,103 @@ fn write_coding_session_report(report: &CodingSessionReport) -> Result<PathBuf> 
     ));
     std::fs::write(&path, serde_json::to_string_pretty(report)?)?;
     Ok(path)
+}
+
+fn finalize_coding_session_report(report: &mut CodingSessionReport) -> Result<PathBuf> {
+    let report_path = write_coding_session_report(report)?;
+    attach_coding_session_evidence(report, &report_path)?;
+    Ok(report_path)
+}
+
+fn attach_coding_session_evidence(
+    report: &mut CodingSessionReport,
+    report_path: &std::path::Path,
+) -> Result<PathBuf> {
+    report.session_report_path = Some(report_path.display().to_string());
+    let evidence_path = write_coding_session_evidence(report, report_path)?;
+    let evidence_path_text = evidence_path.display().to_string();
+    if !report.artifacts.iter().any(|path| path == &evidence_path_text) {
+        report.artifacts.push(evidence_path_text);
+    }
+    std::fs::write(report_path, serde_json::to_string_pretty(report)?)?;
+    Ok(evidence_path)
+}
+
+fn coding_session_evidence_markdown_path(report_path: &std::path::Path) -> PathBuf {
+    report_path.with_extension("evidence.md")
+}
+
+fn write_coding_session_evidence(
+    report: &CodingSessionReport,
+    report_path: &std::path::Path,
+) -> Result<PathBuf> {
+    let path = coding_session_evidence_markdown_path(report_path);
+    std::fs::write(&path, format_coding_session_evidence(report, report_path))?;
+    Ok(path)
+}
+
+fn format_coding_session_evidence(
+    report: &CodingSessionReport,
+    report_path: &std::path::Path,
+) -> String {
+    let mut lines = Vec::new();
+    lines.push(format!(
+        "Professor X coding session evidence {}",
+        short_fragment(&report.id)
+    ));
+    lines.push(format!("  session: {}", report.id));
+    lines.push(format!("  status: {}", report.status));
+    lines.push(format!("  exercise: {}", report.exercise));
+    lines.push(format!("  generated: {}", report.generated_at));
+    lines.push(format!("  goal: {}", truncate(&report.goal, 180)));
+    lines.push(format!("  report: {}", report_path.display()));
+    if let Some(workspace) = &report.workspace {
+        lines.push(format!("  workspace: {}", truncate(workspace, 180)));
+    }
+    if let Some(smoke_report) = &report.smoke_report_path {
+        lines.push(format!("  smoke_report: {smoke_report}"));
+    }
+    if let Some(transcript) = &report.transcript_path {
+        lines.push(format!("  transcript: {transcript}"));
+    }
+    if let Some(reason) = &report.failure_reason {
+        lines.push(format!("  failure: {}", truncate(reason, 220)));
+    }
+
+    lines.push(String::new());
+    lines.push(format!("Plan steps: {}", report.plan_steps.len()));
+    for (index, step) in report.plan_steps.iter().enumerate() {
+        lines.push(format!("  {}. {}", index + 1, truncate(step, 220)));
+    }
+
+    lines.push(String::new());
+    lines.push(format!("Outcomes: {}", report.step_outcomes.len()));
+    for (index, outcome) in report.step_outcomes.iter().enumerate() {
+        lines.push(format!("  {}. {}", index + 1, truncate(outcome, 220)));
+    }
+
+    lines.push(String::new());
+    lines.push(format!("Checks: {}", report.checks.len()));
+    for check in &report.checks {
+        lines.push(format!("  - {check}"));
+    }
+
+    lines.push(String::new());
+    lines.push(format!("Artifacts: {}", report.artifacts.len()));
+    for artifact in &report.artifacts {
+        lines.push(format!("  - {}", truncate(artifact, 220)));
+    }
+
+    lines.push(String::new());
+    lines.push(format!(
+        "Review: cargo run -- --prof-x-code-review {}",
+        short_fragment(&report.id)
+    ));
+    lines.push(format!(
+        "Publish: cargo run -- --prof-x-code-publish {}",
+        short_fragment(&report.id)
+    ));
+    lines.join("\n")
 }
 
 fn write_supervised_loop_report(report: &SupervisedLoopReport) -> Result<PathBuf> {
@@ -12266,6 +12357,60 @@ mod tests {
             task_evidence_markdown_path(&transcript).display().to_string(),
             "artifacts/transcripts/2026-06-08/12345678.evidence.md"
         );
+    }
+
+    #[test]
+    fn coding_session_evidence_sits_next_to_report_and_is_attached() {
+        let root = std::env::temp_dir().join(format!("px-session-evidence-{}", uuid::Uuid::new_v4()));
+        let report_path = root
+            .join("professor-x")
+            .join("artifacts")
+            .join("coding-sessions")
+            .join("2026-06-10")
+            .join("session-12345678.json");
+        std::fs::create_dir_all(report_path.parent().unwrap()).unwrap();
+        let mut report = CodingSessionReport {
+            id: "12345678-aaaa-bbbb-cccc-123456789abc".to_string(),
+            generated_at: "2026-06-10T08:00:00Z".to_string(),
+            goal: "verify patch and publish evidence".to_string(),
+            requested_goal: "verify patch and publish evidence".to_string(),
+            exercise: "repo_patch_apply_commit".to_string(),
+            status: "passed".to_string(),
+            workspace: Some("repo-root verified apply commit".to_string()),
+            smoke_id: None,
+            smoke_report_path: None,
+            session_report_path: None,
+            transcript_path: None,
+            checks: vec!["reward_hacking_scan".to_string(), "cargo_check".to_string()],
+            plan_steps: vec!["Verify the unified diff in an isolated worktree".to_string()],
+            step_outcomes: vec!["main apply committed".to_string()],
+            artifacts: vec![
+                "artifacts/evolution/patch-verifications/2026-06-10/patch.json".to_string(),
+            ],
+            failure_reason: None,
+        };
+
+        let evidence_path = attach_coding_session_evidence(&mut report, &report_path).unwrap();
+        let evidence = std::fs::read_to_string(&evidence_path).unwrap();
+        let report_json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&report_path).unwrap()).unwrap();
+
+        assert_eq!(evidence_path, report_path.with_extension("evidence.md"));
+        assert!(evidence.contains("Professor X coding session evidence 12345678"));
+        assert!(evidence.contains("exercise: repo_patch_apply_commit"));
+        assert!(evidence.contains("Plan steps: 1"));
+        assert!(evidence.contains("Outcomes: 1"));
+        assert!(evidence.contains("Publish: cargo run -- --prof-x-code-publish 12345678"));
+        assert_eq!(
+            report_json["session_report_path"].as_str(),
+            Some(report_path.to_str().unwrap())
+        );
+        assert!(report_json["artifacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value.as_str() == Some(evidence_path.to_str().unwrap())));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
