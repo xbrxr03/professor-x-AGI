@@ -93,11 +93,19 @@ this remains high-value but no longer precedes answer/loop reliability.*
   before `fs.hash_edit`. Evidence: `artifacts/coding-smoke/2026-06-10/smoke-225830.json`
   and transcript `artifacts/transcripts/2026-06-10/93667d27-248b-45a6-916c-2b32a029b133.json`.
   **Commit:** `5a2e0b1`.
-- [ ] **1.4 Fuzzy apply-patch fallback.** Mirror codex
+- [x] **1.4 Fuzzy apply-patch fallback.** Mirror codex
   `_refs/harnesses/codex/codex-rs/apply-patch/src/{parser,seek_sequence,streaming_parser}.rs`
   (uses `similar`). New `src/toolbridge/apply_patch.rs`. Retire exact-match `fs.replace`.
   **Done-when:** diff-style edits succeed under whitespace drift; tests mirror codex's.
   **Blocked by:** 1.1.
+  **Result:** Added `src/toolbridge/apply_patch.rs` with unified-diff parsing and
+  normalized-whitespace hunk matching when `git apply --check` fails. `patch.apply`
+  now verifies fuzzy candidates before writing, reports fuzzy hunk counts, and the ReAct
+  prompt no longer exposes legacy `fs.replace` as a default edit tool. Unit tests prove
+  whitespace-drift success and ambiguous-context rejection; `cargo test --bins` passed
+  264 tests. Coding smoke still passes in
+  `artifacts/coding-smoke/2026-06-10/smoke-230330.json`.
+  **Commit:** `b29ca08`.
 - [ ] **1.5 RE-MEASURE.** Re-run the 12-task A/B (or HIRO null round) with the new edit
   stack. **Done-when:** `p_correct` and edit-success-rate recorded vs the 0.000 baseline.
   **Blocked by:** 1.1–1.4.
@@ -181,3 +189,6 @@ thrash/over-stepping is still a top failure.*
 - 2026-06-10: Phase 1.3 windowed file ACI implemented in `5a2e0b1`;
   coding smoke now reads `src/lib.rs` through `fs.window_open` and then applies `fs.hash_edit`,
   with evidence in `artifacts/coding-smoke/2026-06-10/smoke-225830.json`.
+- 2026-06-10: Phase 1.4 fuzzy patch fallback implemented in `b29ca08`;
+  `patch.apply` falls back to normalized-whitespace hunk matching when exact git apply fails,
+  and `fs.replace` is removed from the active ReAct tool surface.
