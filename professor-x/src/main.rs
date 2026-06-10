@@ -5488,7 +5488,7 @@ async fn run_coding_session_inner(
             .unwrap_or_default(),
         failure_reason,
     };
-    let report_path = finalize_coding_session_report(&mut report)?;
+    let (report_path, evidence_path) = finalize_coding_session_report(&mut report)?;
 
     CodingSessionStore::new(Arc::clone(&memory.db)).insert(&CodingSessionRecord {
         id: session_id.clone(),
@@ -5508,6 +5508,23 @@ async fn run_coding_session_inner(
         failure_reason: report.failure_reason.clone(),
         recorded_at: chrono::Utc::now(),
     })?;
+
+    events.append(
+        None,
+        None,
+        "coding.session.evidence_written",
+        format!(
+            "coding session evidence written to {}",
+            evidence_path.display()
+        ),
+        serde_json::json!({
+            "session_id": session_id.clone(),
+            "exercise": exercise.name,
+            "session_report_path": report_path.display().to_string(),
+            "evidence_path": evidence_path.display().to_string(),
+            "artifacts": report.artifacts.clone(),
+        }),
+    )?;
 
     events.append(
         None,
@@ -5767,7 +5784,7 @@ async fn run_repo_patch_coding_session_with_goal(
             Some(verification.reason.clone())
         },
     };
-    let report_path = finalize_coding_session_report(&mut report)?;
+    let (report_path, evidence_path) = finalize_coding_session_report(&mut report)?;
 
     CodingSessionStore::new(Arc::clone(&memory.db)).insert(&CodingSessionRecord {
         id: session_key.clone(),
@@ -5787,6 +5804,23 @@ async fn run_repo_patch_coding_session_with_goal(
         failure_reason: report.failure_reason.clone(),
         recorded_at: chrono::Utc::now(),
     })?;
+
+    events.append(
+        Some(session_id),
+        None,
+        "coding.session.evidence_written",
+        format!(
+            "repo patch coding-session evidence written to {}",
+            evidence_path.display()
+        ),
+        serde_json::json!({
+            "session_id": session_key.clone(),
+            "exercise": "repo_patch_verify",
+            "session_report_path": report_path.display().to_string(),
+            "evidence_path": evidence_path.display().to_string(),
+            "artifacts": report.artifacts.clone(),
+        }),
+    )?;
 
     events.append(
         Some(session_id),
@@ -6064,7 +6098,7 @@ async fn run_repo_patch_commit_coding_session_with_goal(
             Some(verification.reason.clone())
         },
     };
-    let report_path = finalize_coding_session_report(&mut report)?;
+    let (report_path, evidence_path) = finalize_coding_session_report(&mut report)?;
 
     CodingSessionStore::new(Arc::clone(&memory.db)).insert(&CodingSessionRecord {
         id: session_key.clone(),
@@ -6084,6 +6118,23 @@ async fn run_repo_patch_commit_coding_session_with_goal(
         failure_reason: report.failure_reason.clone(),
         recorded_at: chrono::Utc::now(),
     })?;
+
+    events.append(
+        Some(session_id),
+        None,
+        "coding.session.evidence_written",
+        format!(
+            "repo patch commit coding-session evidence written to {}",
+            evidence_path.display()
+        ),
+        serde_json::json!({
+            "session_id": session_key.clone(),
+            "exercise": "repo_patch_apply_commit",
+            "session_report_path": report_path.display().to_string(),
+            "evidence_path": evidence_path.display().to_string(),
+            "artifacts": report.artifacts.clone(),
+        }),
+    )?;
 
     events.append(
         Some(session_id),
@@ -6397,10 +6448,10 @@ fn write_coding_session_report(report: &CodingSessionReport) -> Result<PathBuf> 
     Ok(path)
 }
 
-fn finalize_coding_session_report(report: &mut CodingSessionReport) -> Result<PathBuf> {
+fn finalize_coding_session_report(report: &mut CodingSessionReport) -> Result<(PathBuf, PathBuf)> {
     let report_path = write_coding_session_report(report)?;
-    attach_coding_session_evidence(report, &report_path)?;
-    Ok(report_path)
+    let evidence_path = attach_coding_session_evidence(report, &report_path)?;
+    Ok((report_path, evidence_path))
 }
 
 fn attach_coding_session_evidence(
@@ -11323,6 +11374,7 @@ fn format_work_event(event: &memd::events::AgentEvent) -> String {
         "smoke-report",
         event.payload["smoke_report_path"].as_str(),
     );
+    push_payload_line(&mut lines, "evidence", event.payload["evidence_path"].as_str());
     push_payload_line(&mut lines, "transcript", event.payload["transcript_path"].as_str());
     push_payload_line(&mut lines, "patch", event.payload["patch_path"].as_str());
     push_payload_line(&mut lines, "target", event.payload["target_component"].as_str());
@@ -11369,6 +11421,7 @@ fn event_action(event: &memd::events::AgentEvent) -> &'static str {
         "coding.session.started" => "Started coding session",
         "coding.session.plan" => "Planned coding step",
         "coding.session.outcome" => "Recorded coding outcome",
+        "coding.session.evidence_written" => "Wrote coding evidence",
         "coding.session.passed" => "Passed coding session",
         "coding.session.failed" => "Failed coding session",
         "coding.smoke.started" => "Started coding smoke",
@@ -13435,6 +13488,35 @@ mod tests {
 
         assert!(line.contains("session-report artifacts/coding-sessions/2026-06-01/session-135052-0aeff8ac.json"));
         assert!(line.contains("artifact artifacts/evolution/patch-verifications/2026-06-01/patch-135049.json"));
+    }
+
+    #[test]
+    fn format_work_event_surfaces_coding_session_evidence() {
+        let event = memd::events::AgentEvent {
+            id: 46,
+            timestamp: chrono::Utc::now(),
+            session_id: Some("session-123456789".to_string()),
+            task_id: None,
+            event_type: "coding.session.evidence_written".to_string(),
+            summary: "repo patch commit coding-session evidence written".to_string(),
+            payload: serde_json::json!({
+                "exercise": "repo_patch_apply_commit",
+                "session_report_path": "artifacts/coding-sessions/2026-06-01/session-135052-0aeff8ac.json",
+                "evidence_path": "artifacts/coding-sessions/2026-06-01/session-135052-0aeff8ac.evidence.md",
+                "artifacts": [
+                    "artifacts/evolution/patch-verifications/2026-06-01/patch-135049.json",
+                    "artifacts/coding-sessions/2026-06-01/session-135052-0aeff8ac.evidence.md"
+                ],
+            }),
+        };
+
+        let line = format_work_event(&event);
+
+        assert!(line.contains("Wrote coding evidence"));
+        assert!(line.contains("exercise=repo_patch_apply_commit"));
+        assert!(line.contains("artifacts=2"));
+        assert!(line.contains("session-report artifacts/coding-sessions/2026-06-01/session-135052-0aeff8ac.json"));
+        assert!(line.contains("evidence artifacts/coding-sessions/2026-06-01/session-135052-0aeff8ac.evidence.md"));
     }
 
     #[test]
