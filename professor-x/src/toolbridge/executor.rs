@@ -5,7 +5,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, warn};
@@ -13,7 +13,8 @@ use tracing::{debug, warn};
 use crate::memd::semantic::SemanticEntry;
 use crate::memd::MemoryManager;
 use crate::ollama::OllamaClient;
-use crate::toolbridge::hashedit::{hash_edit_file, hash_read_file};
+use crate::toolbridge::editverify::{verify_candidate_content, EditVerification};
+use crate::toolbridge::hashedit::{hash_edit_file, hash_read_file, resolve_workspace_path};
 use crate::toolbridge::ToolRegistry;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -235,25 +236,33 @@ impl ToolExecutor {
             "fs.write" => {
                 let path = req_str(&action.params, "path")?;
                 let content = req_str(&action.params, "content")?;
-                let existed = std::path::Path::new(path).exists();
+                let resolved_path = resolve_workspace_path(&self.workspace_root, path);
+                let existed = resolved_path.exists();
                 let old = if existed {
-                    std::fs::read_to_string(path).unwrap_or_default()
+                    std::fs::read_to_string(&resolved_path).unwrap_or_default()
                 } else {
                     String::new()
                 };
-                if let Some(p) = std::path::Path::new(path).parent() {
+                let verification = self.verify_edit_candidate(&resolved_path, content).await?;
+                ensure_edit_verification(&verification)?;
+                if let Some(p) = resolved_path.parent() {
                     std::fs::create_dir_all(p)?;
                 }
-                std::fs::write(path, content)?;
+                std::fs::write(&resolved_path, content)?;
                 // Change visibility: report a diff so the user always sees the edit.
                 let summary = if !existed || old.is_empty() {
                     format!(
-                        "created {path} ({} lines, {} bytes)",
+                        "created {path} ({} lines, {} bytes; verified={})",
                         content.lines().count(),
-                        content.len()
+                        content.len(),
+                        verification.check
                     )
                 } else {
-                    format!("edited {path} — {}", diff_summary(&old, content))
+                    format!(
+                        "edited {path} — {}; verified={}",
+                        diff_summary(&old, content),
+                        verification.check
+                    )
                 };
                 Ok(ToolDispatch::output(summary))
             }
@@ -263,15 +272,26 @@ impl ToolExecutor {
                 let hash = req_str(&action.params, "hash")?;
                 let new_text = req_str(&action.params, "new_text")?;
                 let mode = action.params["mode"].as_str().unwrap_or("apply");
+                if !matches!(mode, "check" | "apply") {
+                    anyhow::bail!("fs.hash_edit mode must be 'check' or 'apply'");
+                }
                 let outcome =
-                    hash_edit_file(&self.workspace_root, path, line, hash, new_text, mode)?;
+                    hash_edit_file(&self.workspace_root, path, line, hash, new_text, "check")?;
+                let resolved_path = resolve_workspace_path(&self.workspace_root, path);
+                let verification = self
+                    .verify_edit_candidate(&resolved_path, &outcome.after)
+                    .await?;
+                ensure_edit_verification(&verification)?;
+                if mode == "apply" {
+                    std::fs::write(&resolved_path, &outcome.after)?;
+                }
                 let diff_artifact =
                     self.write_replace_artifact(path, &outcome.before, &outcome.after)?;
                 Ok(ToolDispatch::with_artifact(
                     format!(
-                        "{} — {}",
-                        outcome.summary,
-                        diff_summary(&outcome.before, &outcome.after)
+                        "hash_edit {mode} {path} line {line} — {}; verified={}",
+                        diff_summary(&outcome.before, &outcome.after),
+                        verification.check
                     ),
                     diff_artifact,
                 ))
@@ -301,14 +321,17 @@ impl ToolExecutor {
                     );
                 }
                 let updated = original.replacen(old, new, 1);
+                let verification = self.verify_edit_candidate(&resolved_path, &updated).await?;
+                ensure_edit_verification(&verification)?;
                 let diff_artifact = self.write_replace_artifact(path, &original, &updated)?;
                 if mode == "apply" {
                     std::fs::write(&resolved_path, &updated)?;
                 }
                 Ok(ToolDispatch::with_artifact(
                     format!(
-                        "replace {mode} {path} — {}",
-                        diff_summary(&original, &updated)
+                        "replace {mode} {path} — {}; verified={}",
+                        diff_summary(&original, &updated),
+                        verification.check
                     ),
                     diff_artifact,
                 ))
@@ -816,6 +839,25 @@ impl ToolExecutor {
         writeln!(file, "{}", serde_json::to_string_pretty(&artifact)?)?;
         Ok(path)
     }
+
+    async fn verify_edit_candidate(
+        &self,
+        path: &Path,
+        candidate: &str,
+    ) -> Result<EditVerification> {
+        verify_candidate_content(&self.workspace_root, path, candidate).await
+    }
+}
+
+fn ensure_edit_verification(verification: &EditVerification) -> Result<()> {
+    if verification.accepted {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "edit verification failed ({}): {}",
+        verification.check,
+        verification.reason
+    )
 }
 
 fn artifact_root(workspace_root: &std::path::Path) -> PathBuf {
@@ -1304,6 +1346,17 @@ mod tests {
         }
     }
 
+    fn write_action(path: &str, content: &str) -> Action {
+        Action {
+            tool_name: "fs.write".to_string(),
+            params: json!({
+                "path": path,
+                "content": content,
+            }),
+            risk_score: 70,
+        }
+    }
+
     #[tokio::test]
     async fn patch_apply_checks_and_applies_reviewable_diff() {
         let root = temp_workspace();
@@ -1489,6 +1542,51 @@ mod tests {
             std::fs::read_to_string(root.join("src/lib.rs")).unwrap(),
             "pub fn x() {}\n"
         );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn fs_hash_edit_rejects_syntax_error_and_restores_original_file() {
+        let root = temp_workspace();
+        std::fs::write(root.join("src/lib.rs"), "pub fn x() {}\n").unwrap();
+        let registry = Arc::new(std::sync::RwLock::new(ToolRegistry::new()));
+        let executor = ToolExecutor::new(registry).with_workspace_root(root.clone());
+        let hash = crate::toolbridge::hashedit::line_hash("pub fn x() {}", 3);
+
+        let broken = executor
+            .execute(&hash_edit_action("apply", 1, &hash, "pub fn x( {"))
+            .await;
+        assert!(!broken.success);
+        assert!(broken
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("edit verification failed"));
+        assert_eq!(
+            std::fs::read_to_string(root.join("src/lib.rs")).unwrap(),
+            "pub fn x() {}\n"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn fs_write_rejects_invalid_json_without_creating_file() {
+        let root = temp_workspace();
+        let registry = Arc::new(std::sync::RwLock::new(ToolRegistry::new()));
+        let executor = ToolExecutor::new(registry).with_workspace_root(root.clone());
+
+        let broken = executor
+            .execute(&write_action("config/settings.json", "{\"enabled\":"))
+            .await;
+        assert!(!broken.success);
+        assert!(broken
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("edit verification failed (json_parse)"));
+        assert!(!root.join("config/settings.json").exists());
 
         let _ = std::fs::remove_dir_all(root);
     }

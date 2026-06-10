@@ -1,0 +1,10 @@
+{
+  "command": "cargo test",
+  "exit_code": 0,
+  "success": true,
+  "stdout": "\nrunning 1 test\ntest tests::adds_numbers ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n",
+  "stderr": "   Compiling px-coding-smoke v0.1.0 (/tmp/px-coding-smoke-d92c0819-f4c2-40f8-9cb3-3587d38afc4c)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s\n     Running unittests src/lib.rs (target/debug/deps/px_coding_smoke-dc3dddb89fd8a772)\n   Doc-tests px_coding_smoke\n",
+  "stdout_bytes": 257,
+  "stderr_bytes": 285,
+  "recorded_at": "2026-06-10T22:52:52.567547693+00:00"
+}
