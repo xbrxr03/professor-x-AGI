@@ -40,14 +40,19 @@ at 0% and answerless finish / max-step thrash as the real top blockers.*
   tests reject empty finish payloads.
   **Blocked by:** 0.1.
   **Commit:** `e1bdd99`.
-- [ ] **0.5.2 Repeated-failure / synthesis-forfeit guard.** Detect repeated max-step
+- [x] **0.5.2 Repeated-failure / synthesis-forfeit guard.** Detect repeated max-step
   patterns and force either synthesis from gathered observations or `fail` before
   burning all attempts.
   **Done-when:** max-step warnings drop on the same 12-task null run.
   **Blocked by:** 0.5.1.
-- [ ] **0.5.3 RE-MEASURE.** Re-run the 12-task HIRO null baseline and record
+  **Commit:** `edf6a93`.
+- [x] **0.5.3 RE-MEASURE.** Re-run the 12-task HIRO null baseline and record
   `p_tool`, `p_plan`, `p_correct`, `pass@3`, and max-step count.
   **Blocked by:** 0.5.2.
+  **Result:** run `f1c8a72c-d601-4591-ad44-f1b2e6310187` recorded
+  `pass@3=0.333`, `p_tool=0.333`, `p_plan=0.000`, `p_correct=0.000`,
+  hard max-step warnings `0`, synthesis/forfeit stops `24`.
+  **Commit:** `edf6a93`.
 
 ---
 
@@ -148,3 +153,6 @@ thrash/over-stepping is still a top failure.*
 - 2026-06-10: Phase 0.1 taxonomy completed in `docs/research/failure-taxonomy.md`;
   bad edit-match was 0%, answerless finish/max-step thrash are the top blockers.
 - 2026-06-10: Phase 0.5.1 answer-gated finish implemented in `e1bdd99`.
+- 2026-06-10: Phase 0.5.2 synthesis/forfeit guard implemented and 0.5.3
+  null re-measure recorded in `edf6a93`; max-step warnings dropped to 0, but
+  `p_correct` remains 0.000.
