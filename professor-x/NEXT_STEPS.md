@@ -59,13 +59,18 @@ at 0% and answerless finish / max-step thrash as the real top blockers.*
 ## Phase 1 — The edit lever (highest expected `p_correct` gain)
 *Blocked by: 0.5.3. The taxonomy found edit-match at 0% in the current sample, so
 this remains high-value but no longer precedes answer/loop reliability.*
-- [ ] **1.1 Hash-anchored edit tool (PRIMARY).** New `src/toolbridge/hashedit.rs`. File
+- [x] **1.1 Hash-anchored edit tool (PRIMARY).** New `src/toolbridge/hashedit.rs`. File
   reads emit `Lnn|hash| content` (2–3 char content hash/line); edit tool takes
   `(file, line-hash, new_text)`, verifies hash before writing, rejects with a re-read
   prompt on mismatch. Reference: hashline writeup + `dirac` (in master plan Part 5).
   **Done-when:** a weak local model edits a file without reproducing surrounding text;
   a stale hash is caught and never corrupts. Unit tests for match + mismatch.
   **Blocked by:** 0.1.
+  **Result:** `fs.hash_read` + `fs.hash_edit` wired through tool registry,
+  policy, ReAct prompt, and coding smoke. `cargo run -- --coding-smoke` recorded
+  `fs.hash_edit applied: true` and final cargo test passed in
+  `artifacts/coding-smoke/2026-06-10/smoke-180908.json`.
+  **Commit:** `8e8df62`.
 - [ ] **1.2 Edit-time verification (lint/parse gate).** After any edit, run a syntax check
   (tree-sitter, or `cargo check`/`python -c` per lang). On NEW errors: reject, show
   would-be-window vs original, block re-running the identical command. Reference:
@@ -156,3 +161,5 @@ thrash/over-stepping is still a top failure.*
 - 2026-06-10: Phase 0.5.2 synthesis/forfeit guard implemented and 0.5.3
   null re-measure recorded in `edf6a93`; max-step warnings dropped to 0, but
   `p_correct` remains 0.000.
+- 2026-06-10: Phase 1.1 hash-anchored edit tool implemented in `8e8df62`;
+  coding smoke uses `fs.hash_read` + `fs.hash_edit` and verifies final tests pass.
