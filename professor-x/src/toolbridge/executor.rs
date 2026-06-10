@@ -359,6 +359,7 @@ impl ToolExecutor {
                 }
                 let paths = validate_patch_paths(patch)?;
                 let artifact_path = self.write_patch_artifact(patch)?;
+                let review = patch_review_summary(&paths, patch);
                 let check = tokio::process::Command::new("git")
                     .args(["apply", "--check"])
                     .arg(&artifact_path)
@@ -387,9 +388,35 @@ impl ToolExecutor {
                 }
                 Ok(ToolDispatch::with_artifact(
                     format!(
-                        "patch {mode} succeeded for {} path(s); artifact={}",
+                        "patch {mode} succeeded for {} path(s); artifact={}\n{}",
                         paths.len(),
-                        artifact_path.display()
+                        artifact_path.display(),
+                        review,
+                    ),
+                    artifact_path,
+                ))
+            }
+            "patch.review" => {
+                let patch = req_str(&action.params, "patch")?;
+                let paths = validate_patch_paths(patch)?;
+                let artifact_path = self.write_patch_artifact(patch)?;
+                let check = tokio::process::Command::new("git")
+                    .args(["apply", "--check"])
+                    .arg(&artifact_path)
+                    .current_dir(&self.workspace_root)
+                    .output()
+                    .await?;
+                if !check.status.success() {
+                    anyhow::bail!(
+                        "patch review failed git apply --check: {}",
+                        String::from_utf8_lossy(&check.stderr)
+                    );
+                }
+                Ok(ToolDispatch::with_artifact(
+                    format!(
+                        "patch review passed; artifact={}\n{}",
+                        artifact_path.display(),
+                        patch_review_summary(&paths, patch)
                     ),
                     artifact_path,
                 ))
@@ -997,6 +1024,7 @@ fn is_known_builtin_tool(tool_name: &str) -> bool {
             | "memory.write"
             | "web.fetch"
             | "web.search"
+            | "patch.review"
             | "patch.apply"
             | "git.diff"
             | "git.status"
@@ -1018,6 +1046,55 @@ fn text_preview_diff(before: &str, after: &str) -> String {
     let before = truncate_text(before, 2000);
     let after = truncate_text(after, 2000);
     format!("- before:\n{before}\n+ after:\n{after}")
+}
+
+fn patch_review_summary(paths: &[String], patch: &str) -> String {
+    let mut additions = 0usize;
+    let mut deletions = 0usize;
+    let mut hunks = 0usize;
+    let mut preview = Vec::new();
+
+    for line in patch.lines() {
+        if line.starts_with("@@") {
+            hunks += 1;
+            continue;
+        }
+        if line.starts_with("+++") || line.starts_with("---") {
+            continue;
+        }
+        if let Some(added) = line.strip_prefix('+') {
+            additions += 1;
+            if preview.len() < 8 && !added.trim().is_empty() {
+                preview.push(format!("  + {}", added.chars().take(96).collect::<String>()));
+            }
+            continue;
+        }
+        if let Some(deleted) = line.strip_prefix('-') {
+            deletions += 1;
+            if preview.len() < 8 && !deleted.trim().is_empty() {
+                preview.push(format!("  - {}", deleted.chars().take(96).collect::<String>()));
+            }
+        }
+    }
+
+    let mut out = format!(
+        "patch review: {} path(s), {} hunk(s), Δ +{} -{} lines",
+        paths.len(),
+        hunks,
+        additions,
+        deletions
+    );
+    for path in paths.iter().take(8) {
+        out.push_str(&format!("\n  path {path}"));
+    }
+    if paths.len() > 8 {
+        out.push_str(&format!("\n  ... {} more path(s)", paths.len() - 8));
+    }
+    if !preview.is_empty() {
+        out.push('\n');
+        out.push_str(&preview.join("\n"));
+    }
+    out
 }
 
 /// Compact change summary so every file edit is VISIBLE in the activity feed:
@@ -1096,6 +1173,16 @@ mod tests {
         }
     }
 
+    fn patch_review_action() -> Action {
+        Action {
+            tool_name: "patch.review".to_string(),
+            params: json!({
+                "patch": "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-pub fn x() {}\n+pub fn x() { }\n",
+            }),
+            risk_score: 20,
+        }
+    }
+
     fn shell_action(command: &str) -> Action {
         Action {
             tool_name: "shell.restricted".to_string(),
@@ -1113,6 +1200,7 @@ mod tests {
             "memory.read",
             "memory.write",
             "web.fetch",
+            "patch.review",
             "patch.apply",
         ] {
             assert!(
@@ -1158,6 +1246,8 @@ mod tests {
         let check = executor.execute(&patch_action("check")).await;
         assert!(check.success, "{:?}", check.error);
         assert!(check.output.contains("patch check succeeded"));
+        assert!(check.output.contains("patch review: 1 path(s), 1 hunk(s), Δ +1 -1 lines"));
+        assert!(check.output.contains("path src/lib.rs"));
         assert_eq!(check.artifacts.len(), 1);
         assert_eq!(
             std::fs::read_to_string(root.join("src/lib.rs")).unwrap(),
@@ -1167,12 +1257,35 @@ mod tests {
         let apply = executor.execute(&patch_action("apply")).await;
         assert!(apply.success, "{:?}", apply.error);
         assert!(apply.output.contains("patch apply succeeded"));
+        assert!(apply.output.contains("patch review: 1 path(s), 1 hunk(s), Δ +1 -1 lines"));
         assert_eq!(apply.artifacts.len(), 1);
         assert_eq!(
             std::fs::read_to_string(root.join("src/lib.rs")).unwrap(),
             "pub fn x() { }\n"
         );
         assert!(root.join("artifacts/patches").exists());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn patch_review_is_non_mutating_and_shows_change_preview() {
+        let root = temp_workspace();
+        let registry = Arc::new(std::sync::RwLock::new(ToolRegistry::new()));
+        let executor = ToolExecutor::new(registry).with_workspace_root(root.clone());
+
+        let review = executor.execute(&patch_review_action()).await;
+        assert!(review.success, "{:?}", review.error);
+        assert!(review.output.contains("patch review passed"));
+        assert!(review.output.contains("patch review: 1 path(s), 1 hunk(s), Δ +1 -1 lines"));
+        assert!(review.output.contains("path src/lib.rs"));
+        assert!(review.output.contains("- pub fn x() {}"));
+        assert!(review.output.contains("+ pub fn x() { }"));
+        assert_eq!(review.artifacts.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(root.join("src/lib.rs")).unwrap(),
+            "pub fn x() {}\n"
+        );
 
         let _ = std::fs::remove_dir_all(root);
     }

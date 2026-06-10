@@ -64,6 +64,7 @@ impl ToolRegistry {
             ("web.search",       "Search the web for information",        15, 30_000),
             ("web.fetch",        "Fetch content from a URL",              20, 30_000),
             ("shell.restricted", "Run a sandboxed shell command",         60, 60_000),
+            ("patch.review",     "Review a unified diff patch without applying it", 20, 30_000),
             ("patch.apply",      "Check or apply a unified diff patch",   62, 30_000),
             ("shell.elevated",   "Run a privileged shell command",        90, 60_000),
             ("repo.map",         "Ranked map of the codebase's key files and symbols", 10, 20_000),

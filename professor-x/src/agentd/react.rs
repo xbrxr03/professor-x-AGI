@@ -543,8 +543,8 @@ impl ReactLoop {
         {
             let tool_names: Vec<&str> = vec![
                 "fs.read", "fs.list", "fs.write", "fs.replace", "web.search",
-                "web.fetch", "vision.analyze", "shell.restricted", "patch.apply",
-                "memory.read", "memory.write", "finish", "fail",
+                "web.fetch", "vision.analyze", "shell.restricted", "patch.review",
+                "patch.apply", "memory.read", "memory.write", "finish", "fail",
             ];
             let pred_prompt =
                 self_prediction::build_prediction_prompt(&task.description, &tool_names);
@@ -2361,6 +2361,7 @@ Complete tasks precisely and efficiently using the available tools.\n\n\
 - fs.read / fs.list  — always your first move when working with files or directories. Use the <workspace> block above for real paths; do NOT guess directory names.\n\
 - memory.read        — use for past tasks, learned procedures, or any recall requirement\n\
 - shell.restricted   — prefer standard tools (cargo, git, grep, find); always read stderr on failure\n\
+- patch.review       — inspect unified diffs before applying multi-file changes\n\
 - patch.apply        — multi-line code edits: run check mode first, then apply\n\
 - ollama.complete    — offload sub-queries that would bloat the main context chain\n\
 - web.search → web.fetch — search first, fetch only the single most relevant URL\n\n\
@@ -2406,6 +2407,7 @@ const TOOLS_DESCRIPTION: &str = "Available tools:
 - web.fetch        {\"url\": \"<url>\"} — fetch a URL
 - vision.analyze   {\"path\": \"<image_path>\", \"prompt\": \"<question>\"} — describe or reason about an image; also accepts {\"url\": \"<image_url>\"}
 - shell.restricted {\"command\": \"<cmd>\"} — run a shell command (sandboxed)
+- patch.review     {\"patch\": \"<unified diff>\"} — review paths/hunks/line deltas without applying
 - patch.apply      {\"mode\": \"check|apply\", \"patch\": \"<unified diff>\"} — check or apply a reviewable git-style patch
 - scratchpad.write {\"content\": \"<your running plan / notes>\"} — maintain a working plan that persists across steps (use it for multi-step tasks: list the steps, check them off, track what you've learned)
 - meta.observe     {} — look at YOUR OWN recent processing (thoughts, tool calls, results) and notice patterns: are you looping, stalling, making progress?

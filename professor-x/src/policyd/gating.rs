@@ -50,6 +50,7 @@ pub fn tool_risk_score(tool: &str) -> u8 {
         "memory.write" => 10,
         "web.fetch" => 20,
         "ollama.complete" => 15,
+        "patch.review" => 20,
         "fs.replace" => 42,
         "fs.write" => 45,
         "shell.restricted" => 60,
@@ -125,7 +126,7 @@ impl PolicyEngine {
             }
         }
 
-        if tool == "patch.apply" {
+        if matches!(tool, "patch.apply" | "patch.review") {
             if let Some(patch) = params.get("patch").and_then(|v| v.as_str()) {
                 if let Some(reason) = patch_denied_reason(patch, scope) {
                     return GateResult {
@@ -137,7 +138,7 @@ impl PolicyEngine {
             } else {
                 return GateResult {
                     decision: Decision::Deny,
-                    reason: "patch.apply requires string param 'patch'".to_string(),
+                    reason: format!("{tool} requires string param 'patch'"),
                     risk_score: risk,
                 };
             }
@@ -744,6 +745,14 @@ mod tests {
         .await;
         assert_eq!(allowed.decision, Decision::Allow, "{}", allowed.reason);
 
+        let review = gate(
+            "patch.review",
+            json!({"patch": "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-pub fn x() {}\n+pub fn x() { }\n"}),
+            &scope,
+        )
+        .await;
+        assert_eq!(review.decision, Decision::Allow, "{}", review.reason);
+
         let denied = gate(
             "patch.apply",
             json!({"mode": "check", "patch": "diff --git a/../escape.txt b/../escape.txt\n--- a/../escape.txt\n+++ b/../escape.txt\n@@ -1 +1 @@\n-a\n+b\n"}),
@@ -751,5 +760,13 @@ mod tests {
         )
         .await;
         assert_eq!(denied.decision, Decision::Deny);
+
+        let denied_review = gate(
+            "patch.review",
+            json!({"patch": "diff --git a/../escape.txt b/../escape.txt\n--- a/../escape.txt\n+++ b/../escape.txt\n@@ -1 +1 @@\n-a\n+b\n"}),
+            &scope,
+        )
+        .await;
+        assert_eq!(denied_review.decision, Decision::Deny);
     }
 }
