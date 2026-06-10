@@ -57,6 +57,9 @@ impl ToolRegistry {
         let builtins = [
             ("fs.read",          "Read file contents",                    10, 5_000),
             ("fs.hash_read",     "Read file contents with line hashes for anchored edits", 12, 5_000),
+            ("fs.window_open",   "Read a bounded line-hash window from a file", 11, 5_000),
+            ("fs.window_goto",   "Read a bounded line-hash window at a target line", 11, 5_000),
+            ("fs.window_scroll", "Read a bounded line-hash window relative to a prior window", 11, 5_000),
             ("fs.list",          "List directory contents",               8,  5_000),
             ("fs.write",         "Write content to a file",               45, 10_000),
             ("fs.hash_edit",     "Replace one line after verifying its line hash", 40, 10_000),

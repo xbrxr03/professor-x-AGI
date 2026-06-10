@@ -5102,12 +5102,12 @@ async fn run_coding_smoke_exercise(
     artifacts.extend(initial.artifacts.clone());
     let initial_test_failed = !initial.success;
 
-    let hash_read_action = Action {
-        tool_name: "fs.hash_read".to_string(),
-        params: serde_json::json!({"path": "src/lib.rs"}),
-        risk_score: 12,
+    let window_action = Action {
+        tool_name: "fs.window_open".to_string(),
+        params: serde_json::json!({"path": "src/lib.rs", "lines": 40}),
+        risk_score: 11,
     };
-    let hash_read = run_smoke_tool(
+    let window_read = run_smoke_tool(
         &executor,
         Arc::clone(&policy),
         Arc::clone(&memory),
@@ -5116,19 +5116,19 @@ async fn run_coding_smoke_exercise(
         session_id,
         task.id,
         2,
-        hash_read_action.clone(),
+        window_action.clone(),
     )
     .await?;
     record_smoke_step(
         &mut task,
         2,
-        "read hash-anchored source lines before editing",
-        hash_read_action,
-        &hash_read,
+        "read a bounded hash-anchored source window before editing",
+        window_action,
+        &window_read,
     );
     task_runs.step_recorded(&task)?;
     emit_smoke_tool_event(&events, session_id, task.id, 2, &task.steps[1])?;
-    artifacts.extend(hash_read.artifacts.clone());
+    artifacts.extend(window_read.artifacts.clone());
 
     let edit_line = replacement_line_number(exercise.source, exercise.replacement_old)?;
     let edit_hash = crate::toolbridge::hashedit::line_hash(exercise.replacement_old, 3);

@@ -15,6 +15,7 @@ use crate::memd::MemoryManager;
 use crate::ollama::OllamaClient;
 use crate::toolbridge::editverify::{verify_candidate_content, EditVerification};
 use crate::toolbridge::hashedit::{hash_edit_file, hash_read_file, resolve_workspace_path};
+use crate::toolbridge::window::{goto_window_file, open_window_file, scroll_window_file};
 use crate::toolbridge::ToolRegistry;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -217,6 +218,27 @@ impl ToolExecutor {
                     &self.workspace_root,
                     path,
                 )?))
+            }
+            "fs.window_open" => {
+                let path = req_str(&action.params, "path")?;
+                let lines = opt_usize(&action.params, "lines")?;
+                let window = open_window_file(&self.workspace_root, path, lines)?;
+                Ok(ToolDispatch::output(window.output))
+            }
+            "fs.window_goto" => {
+                let path = req_str(&action.params, "path")?;
+                let line = req_usize(&action.params, "line")?;
+                let lines = opt_usize(&action.params, "lines")?;
+                let window = goto_window_file(&self.workspace_root, path, line, lines)?;
+                Ok(ToolDispatch::output(window.output))
+            }
+            "fs.window_scroll" => {
+                let path = req_str(&action.params, "path")?;
+                let start = req_usize(&action.params, "start")?;
+                let delta = req_isize(&action.params, "delta")?;
+                let lines = opt_usize(&action.params, "lines")?;
+                let window = scroll_window_file(&self.workspace_root, path, start, delta, lines)?;
+                Ok(ToolDispatch::output(window.output))
             }
             "fs.list" => {
                 let path = req_str(&action.params, "path")?;
@@ -1053,6 +1075,20 @@ fn req_usize(p: &serde_json::Value, key: &str) -> Result<usize> {
         .ok_or_else(|| anyhow::anyhow!("missing numeric param '{key}'"))
 }
 
+fn opt_usize(p: &serde_json::Value, key: &str) -> Result<Option<usize>> {
+    if p.get(key).is_none() || p[key].is_null() {
+        return Ok(None);
+    }
+    Ok(Some(req_usize(p, key)?))
+}
+
+fn req_isize(p: &serde_json::Value, key: &str) -> Result<isize> {
+    p[key]
+        .as_i64()
+        .and_then(|value| isize::try_from(value).ok())
+        .ok_or_else(|| anyhow::anyhow!("missing numeric param '{key}'"))
+}
+
 /// Extract the primary shell command from a skill body for cerebellum bypass.
 /// Looks for the first non-comment line inside a ```bash/```sh block,
 /// or the first line prefixed with `$ `.
@@ -1090,6 +1126,9 @@ fn is_known_builtin_tool(tool_name: &str) -> bool {
         tool_name,
         "fs.read"
             | "fs.hash_read"
+            | "fs.window_open"
+            | "fs.window_goto"
+            | "fs.window_scroll"
             | "fs.list"
             | "fs.write"
             | "fs.hash_edit"
@@ -1282,6 +1321,9 @@ mod tests {
     fn known_builtin_tools_skip_procedural_lookup() {
         for name in [
             "fs.read",
+            "fs.window_open",
+            "fs.window_goto",
+            "fs.window_scroll",
             "fs.write",
             "shell.restricted",
             "memory.read",
@@ -1329,6 +1371,14 @@ mod tests {
             tool_name: "fs.hash_read".to_string(),
             params: json!({"path": path}),
             risk_score: 12,
+        }
+    }
+
+    fn window_action(tool_name: &str, params: serde_json::Value) -> Action {
+        Action {
+            tool_name: tool_name.to_string(),
+            params,
+            risk_score: 11,
         }
     }
 
@@ -1518,6 +1568,49 @@ mod tests {
             std::fs::read_to_string(root.join("src/lib.rs")).unwrap(),
             "pub fn x() { 1 }\npub fn y() {}\n"
         );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn fs_window_tools_return_bounded_hashed_line_windows() {
+        let root = temp_workspace();
+        std::fs::write(root.join("src/lib.rs"), "one\ntwo\nthree\nfour\n").unwrap();
+        let registry = Arc::new(std::sync::RwLock::new(ToolRegistry::new()));
+        let executor = ToolExecutor::new(registry).with_workspace_root(root.clone());
+
+        let open = executor
+            .execute(&window_action(
+                "fs.window_open",
+                json!({"path": "src/lib.rs", "lines": 2}),
+            ))
+            .await;
+        assert!(open.success, "{:?}", open.error);
+        assert!(open.output.contains("window src/lib.rs: lines 1-2 of 4"));
+        assert!(open.output.contains("L1|"));
+        assert!(open.output.contains("L2|"));
+        assert!(!open.output.contains("L3|"));
+        assert!(open.output.contains("[below:"));
+
+        let goto = executor
+            .execute(&window_action(
+                "fs.window_goto",
+                json!({"path": "src/lib.rs", "line": 3, "lines": 2}),
+            ))
+            .await;
+        assert!(goto.success, "{:?}", goto.error);
+        assert!(goto.output.contains("window src/lib.rs: lines 3-4 of 4"));
+        assert!(goto.output.contains("L3|"));
+        assert!(goto.output.contains("L4|"));
+
+        let scroll = executor
+            .execute(&window_action(
+                "fs.window_scroll",
+                json!({"path": "src/lib.rs", "start": 3, "delta": -2, "lines": 2}),
+            ))
+            .await;
+        assert!(scroll.success, "{:?}", scroll.error);
+        assert!(scroll.output.contains("window src/lib.rs: lines 1-2 of 4"));
 
         let _ = std::fs::remove_dir_all(root);
     }

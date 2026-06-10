@@ -5,6 +5,7 @@ pub mod mcp;
 pub mod registry;
 pub mod repo_map;
 pub mod skill_loader;
+pub mod window;
 
 pub use executor::ToolExecutor;
 pub use registry::ToolRegistry;

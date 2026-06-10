@@ -542,10 +542,11 @@ impl ReactLoop {
         // Error is measured at task end; persistent error = genuine self-ignorance.
         {
             let tool_names: Vec<&str> = vec![
-                "fs.read", "fs.hash_read", "fs.list", "fs.write", "fs.hash_edit",
-                "fs.replace", "web.search", "web.fetch", "vision.analyze",
-                "shell.restricted", "patch.review", "patch.apply", "memory.read",
-                "memory.write", "finish", "fail",
+                "fs.read", "fs.hash_read", "fs.window_open", "fs.window_goto",
+                "fs.window_scroll", "fs.list", "fs.write", "fs.hash_edit", "fs.replace",
+                "web.search", "web.fetch", "vision.analyze", "shell.restricted",
+                "patch.review", "patch.apply", "memory.read", "memory.write", "finish",
+                "fail",
             ];
             let pred_prompt =
                 self_prediction::build_prediction_prompt(&task.description, &tool_names);
@@ -2550,7 +2551,8 @@ Complete tasks precisely and efficiently using the available tools.\n\n\
 3. Check memory first (memory.read) when the task involves prior work, domain knowledge, or past failures.\n\
 4. One tool call per turn. Never attempt to batch multiple actions.\n\n\
 ## Tool guidance\n\
-- fs.read / fs.hash_read / fs.list — first inspect files/directories. Use fs.hash_read before line edits so you can edit by L<number>|hash| without copying large text.\n\
+- fs.window_open / fs.window_goto / fs.window_scroll / fs.list — first inspect bounded file windows/directories. Prefer window tools over whole-file reads for code. Window output includes L<number>|hash| anchors for fs.hash_edit.\n\
+- fs.read / fs.hash_read — use only when a small whole file is needed, or when a full hash listing is explicitly required.\n\
 - memory.read        — use for past tasks, learned procedures, or any recall requirement\n\
 - shell.restricted   — prefer standard tools (cargo, git, grep, find); always read stderr on failure\n\
 - patch.review       — inspect unified diffs before applying multi-file changes\n\
@@ -2592,6 +2594,9 @@ Action Input: {\"reason\": \"<what was tried and why it did not work>\"}";
 const TOOLS_DESCRIPTION: &str = "Available tools:
 - fs.read          {\"path\": \"<path>\"} — read file contents
 - fs.hash_read     {\"path\": \"<path>\"} — read file as L<number>|<hash>| content for anchored edits
+- fs.window_open   {\"path\": \"<path>\", \"lines\": 80} — read the first bounded L<number>|hash| window
+- fs.window_goto   {\"path\": \"<path>\", \"line\": 120, \"lines\": 80} — read a bounded L<number>|hash| window starting at line
+- fs.window_scroll {\"path\": \"<path>\", \"start\": 120, \"delta\": 80, \"lines\": 80} — read another bounded window relative to a prior start line
 - fs.list          {\"path\": \"<path>\"} — list directory
 - fs.write         {\"path\": \"<path>\", \"content\": \"<text>\"} — write file
 - fs.hash_edit     {\"path\": \"<path>\", \"line\": 12, \"hash\": \"abc\", \"new_text\": \"<full replacement line>\", \"mode\": \"check|apply\"} — replace one line only if the current line hash matches

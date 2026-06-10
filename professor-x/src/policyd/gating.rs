@@ -47,6 +47,7 @@ pub fn tool_risk_score(tool: &str) -> u8 {
         "fs.list" => 8,
         "fs.read" => 10,
         "fs.hash_read" => 12,
+        "fs.window_open" | "fs.window_goto" | "fs.window_scroll" => 11,
         "web.search" => 15,
         "memory.write" => 10,
         "web.fetch" => 20,
@@ -263,7 +264,7 @@ enum FileAccess {
 
 fn path_denied_reason(tool: &str, path: &str, scope: &PermissionScope) -> Option<String> {
     let access = match tool {
-        "fs.read" | "fs.hash_read" | "fs.list" => FileAccess::Read,
+        "fs.read" | "fs.hash_read" | "fs.window_open" | "fs.window_goto" | "fs.window_scroll" | "fs.list" => FileAccess::Read,
         "fs.write" | "fs.hash_edit" | "fs.replace" | "fs.delete" => FileAccess::Write,
         _ => return None,
     };
@@ -634,9 +635,26 @@ mod tests {
         let hash_read = gate("fs.hash_read", json!({"path": "src/lib.rs"}), &scope).await;
         assert_eq!(hash_read.decision, Decision::Allow);
 
+        let window = gate(
+            "fs.window_open",
+            json!({"path": "src/lib.rs", "lines": 40}),
+            &scope,
+        )
+        .await;
+        assert_eq!(window.decision, Decision::Allow);
+
         let denied = gate("fs.read", json!({"path": "/etc/passwd"}), &scope).await;
         assert_eq!(denied.decision, Decision::Deny);
         assert!(denied.reason.contains("blocked as sensitive"));
+
+        let window_denied = gate(
+            "fs.window_goto",
+            json!({"path": "/etc/passwd", "line": 1, "lines": 40}),
+            &scope,
+        )
+        .await;
+        assert_eq!(window_denied.decision, Decision::Deny);
+        assert!(window_denied.reason.contains("blocked as sensitive"));
 
         let escape = gate(
             "fs.write",

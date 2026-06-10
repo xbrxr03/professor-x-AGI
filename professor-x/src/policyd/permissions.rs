@@ -25,6 +25,9 @@ impl PermissionScope {
             granted_tools: vec![
                 "fs.read".to_string(),
                 "fs.hash_read".to_string(),
+                "fs.window_open".to_string(),
+                "fs.window_goto".to_string(),
+                "fs.window_scroll".to_string(),
                 "fs.list".to_string(),
                 "fs.write".to_string(),
                 "fs.hash_edit".to_string(),
