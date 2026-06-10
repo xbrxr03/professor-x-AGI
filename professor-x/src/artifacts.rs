@@ -497,7 +497,7 @@ fn validate_required_fields(kind: ArtifactKind, path: &Path) -> Vec<ArtifactChec
         }
     };
 
-    let fields = match kind.format() {
+    let mut fields = match kind.format() {
         ArtifactFormat::Json => match parse_json_fields(&raw) {
             Ok(fields) => fields,
             Err(e) => {
@@ -520,6 +520,7 @@ fn validate_required_fields(kind: ArtifactKind, path: &Path) -> Vec<ArtifactChec
             }
         },
     };
+    apply_artifact_schema_aliases(kind, &mut fields);
 
     let mut checks = vec![ArtifactCheck::pass(
         "parseable",
@@ -547,7 +548,219 @@ fn validate_required_fields(kind: ArtifactKind, path: &Path) -> Vec<ArtifactChec
             }
         }
     }
+    checks.extend(validate_semantic_fields(kind, path, &fields));
     checks
+}
+
+fn apply_artifact_schema_aliases(kind: ArtifactKind, fields: &mut BTreeMap<String, String>) {
+    match kind {
+        ArtifactKind::EvolutionProposal => {
+            let is_dry_run = fields.get("mode").is_some_and(|mode| mode == "dry_run");
+            let has_dry_run_evidence = ["reason", "checks", "diff_hash", "harness_commit"]
+                .iter()
+                .all(|field| fields.get(*field).is_some_and(|value| !value.trim().is_empty()));
+            if is_dry_run && has_dry_run_evidence && !fields.contains_key("manifest") {
+                fields.insert(
+                    "manifest".to_string(),
+                    "dry_run verification report with checks, reason, diff_hash, and harness_commit"
+                        .to_string(),
+                );
+            }
+        }
+        ArtifactKind::EvolutionRejection => {
+            if !fields.contains_key("reason") {
+                if let Some(analysis) = fields
+                    .get("analysis")
+                    .filter(|analysis| !analysis.trim().is_empty())
+                    .cloned()
+                {
+                    fields.insert("reason".to_string(), analysis);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn validate_semantic_fields(
+    kind: ArtifactKind,
+    path: &Path,
+    fields: &BTreeMap<String, String>,
+) -> Vec<ArtifactCheck> {
+    let mut checks = Vec::new();
+
+    for required in kind.required_fields() {
+        if let Some(value) = fields.get(*required) {
+            checks.push(check_not_placeholder(required, value));
+        }
+    }
+
+    match kind {
+        ArtifactKind::DailyUpdate => {
+            if let Some(date) = fields.get("date") {
+                checks.push(check_date_field("date", date));
+                checks.push(check_filename_matches_date(path, date));
+            }
+            if let Some(recorded_at) = fields.get("recorded_at") {
+                checks.push(check_timestamp_field("recorded_at", recorded_at));
+            }
+        }
+        ArtifactKind::LiteratureNote => {
+            if let Some(citations) = fields.get("citations") {
+                checks.push(check_citations_field(citations));
+            }
+            if let Some(recorded_at) = fields.get("recorded_at") {
+                checks.push(check_timestamp_field("recorded_at", recorded_at));
+            }
+        }
+        ArtifactKind::ExperimentResult => {
+            if let Some(run_id) = fields.get("run_id") {
+                checks.push(check_run_id_field(run_id));
+            }
+            if let Some(commit) = fields.get("harness_commit") {
+                checks.push(check_commit_field("harness_commit", commit));
+            }
+            if let Some(recorded_at) = fields.get("recorded_at") {
+                checks.push(check_timestamp_field("recorded_at", recorded_at));
+            }
+        }
+        ArtifactKind::HiroRun => {
+            if let Some(run_id) = fields.get("run_id") {
+                checks.push(check_run_id_field(run_id));
+            }
+            if let Some(commit) = fields.get("harness_commit") {
+                checks.push(check_commit_field("harness_commit", commit));
+            }
+            if let Some(recorded_at) = fields.get("recorded_at") {
+                checks.push(check_timestamp_field("recorded_at", recorded_at));
+            }
+        }
+        ArtifactKind::HiroNullBaseline => {
+            if let Some(run_id) = fields.get("run_id") {
+                checks.push(check_run_id_field(run_id));
+            }
+            if let Some(commit) = fields.get("harness_commit") {
+                checks.push(check_commit_field("harness_commit", commit));
+            }
+            if let Some(recorded_at) = fields.get("recorded_at") {
+                checks.push(check_timestamp_field("recorded_at", recorded_at));
+            }
+        }
+        ArtifactKind::EvolutionProposal | ArtifactKind::EvolutionRejection => {
+            if let Some(generated_at) = fields.get("generated_at") {
+                checks.push(check_timestamp_field("generated_at", generated_at));
+            }
+        }
+    }
+
+    checks
+}
+
+fn check_not_placeholder(field: &str, value: &str) -> ArtifactCheck {
+    let normalized = value.trim().trim_matches('"').to_ascii_lowercase();
+    let bad = [
+        "todo",
+        "tbd",
+        "none",
+        "n/a",
+        "na",
+        "unknown",
+        "placeholder",
+        "fake",
+        "dummy",
+        "example",
+    ];
+    if bad.iter().any(|bad| normalized == *bad || normalized.contains(&format!("<{bad}>"))) {
+        ArtifactCheck::fail(
+            format!("field:{field}:not_placeholder"),
+            format!("'{value}' is placeholder metadata"),
+        )
+    } else {
+        ArtifactCheck::pass(format!("field:{field}:not_placeholder"), "not placeholder")
+    }
+}
+
+fn check_date_field(field: &str, value: &str) -> ArtifactCheck {
+    if chrono::NaiveDate::parse_from_str(value.trim(), "%Y-%m-%d").is_ok() {
+        ArtifactCheck::pass(format!("field:{field}:date"), "valid YYYY-MM-DD date")
+    } else {
+        ArtifactCheck::fail(
+            format!("field:{field}:date"),
+            format!("'{value}' is not YYYY-MM-DD"),
+        )
+    }
+}
+
+fn check_timestamp_field(field: &str, value: &str) -> ArtifactCheck {
+    let value = value.trim();
+    let valid = DateTime::parse_from_rfc3339(value).is_ok()
+        || chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok();
+    if valid {
+        ArtifactCheck::pass(
+            format!("field:{field}:timestamp"),
+            "valid RFC3339 timestamp or YYYY-MM-DD date",
+        )
+    } else {
+        ArtifactCheck::fail(
+            format!("field:{field}:timestamp"),
+            format!("'{value}' is not a timestamp/date"),
+        )
+    }
+}
+
+fn check_filename_matches_date(path: &Path, date: &str) -> ArtifactCheck {
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+    if stem == date.trim() {
+        ArtifactCheck::pass("filename_matches_date", "daily update filename matches date")
+    } else {
+        ArtifactCheck::fail(
+            "filename_matches_date",
+            format!("daily update filename '{stem}' does not match date '{date}'"),
+        )
+    }
+}
+
+fn check_run_id_field(value: &str) -> ArtifactCheck {
+    let value = value.trim();
+    let uuid_like = Uuid::parse_str(value).is_ok();
+    let compact_id = value.len() >= 8
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_');
+    if uuid_like || compact_id {
+        ArtifactCheck::pass("field:run_id:shape", "run_id is reviewable")
+    } else {
+        ArtifactCheck::fail(
+            "field:run_id:shape",
+            format!("run_id '{value}' is too weak to audit"),
+        )
+    }
+}
+
+fn check_commit_field(field: &str, value: &str) -> ArtifactCheck {
+    let value = value.trim();
+    let ok = (7..=40).contains(&value.len()) && value.chars().all(|ch| ch.is_ascii_hexdigit());
+    if ok {
+        ArtifactCheck::pass(format!("field:{field}:commit"), "git commit hash shape")
+    } else {
+        ArtifactCheck::fail(
+            format!("field:{field}:commit"),
+            format!("'{value}' is not a 7-40 char hex commit id"),
+        )
+    }
+}
+
+fn check_citations_field(value: &str) -> ArtifactCheck {
+    let lower = value.to_ascii_lowercase();
+    let source_markers = ["arxiv", "doi:", "http://", "https://", "paper:", "isbn:"];
+    if source_markers.iter().any(|marker| lower.contains(marker)) {
+        ArtifactCheck::pass("field:citations:sourced", "citations include source identifiers")
+    } else {
+        ArtifactCheck::fail(
+            "field:citations:sourced",
+            "citations must include arxiv/doi/http/paper/isbn source identifiers",
+        )
+    }
 }
 
 /// Pull top-level scalar fields out of a JSON object. Nested objects are
@@ -812,7 +1025,7 @@ mod tests {
             f,
             "{}",
             r#"{
-                "run_id":"r1","round":1,"harness_commit":"abcdef",
+                "run_id":"12345678","round":1,"harness_commit":"abcdef0",
                 "p_tool":0.5,"p_plan":0.4,"p_correct":0.3,"pass_at_3":0.4,
                 "recorded_at":"2026-05-28T10:00:00Z"
             }"#
@@ -868,11 +1081,134 @@ mod tests {
         write!(
             f,
             "{}",
-            "---\nrun_id: r1\nharness_commit: abcdef\nmethod: A vs B\nrecorded_at: 2026-05-28\n---\n# body"
+            "---\nrun_id: 12345678\nharness_commit: abcdef0\nmethod: A vs B\nrecorded_at: 2026-05-28\n---\n# body"
         )
         .unwrap();
         let checks = validate_required_fields(ArtifactKind::ExperimentResult, &path);
         assert!(checks.iter().all(|c| c.passed), "checks: {:?}", checks);
+    }
+
+    #[test]
+    fn experiment_result_placeholder_commit_fails() {
+        let dir = tmp_dir("expres-placeholder");
+        let path = dir.join("e.md");
+        let mut f = fs::File::create(&path).unwrap();
+        write!(
+            f,
+            "{}",
+            "---\nrun_id: 12345678\nharness_commit: TODO\nmethod: A vs B\nrecorded_at: 2026-05-28\n---\n# body"
+        )
+        .unwrap();
+        let checks = validate_required_fields(ArtifactKind::ExperimentResult, &path);
+        assert!(
+            checks
+                .iter()
+                .any(|c| !c.passed && c.name == "field:harness_commit:not_placeholder"),
+            "expected placeholder failure, got {:?}",
+            checks
+        );
+        assert!(
+            checks
+                .iter()
+                .any(|c| !c.passed && c.name == "field:harness_commit:commit"),
+            "expected commit-shape failure, got {:?}",
+            checks
+        );
+    }
+
+    #[test]
+    fn literature_note_requires_sourced_citations() {
+        let dir = tmp_dir("lit-unsourced");
+        let path = dir.join("note.md");
+        let mut f = fs::File::create(&path).unwrap();
+        write!(
+            f,
+            "{}",
+            "---\ntitle: Attention schema\ncitations:\n  - some blog\nrecorded_at: 2026-05-28\n---\n# body"
+        )
+        .unwrap();
+        let checks = validate_required_fields(ArtifactKind::LiteratureNote, &path);
+        assert!(
+            checks
+                .iter()
+                .any(|c| !c.passed && c.name == "field:citations:sourced"),
+            "expected sourced-citation failure, got {:?}",
+            checks
+        );
+    }
+
+    #[test]
+    fn daily_update_filename_must_match_frontmatter_date() {
+        let dir = tmp_dir("daily-date");
+        let path = dir.join("2026-05-29.md");
+        let mut f = fs::File::create(&path).unwrap();
+        write!(
+            f,
+            "{}",
+            "---\ndate: 2026-05-28\nrecorded_at: 2026-05-28\n---\n# body"
+        )
+        .unwrap();
+        let checks = validate_required_fields(ArtifactKind::DailyUpdate, &path);
+        assert!(
+            checks
+                .iter()
+                .any(|c| !c.passed && c.name == "filename_matches_date"),
+            "expected filename/date failure, got {:?}",
+            checks
+        );
+    }
+
+    #[test]
+    fn dry_run_proposal_report_satisfies_manifest_contract_with_verification_evidence() {
+        let dir = tmp_dir("dry-run-proposal");
+        let path = dir.join("proposal.json");
+        let mut f = fs::File::create(&path).unwrap();
+        write!(
+            f,
+            "{}",
+            r#"{
+                "generated_at":"2026-06-10T07:54:06Z",
+                "mode":"dry_run",
+                "harness_commit":"abcdef0",
+                "target_component":"SkillDefinition(\"px-test\")",
+                "motivation":"verify the proposal without applying it",
+                "reason":"sandbox verification passed",
+                "checks":["reward_hacking_scan","sandbox_worktree"],
+                "diff_hash":"854541f760360e0ee79edb8f129865fc81e33d7d975a300528bf05cae21168a5",
+                "diff_bytes":1308
+            }"#
+        )
+        .unwrap();
+        let checks = validate_required_fields(ArtifactKind::EvolutionProposal, &path);
+        assert!(
+            checks.iter().all(|c| c.passed),
+            "dry-run proposal should validate, got {:?}",
+            checks
+        );
+    }
+
+    #[test]
+    fn rejection_report_can_use_analysis_as_reason_alias() {
+        let dir = tmp_dir("reject-alias");
+        let path = dir.join("rejection.json");
+        let mut f = fs::File::create(&path).unwrap();
+        write!(
+            f,
+            "{}",
+            r#"{
+                "generated_at":"2026-06-04T00:01:32Z",
+                "target_component":"SystemPrompt",
+                "status":"Rejected",
+                "analysis":"main worktree is dirty; refusing autonomous mutation"
+            }"#
+        )
+        .unwrap();
+        let checks = validate_required_fields(ArtifactKind::EvolutionRejection, &path);
+        assert!(
+            checks.iter().all(|c| c.passed),
+            "rejection alias should validate, got {:?}",
+            checks
+        );
     }
 
     #[test]
