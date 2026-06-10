@@ -1949,6 +1949,13 @@ async fn execute_evolution_proposal_dry_run(
 ) -> Result<(EvolutionProposalDryRunReport, PathBuf)> {
     let repo_root = default_repo_root();
     let node = operator_proposal_node("px-operator-proposal-dry-run", operator_goal.as_deref());
+    let target_component = format!("{:?}", node.target_component);
+    let planned_checks = vec![
+        "reward_hacking_scan",
+        "sandbox_worktree",
+        "material_diff",
+        "cargo_check",
+    ];
     events.append(
         None,
         None,
@@ -1957,8 +1964,8 @@ async fn execute_evolution_proposal_dry_run(
         serde_json::json!({
             "workspace": "repo-root",
             "harness_commit": git_head(&repo_root).unwrap_or_else(|_| "unknown".to_string()),
-            "target_component": format!("{:?}", node.target_component),
-            "motivation": node.motivation,
+            "target_component": target_component.clone(),
+            "motivation": node.motivation.clone(),
             "operator_goal": operator_goal.clone(),
         }),
     )?;
@@ -1969,17 +1976,57 @@ async fn execute_evolution_proposal_dry_run(
         "verifying proposal in isolated sandbox worktree",
         serde_json::json!({
             "workspace": "sandbox_worktree",
-            "target_component": format!("{:?}", node.target_component),
-            "planned_checks": [
-                "reward_hacking_scan",
-                "sandbox_worktree",
-                "material_diff",
-                "cargo_check"
-            ],
+            "target_component": target_component.clone(),
+            "planned_checks": planned_checks.clone(),
         }),
     )?;
 
-    let verification = verify_node_in_sandbox(&repo_root, &node).await?;
+    let heartbeat_cancel = CancellationToken::new();
+    let heartbeat_events = Arc::clone(&events);
+    let heartbeat_goal = operator_goal.clone();
+    let heartbeat_target = target_component.clone();
+    let heartbeat_checks = planned_checks.clone();
+    let heartbeat_token = heartbeat_cancel.clone();
+    let heartbeat = tokio::spawn(async move {
+        let mut elapsed_secs = 0u64;
+        loop {
+            tokio::select! {
+                _ = heartbeat_token.cancelled() => break,
+                _ = tokio::time::sleep(Duration::from_secs(10)) => {
+                    elapsed_secs += 10;
+                    let _ = heartbeat_events.append(
+                        None,
+                        None,
+                        "evolution.proposal_dry_run.heartbeat",
+                        format!("proposal sandbox verification still running after {elapsed_secs}s"),
+                        serde_json::json!({
+                            "workspace": "sandbox_worktree",
+                            "target_component": heartbeat_target.clone(),
+                            "operator_goal": heartbeat_goal.clone(),
+                            "elapsed_secs": elapsed_secs,
+                            "planned_checks": heartbeat_checks.clone(),
+                        }),
+                    );
+                }
+            }
+        }
+    });
+
+    let verify_repo_root = repo_root.clone();
+    let verify_node = node.clone();
+    let runtime_handle = tokio::runtime::Handle::current();
+    let verification_result = tokio::task::spawn_blocking(move || {
+        runtime_handle.block_on(verify_node_in_sandbox(&verify_repo_root, &verify_node))
+    })
+    .await
+    .unwrap_or_else(|err| {
+        Err(anyhow::anyhow!(
+            "proposal sandbox verification task failed: {err}"
+        ))
+    });
+    heartbeat_cancel.cancel();
+    let _ = heartbeat.await;
+    let verification = verification_result?;
     let diff_hash = if verification.diff.is_empty() {
         None
     } else {
@@ -1991,7 +2038,7 @@ async fn execute_evolution_proposal_dry_run(
         operator_goal,
         workspace: "repo-root".to_string(),
         harness_commit: git_head(&repo_root).unwrap_or_else(|_| "unknown".to_string()),
-        target_component: format!("{:?}", node.target_component),
+        target_component,
         motivation: node.motivation,
         accepted: verification.outcome.accepted,
         applied: false,
@@ -11090,6 +11137,9 @@ fn format_work_event(event: &memd::events::AgentEvent) -> String {
     if let Some(ms) = event.payload["execution_ms"].as_i64() {
         meta.push(format!("duration={ms}ms"));
     }
+    if let Some(seconds) = event.payload["elapsed_secs"].as_i64() {
+        meta.push(format!("elapsed={seconds}s"));
+    }
     if let Some(items) = event.payload["checks"]
         .as_array()
         .or_else(|| event.payload["planned_checks"].as_array())
@@ -12605,6 +12655,35 @@ mod tests {
         assert!(line.contains("transcript professor-x/artifacts/transcripts/t.json"));
         assert!(line.contains("commit abcdef12"));
         assert!(line.contains("5 checks"));
+    }
+
+    #[test]
+    fn format_work_event_surfaces_proposal_verification_heartbeat() {
+        let event = memd::events::AgentEvent {
+            id: 43,
+            timestamp: chrono::Utc::now(),
+            session_id: None,
+            task_id: None,
+            event_type: "evolution.proposal_dry_run.heartbeat".to_string(),
+            summary: "proposal sandbox verification still running after 20s".to_string(),
+            payload: serde_json::json!({
+                "workspace": "sandbox_worktree",
+                "target_component": "Skills",
+                "operator_goal": "operator wants visible autonomous work",
+                "elapsed_secs": 20,
+                "planned_checks": [
+                    "reward_hacking_scan",
+                    "cargo_check"
+                ],
+            }),
+        };
+
+        let line = format_work_event(&event);
+
+        assert!(line.contains("EVOLVE"));
+        assert!(line.contains("still running"));
+        assert!(line.contains("elapsed=20s"));
+        assert!(line.contains("checks=2"));
     }
 
     #[test]
