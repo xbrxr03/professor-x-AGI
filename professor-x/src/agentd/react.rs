@@ -543,10 +543,9 @@ impl ReactLoop {
         {
             let tool_names: Vec<&str> = vec![
                 "fs.read", "fs.hash_read", "fs.window_open", "fs.window_goto",
-                "fs.window_scroll", "fs.list", "fs.write", "fs.hash_edit", "fs.replace",
-                "web.search", "web.fetch", "vision.analyze", "shell.restricted",
-                "patch.review", "patch.apply", "memory.read", "memory.write", "finish",
-                "fail",
+                "fs.window_scroll", "fs.list", "fs.write", "fs.hash_edit", "web.search",
+                "web.fetch", "vision.analyze", "shell.restricted", "patch.review",
+                "patch.apply", "memory.read", "memory.write", "finish", "fail",
             ];
             let pred_prompt =
                 self_prediction::build_prediction_prompt(&task.description, &tool_names);
@@ -2556,7 +2555,7 @@ Complete tasks precisely and efficiently using the available tools.\n\n\
 - memory.read        — use for past tasks, learned procedures, or any recall requirement\n\
 - shell.restricted   — prefer standard tools (cargo, git, grep, find); always read stderr on failure\n\
 - patch.review       — inspect unified diffs before applying multi-file changes\n\
-- patch.apply        — multi-line code edits: run check mode first, then apply\n\
+- patch.apply        — multi-line code edits: run check mode first, then apply; if exact git apply fails it can fall back to normalized-whitespace hunk matching\n\
 - ollama.complete    — offload sub-queries that would bloat the main context chain\n\
 - web.search → web.fetch — search first, fetch only the single most relevant URL\n\n\
 ## Tool discipline (these mistakes waste steps — avoid them)\n\
@@ -2600,14 +2599,13 @@ const TOOLS_DESCRIPTION: &str = "Available tools:
 - fs.list          {\"path\": \"<path>\"} — list directory
 - fs.write         {\"path\": \"<path>\", \"content\": \"<text>\"} — write file
 - fs.hash_edit     {\"path\": \"<path>\", \"line\": 12, \"hash\": \"abc\", \"new_text\": \"<full replacement line>\", \"mode\": \"check|apply\"} — replace one line only if the current line hash matches
-- fs.replace       {\"path\": \"<path>\", \"old\": \"<exact text>\", \"new\": \"<replacement>\", \"mode\": \"check|apply\"} — replace exactly one matching text span
 - fs.delete        {\"path\": \"<path>\"} — delete file (risk: high, may require approval)
 - web.search       {\"query\": \"<q>\", \"num_results\": 5} — search the web
 - web.fetch        {\"url\": \"<url>\"} — fetch a URL
 - vision.analyze   {\"path\": \"<image_path>\", \"prompt\": \"<question>\"} — describe or reason about an image; also accepts {\"url\": \"<image_url>\"}
 - shell.restricted {\"command\": \"<cmd>\"} — run a shell command (sandboxed)
 - patch.review     {\"patch\": \"<unified diff>\"} — review paths/hunks/line deltas without applying
-- patch.apply      {\"mode\": \"check|apply\", \"patch\": \"<unified diff>\"} — check or apply a reviewable git-style patch
+- patch.apply      {\"mode\": \"check|apply\", \"patch\": \"<unified diff>\"} — check or apply a reviewable git-style patch, with normalized-whitespace fallback for drift
 - scratchpad.write {\"content\": \"<your running plan / notes>\"} — maintain a working plan that persists across steps (use it for multi-step tasks: list the steps, check them off, track what you've learned)
 - meta.observe     {} — look at YOUR OWN recent processing (thoughts, tool calls, results) and notice patterns: are you looping, stalling, making progress?
 - agent.delegate   {\"goal\": \"<focused sub-task>\"} — spawn a sub-agent that solves the sub-goal on its own and returns its result. Use to decompose a hard task into an independent piece (the sub-agent has its own tools and memory).

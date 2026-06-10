@@ -1,3 +1,4 @@
+pub mod apply_patch;
 pub mod editverify;
 pub mod executor;
 pub mod hashedit;

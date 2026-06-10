@@ -13,6 +13,7 @@ use tracing::{debug, warn};
 use crate::memd::semantic::SemanticEntry;
 use crate::memd::MemoryManager;
 use crate::ollama::OllamaClient;
+use crate::toolbridge::apply_patch::apply_fuzzy_patch_to_memory;
 use crate::toolbridge::editverify::{verify_candidate_content, EditVerification};
 use crate::toolbridge::hashedit::{hash_edit_file, hash_read_file, resolve_workspace_path};
 use crate::toolbridge::window::{goto_window_file, open_window_file, scroll_window_file};
@@ -439,10 +440,30 @@ impl ToolExecutor {
                     .output()
                     .await?;
                 if !check.status.success() {
-                    anyhow::bail!(
-                        "git apply --check failed: {}",
-                        String::from_utf8_lossy(&check.stderr)
-                    );
+                    let fuzzy = apply_fuzzy_patch_to_memory(&self.workspace_root, patch)?;
+                    for file in &fuzzy {
+                        let verification =
+                            self.verify_edit_candidate(&file.resolved_path, &file.after).await?;
+                        ensure_edit_verification(&verification)?;
+                    }
+                    if mode == "apply" {
+                        for file in &fuzzy {
+                            if let Some(parent) = file.resolved_path.parent() {
+                                std::fs::create_dir_all(parent)?;
+                            }
+                            std::fs::write(&file.resolved_path, &file.after)?;
+                        }
+                    }
+                    let fuzzy_matches: usize = fuzzy.iter().map(|file| file.fuzzy_matches).sum();
+                    return Ok(ToolDispatch::with_artifact(
+                        format!(
+                            "patch {mode} succeeded via fuzzy fallback for {} file(s), {fuzzy_matches} fuzzy hunk(s); artifact={}\n{}",
+                            fuzzy.len(),
+                            artifact_path.display(),
+                            review,
+                        ),
+                        artifact_path,
+                    ));
                 }
                 if mode == "apply" {
                     let apply = tokio::process::Command::new("git")
@@ -1299,6 +1320,17 @@ mod tests {
         }
     }
 
+    fn fuzzy_patch_action(mode: &str) -> Action {
+        Action {
+            tool_name: "patch.apply".to_string(),
+            params: json!({
+                "mode": mode,
+                "patch": "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,3 +1,3 @@\n pub fn add(left: i32, right: i32) -> i32 {\n-    left - right\n+        left + right\n }\n",
+            }),
+            risk_score: 62,
+        }
+    }
+
     fn patch_review_action() -> Action {
         Action {
             tool_name: "patch.review".to_string(),
@@ -1438,6 +1470,37 @@ mod tests {
             "pub fn x() { }\n"
         );
         assert!(root.join("artifacts/patches").exists());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn patch_apply_falls_back_to_fuzzy_whitespace_match() {
+        let root = temp_workspace();
+        std::fs::write(
+            root.join("src/lib.rs"),
+            "pub fn add(left: i32, right: i32) -> i32 {\n        left - right\n}\n",
+        )
+        .unwrap();
+        let registry = Arc::new(std::sync::RwLock::new(ToolRegistry::new()));
+        let executor = ToolExecutor::new(registry).with_workspace_root(root.clone());
+
+        let check = executor.execute(&fuzzy_patch_action("check")).await;
+        assert!(check.success, "{:?}", check.error);
+        assert!(check.output.contains("fuzzy fallback"));
+        assert!(check.output.contains("1 fuzzy hunk"));
+        assert_eq!(
+            std::fs::read_to_string(root.join("src/lib.rs")).unwrap(),
+            "pub fn add(left: i32, right: i32) -> i32 {\n        left - right\n}\n"
+        );
+
+        let apply = executor.execute(&fuzzy_patch_action("apply")).await;
+        assert!(apply.success, "{:?}", apply.error);
+        assert!(apply.output.contains("patch apply succeeded via fuzzy fallback"));
+        assert_eq!(
+            std::fs::read_to_string(root.join("src/lib.rs")).unwrap(),
+            "pub fn add(left: i32, right: i32) -> i32 {\n        left + right\n}\n"
+        );
 
         let _ = std::fs::remove_dir_all(root);
     }
