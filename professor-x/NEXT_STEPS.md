@@ -71,12 +71,18 @@ this remains high-value but no longer precedes answer/loop reliability.*
   `fs.hash_edit applied: true` and final cargo test passed in
   `artifacts/coding-smoke/2026-06-10/smoke-180908.json`.
   **Commit:** `8e8df62`.
-- [ ] **1.2 Edit-time verification (lint/parse gate).** After any edit, run a syntax check
+- [x] **1.2 Edit-time verification (lint/parse gate).** After any edit, run a syntax check
   (tree-sitter, or `cargo check`/`python -c` per lang). On NEW errors: reject, show
   would-be-window vs original, block re-running the identical command. Reference:
   SWE-agent `_refs/harnesses/SWE-agent/tools/windowed_edit_linting/bin/edit`.
   **Done-when:** a syntactically-broken edit never lands; model gets the structured retry.
   **Blocked by:** 1.1.
+  **Result:** `fs.write`, `fs.hash_edit`, and `fs.replace` now verify candidate content
+  before final write for Rust, Python, JSON, and TOML. Broken Rust/JSON edits are rejected
+  with structured `edit verification failed (...)` observations and leave the original file
+  intact. `cargo run -- --coding-smoke` still passes with the verifier active in
+  `artifacts/coding-smoke/2026-06-10/smoke-225252.json`.
+  **Commit:** `dd69aae`.
 - [ ] **1.3 Windowed file ACI.** New `src/toolbridge/window.rs`: `open/scroll/goto` a
   bounded, line-numbered window instead of whole-file reads. Reference: SWE-agent
   `tools/windowed`. **Done-when:** edits use stable line ranges; tokens-per-file-touch drop.
@@ -163,3 +169,6 @@ thrash/over-stepping is still a top failure.*
   `p_correct` remains 0.000.
 - 2026-06-10: Phase 1.1 hash-anchored edit tool implemented in `8e8df62`;
   coding smoke uses `fs.hash_read` + `fs.hash_edit` and verifies final tests pass.
+- 2026-06-10: Phase 1.2 edit-time verification implemented in `dd69aae`;
+  broken Rust/JSON edits are rejected before final write and the hash-edit coding smoke
+  still passes with verifier evidence in `artifacts/coding-smoke/2026-06-10/smoke-225252.json`.
