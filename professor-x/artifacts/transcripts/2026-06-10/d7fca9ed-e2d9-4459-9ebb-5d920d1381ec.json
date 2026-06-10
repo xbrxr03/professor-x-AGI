@@ -1,0 +1,355 @@
+{
+  "id": "f4d644e8-4651-484e-9628-9b33596298a0",
+  "task_id": "d7fca9ed-e2d9-4459-9ebb-5d920d1381ec",
+  "session_ids": [
+    "ab846cb2-481a-485a-909f-3dc8a69e3771"
+  ],
+  "task_description": "deterministic coding smoke: fix a failing Rust addition test and verify it passes",
+  "task_type": "UserRequest",
+  "status": "succeeded",
+  "started_at": "2026-06-10T18:09:08.202411445Z",
+  "completed_at": "2026-06-10T18:09:08.598325894Z",
+  "attempt_count": 1,
+  "max_attempts": 1,
+  "step_count": 4,
+  "summary": "deterministic coding smoke fixed the test and verified it",
+  "review": {
+    "tool_artifacts": [
+      "artifacts/coding-smoke/2026-06-10/d7fca9ed/evidence/artifacts/commands/2026-06-10/977789eb-998d-4d18-960f-0c311588e2e1.json",
+      "artifacts/coding-smoke/2026-06-10/d7fca9ed/evidence/artifacts/replacements/2026-06-10/de3168e1-c008-4984-aac7-3429ccf8f268.diff"
+    ],
+    "changed_files": [
+      "professor-x/artifacts/events/2026-06-10.jsonl",
+      "professor-x/src/agentd/react.rs",
+      "professor-x/src/main.rs",
+      "professor-x/src/policyd/gating.rs",
+      "professor-x/src/policyd/permissions.rs",
+      "professor-x/src/toolbridge/executor.rs",
+      "professor-x/src/toolbridge/mod.rs",
+      "professor-x/src/toolbridge/registry.rs"
+    ],
+    "git_status": [
+      " M professor-x/artifacts/events/2026-06-10.jsonl",
+      " M professor-x/src/agentd/react.rs",
+      " M professor-x/src/main.rs",
+      " M professor-x/src/policyd/gating.rs",
+      " M professor-x/src/policyd/permissions.rs",
+      " M professor-x/src/toolbridge/executor.rs",
+      " M professor-x/src/toolbridge/mod.rs",
+      " M professor-x/src/toolbridge/registry.rs",
+      "?? professor-x/src/toolbridge/hashedit.rs"
+    ],
+    "git_diff": "diff --git a/professor-x/artifacts/events/2026-06-10.jsonl b/professor-x/artifacts/events/2026-06-10.jsonl\nindex 8a5a25d..dc8cd14 100644\n--- a/professor-x/artifacts/events/2026-06-10.jsonl\n+++ b/professor-x/artifacts/events/2026-06-10.jsonl\n@@ -1668,3 +1668,22 @@\n {\"event_type\":\"task.succeeded\",\"id\":132321,\"payload\":{\"attempts\":1,\"score\":1.0,\"steps\":2},\"session_id\":null,\"summary\":\"completed task in 2 step(s)\",\"task_id\":\"4bf5a916-81c4-4e64-b92a-37808e41b8c1\",\"timestamp\":\"2026-06-10T17:59:03.832820901+00:00\"}\n {\"event_type\":\"hiro.attempt.completed\",\"id\":132322,\"payload\":{\"artifact_path\":\"artifacts/hiro/attempts/f1c8a72c-d601-4591-ad44-f1b2e6310187/r0/tu_012-a1.json\",\"attempt\":1,\"category\":\"tool_use\",\"duration_ms\":13864,\"passed\":true,\"round\":0,\"run_id\":\"f1c8a72c-d601-4591-ad44-f1b2e6310187\",\"task_id\":\"tu_012\"},\"session_id\":null,\"summary\":\"HIRO attempt 1 for task tu_012 (round 0): PASS\",\"task_id\":null,\"timestamp\":\"2026-06-10T17:59:03.851298264+00:00\"}\n {\"event_type\":\"hiro.round.completed\",\"id\":132323,\"payload\":{\"artifact_path\":\"artifacts/hiro/rounds/f1c8a72c-d601-4591-ad44-f1b2e6310187-r0.json\",\"frozen_harness\":true,\"harness_commit\":\"c0f404d9e434e38ac32248220717f2bbfcb7642f\",\"p_correct\":0.0,\"p_plan\":0.0,\"p_tool\":0.3333333432674408,\"pass_at_3\":0.3333333432674408,\"round\":0,\"run_id\":\"f1c8a72c-d601-4591-ad44-f1b2e6310187\"},\"session_id\":null,\"summary\":\"HIRO round 0 complete — pass@3=0.333 (run_id=f1c8a72c-d601-4591-ad44-f1b2e6310187)\",\"task_id\":null,\"timestamp\":\"2026-06-10T17:59:03.853999960+00:00\"}\n+{\"event_type\":\"skills.loaded\",\"id\":132324,\"payload\":{\"skills\":[\"px-autonomous-patch-20260531-195910\",\"px-autonomous-patch-20260601-081614\",\"px-autonomous-patch-20260601-082507\",\"px-daily-cycle\",\"px-daily-update\",\"px-deep-research\",\"px-experiment-runner\",\"px-gap-analysis\",\"px-interdisciplinary-bridge\",\"px-know-consumer-hw\",\"px-know-existing-systems\",\"px-know-harness\",\"px-know-scientific-method\",\"px-know-self-evolving\",\"px-know-writing-standards\",\"px-literature-search\",\"px-operator-autocommit-20260527-034639\",\"px-operator-autocommit-20260527-035402\",\"px-operator-autocommit-20260601-082530\",\"px-operator-goal-20260601-134503-make-goals-verified\",\"px-operator-goal-20260601-135027-preserve-goal-provenance\",\"px-repo-patch-commit-evidence-20260601\",\"px-repo-patch-commit-smoke-20260601\",\"px-repo-patch-live-commit-smoke-20260601\",\"px-self-review\",\"px-synthesize\",\"px-teach\",\"px-verify-patch\",\"px-write-section\",\"retry-plan-generation\"]},\"session_id\":null,\"summary\":\"loaded 30 skill(s)\",\"task_id\":null,\"timestamp\":\"2026-06-10T18:09:07.752972663+00:00\"}\n+{\"event_type\":\"daemon.started\",\"id\":132325,\"payload\":{\"cwd\":\"/home/abrar/professor-x-main-integrate/professor-x\",\"data_dir\":\"/home/abrar/.professor-x\"},\"session_id\":null,\"summary\":\"Professor X process started\",\"task_id\":null,\"timestamp\":\"2026-06-10T18:09:07.767408238+00:00\"}\n+{\"event_type\":\"task.queued\",\"id\":132326,\"payload\":{\"max_attempts\":1,\"priority\":100,\"task_type\":\"UserRequest\",\"workspace\":\"/tmp/px-coding-smoke-b2cd58fa-48dd-4b2b-9499-1137e8b8b27c\"},\"session_id\":null,\"summary\":\"queued task: deterministic coding smoke: fix a failing Rust addition test and verify it passes\",\"task_id\":\"d7fca9ed-e2d9-4459-9ebb-5d920d1381ec\",\"timestamp\":\"2026-06-10T18:09:08.203018597+00:00\"}\n+{\"event_type\":\"task.started\",\"id\":132327,\"payload\":{\"max_attempts\":1,\"priority\":100,\"task_type\":\"UserRequest\",\"workspace\":\"/tmp/px-coding-smoke-b2cd58fa-48dd-4b2b-9499-1137e8b8b27c\"},\"session_id\":null,\"summary\":\"started task: deterministic coding smoke: fix a failing Rust addition test and verify it passes\",\"task_id\":\"d7fca9ed-e2d9-4459-9ebb-5d920d1381ec\",\"timestamp\":\"2026-06-10T18:09:08.203341007+00:00\"}\n+{\"event_type\":\"task.attempt.started\",\"id\":132328,\"payload\":{\"attempt\":1},\"session_id\":\"ab846cb2-481a-485a-909f-3dc8a69e3771\",\"summary\":\"attempt 1/1 started\",\"task_id\":\"d7fca9ed-e2d9-4459-9ebb-5d920d1381ec\",\"timestamp\":\"2026-06-10T18:09:08.203601821+00:00\"}\n+{\"event_type\":\"coding.smoke.started\",\"id\":132329,\"payload\":{\"exercise\":\"add_i32\",\"workspace\":\"/tmp/px-coding-smoke-b2cd58fa-48dd-4b2b-9499-1137e8b8b27c\"},\"session_id\":null,\"summary\":\"starting deterministic coding-agent smoke\",\"task_id\":\"d7fca9ed-e2d9-4459-9ebb-5d920d1381ec\",\"timestamp\":\"2026-06-10T18:09:08.203785104+00:00\"}\n+{\"event_type\":\"policy.allowed\",\"id\":132330,\"payload\":{\"params_preview\":\"command=cargo test\",\"reason\":\"policy pass\",\"risk_score\":60,\"step\":1,\"tool\":\"shell.restricted\"},\"session_id\":\"ab846cb2-481a-485a-909f-3dc8a69e3771\",\"summary\":\"policy Allow for 'shell.restricted': policy pass\",\"task_id\":\"d7fca9ed-e2d9-4459-9ebb-5d920d1381ec\",\"timestamp\":\"2026-06-10T18:09:08.219228322+00:00\"}\n+{\"event_type\":\"tool.started\",\"id\":132331,\"payload\":{\"params_preview\":\"command=cargo test\",\"step\":1,\"tool\":\"shell.restricted\"},\"session_id\":\"ab846cb2-481a-485a-909f-3dc8a69e3771\",\"summary\":\"running tool 'shell.restricted' :: command=cargo test\",\"task_id\":\"d7fca9ed-e2d9-4459-9ebb-5d920d1381ec\",\"timestamp\":\"2026-06-10T18:09:08.219503907+00:00\"}\n+{\"event_type\":\"tool.failed\",\"id\":132332,\"payload\":{\"artifacts\":[],\"error\":\"exit 101:    Compiling px-coding-smoke v0.1.0 (/tmp/px-coding-smoke-b2cd58fa-48dd-4b2b-9499-1137e8b8b27c)\\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s\\n     Running unittests src/lib.rs (target/debug/deps/px_coding_smoke-dc3dddb89fd8a772)\\nerror: test failed, to rerun pass `--lib`\\n; artifact=/tmp/px-coding-smoke-b2cd58fa-48dd-4b2b-9499-1137e8b8b27c/artifacts/commands/2026-06-10/bf5fd287-21a2-469a-8927-e798cfcea863.json\",\"execution_ms\":146,\"output_preview\":\"\",\"step\":1,\"success\":false,\"tool\":\"shell.restricted\"},\"session_id\":\"ab846cb2-481a-485a-909f-3dc8a69e3771\",\"summary\":\"tool 'shell.restricted' failed in 146ms\",\"task_id\":\"d7fca9ed-e2d9-4459-9ebb-5d920d1381ec\",\"timestamp\":\"2026-06-10T18:09:08.383195918+00:00\"}\n+{\"event_type\":\"policy.allowed\",\"id\":132333,\"payload\":{\"params_preview\":\"path=src/lib.rs\",\"reason\":\"policy pass\",\"risk_score\":12,\"step\":2,\"tool\":\"fs.hash_read\"},\"session_id\":\"ab846cb2-481a-485a-909f-3dc8a69e3771\",\"summary\":\"policy Allow for 'fs.hash_read': policy pass\",\"task_id\":\"d7fca9ed-e2d9-4459-9ebb-5d920d1381ec\",\"timestamp\":\"2026-06-10T18:09:08.400291914+00:00\"}\n+{\"event_type\":\"tool.started\",\"id\":132334,\"payload\":{\"params_preview\":\"path=src/lib.rs\",\"step\":2,\"tool\":\"fs.hash_read\"},\"session_id\":\"ab846cb2-481a-485a-909f-3dc8a69e3771\",\"summary\":\"running tool 'fs.hash_read' :: path=src/lib.rs\",\"task_id\":\"d7fca9ed-e2d9-4459-9ebb-5d920d1381ec\",\"timestamp\":\"2026-06-10T18:09:08.400601209+00:00\"}\n+{\"event_type\":\"tool.succeeded\",\"id\":132335,\"payload\":{\"artifacts\":[],\"error\":null,\"execution_ms\":0,\"output_preview\":\"L1|c05| pub fn add(left: i32, right: i32) -> i32 {\\nL2|c08|     left - right\\nL3|d10| }\\nL4|e3b| \\nL5|3ba| #[cfg(test)]\\nL6|150| mod tests {\\nL7|e9f|     use super::*;\\nL8|e3b| \\nL9|a09|     #[test]\\nL10|bf3|     fn adds_numbers() {\\nL11|f12|         assert_eq!(add(2, 3), 5);\\nL12|28d|     }\\nL13|d10| }\",\"step\":2,\"success\":true,\"tool\":\"fs.hash_read\"},\"session_id\":\"ab846cb2-481a-485a-909f-3dc8a69e3771\",\"summary\":\"tool 'fs.hash_read' succeeded in 0ms\",\"task_id\":\"d7fca9ed-e2d9-4459-9ebb-5d920d1381ec\",\"timestamp\":\"2026-06-10T18:09:08.416981004+00:00\"}\n+{\"event_type\":\"policy.allowed\",\"id\":132336,\"payload\":{\"params_preview\":\"path=src/lib.rs mode=apply\",\"reason\":\"policy pass\",\"risk_score\":40,\"step\":3,\"tool\":\"fs.hash_edit\"},\"session_id\":\"ab846cb2-481a-485a-909f-3dc8a69e3771\",\"summary\":\"policy Allow for 'fs.hash_edit': policy pass\",\"task_id\":\"d7fca9ed-e2d9-4459-9ebb-5d920d1381ec\",\"timestamp\":\"2026-06-10T18:09:08.433146065+00:00\"}\n+{\"event_type\":\"tool.started\",\"id\":132337,\"payload\":{\"params_preview\":\"path=src/lib.rs mode=apply\",\"step\":3,\"tool\":\"fs.hash_edit\"},\"session_id\":\"ab846cb2-481a-485a-909f-3dc8a69e3771\",\"summary\":\"running tool 'fs.hash_edit' :: path=src/lib.rs mode=apply\",\"task_id\":\"d7fca9ed-e2d9-4459-9ebb-5d920d1381ec\",\"timestamp\":\"2026-06-10T18:09:08.433434932+00:00\"}\n+{\"event_type\":\"tool.succeeded\",\"id\":132338,\"payload\":{\"artifacts\":[\"/tmp/px-coding-smoke-b2cd58fa-48dd-4b2b-9499-1137e8b8b27c/artifacts/replacements/2026-06-10/de3168e1-c008-4984-aac7-3429ccf8f268.diff\"],\"error\":null,\"execution_ms\":0,\"output_preview\":\"hash_edit apply src/lib.rs line 2 — Δ +1 -1 lines\\n  +     left + right\",\"step\":3,\"success\":true,\"tool\":\"fs.hash_edit\"},\"session_id\":\"ab846cb2-481a-485a-909f-3dc8a69e3771\",\"summary\":\"tool 'fs.hash_edit' succeeded in 0ms\",\"task_id\":\"d7fca9ed-e2d9-4459-9ebb-5d920d1381ec\",\"timestamp\":\"2026-06-10T18:09:08.449292653+00:00\"}\n+{\"event_type\":\"policy.allowed\",\"id\":132339,\"payload\":{\"params_preview\":\"command=cargo test\",\"reason\":\"policy pass\",\"risk_score\":60,\"step\":4,\"tool\":\"shell.restricted\"},\"session_id\":\"ab846cb2-481a-485a-909f-3dc8a69e3771\",\"summary\":\"policy Allow for 'shell.restricted': policy pass\",\"task_id\":\"d7fca9ed-e2d9-4459-9ebb-5d920d1381ec\",\"timestamp\":\"2026-06-10T18:09:08.464974412+00:00\"}\n+{\"event_type\":\"tool.started\",\"id\":132340,\"payload\":{\"params_preview\":\"command=cargo test\",\"step\":4,\"tool\":\"shell.restricted\"},\"session_id\":\"ab846cb2-481a-485a-909f-3dc8a69e3771\",\"summary\":\"running tool 'shell.restricted' :: command=cargo test\",\"task_id\":\"d7fca9ed-e2d9-4459-9ebb-5d920d1381ec\",\"timestamp\":\"2026-06-10T18:09:08.465258101+00:00\"}\n+{\"event_type\":\"tool.succeeded\",\"id\":132341,\"payload\":{\"artifacts\":[\"/tmp/px-coding-smoke-b2cd58fa-48dd-4b2b-9499-1137e8b8b27c/artifacts/commands/2026-06-10/977789eb-998d-4d18-960f-0c311588e2e1.json\"],\"error\":null,\"execution_ms\":114,\"output_preview\":\"\\nrunning 1 test\\ntest tests::adds_numbers ... ok\\n\\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\\n\\n\\nrunning 0 tests\\n\\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\\n\\n\\nstderr:    Compiling px-coding-smoke v0.1....\",\"step\":4,\"success\":true,\"tool\":\"shell.restricted\"},\"session_id\":\"ab846cb2-481a-485a-909f-3dc8a69e3771\",\"summary\":\"tool 'shell.restricted' succeeded in 114ms\",\"task_id\":\"d7fca9ed-e2d9-4459-9ebb-5d920d1381ec\",\"timestamp\":\"2026-06-10T18:09:08.597329610+00:00\"}\n+{\"event_type\":\"coding.smoke.artifacts.persisted\",\"id\":132342,\"payload\":{\"artifacts\":[\"artifacts/coding-smoke/2026-06-10/d7fca9ed/evidence/artifacts/replacements/2026-06-10/de3168e1-c008-4984-aac7-3429ccf8f268.diff\",\"artifacts/coding-smoke/2026-06-10/d7fca9ed/evidence/artifacts/commands/2026-06-10/977789eb-998d-4d18-960f-0c311588e2e1.json\"],\"original_artifacts\":[\"/tmp/px-coding-smoke-b2cd58fa-48dd-4b2b-9499-1137e8b8b27c/artifacts/replacements/2026-06-10/de3168e1-c008-4984-aac7-3429ccf8f268.diff\",\"/tmp/px-coding-smoke-b2cd58fa-48dd-4b2b-9499-1137e8b8b27c/artifacts/commands/2026-06-10/977789eb-998d-4d18-960f-0c311588e2e1.json\"],\"workspace\":\"/tmp/px-coding-smoke-b2cd58fa-48dd-4b2b-9499-1137e8b8b27c\"},\"session_id\":null,\"summary\":\"persisted 2 coding smoke artifact(s) into repo evidence\",\"task_id\":\"d7fca9ed-e2d9-4459-9ebb-5d920d1381ec\",\"timestamp\":\"2026-06-10T18:09:08.598017058+00:00\"}\ndiff --git a/professor-x/src/agentd/react.rs b/professor-x/src/agentd/react.rs\nindex 53e41fd..54d615f 100644\n--- a/professor-x/src/agentd/react.rs\n+++ b/professor-x/src/agentd/react.rs\n@@ -542,9 +542,10 @@ impl ReactLoop {\n         // Error is measured at task end; persistent error = genuine self-ignorance.\n         {\n             let tool_names: Vec<&str> = vec![\n-                \"fs.read\", \"fs.list\", \"fs.write\", \"fs.replace\", \"web.search\",\n-                \"web.fetch\", \"vision.analyze\", \"shell.restricted\", \"patch.review\",\n-                \"patch.apply\", \"memory.read\", \"memory.write\", \"finish\", \"fail\",\n+                \"fs.read\", \"fs.hash_read\", \"fs.list\", \"fs.write\", \"fs.hash_edit\",\n+                \"fs.replace\", \"web.search\", \"web.fetch\", \"vision.analyze\",\n+                \"shell.restricted\", \"patch.review\", \"patch.apply\", \"memory.read\",\n+                \"memory.write\", \"finish\", \"fail\",\n             ];\n             let pred_prompt =\n                 self_prediction::build_prediction_prompt(&task.description, &tool_names);\n@@ -2425,6 +2426,11 @@ fn augment_with_repair_hint(\n             \"FIX: the old text did not match exactly. Read the file first, copy an exact unique snippet including whitespace, then retry.\"\n                 .to_string(),\n         )\n+    } else if tool == \"fs.hash_edit\" && combined.contains(\"stale line hash\") {\n+        Some(\n+            \"FIX: the file changed or the line/hash is wrong. Re-read it with fs.hash_read, then retry with the current L<number>|hash| line.\"\n+                .to_string(),\n+        )\n     } else if combined.contains(\"no such file\")\n         || combined.contains(\"cannot find\")\n         || (combined.contains(\"not found\") && !combined.contains(\"granted\"))\n@@ -2544,7 +2550,7 @@ Complete tasks precisely and efficiently using the available tools.\\n\\n\\\n 3. Check memory first (memory.read) when the task involves prior work, domain knowledge, or past failures.\\n\\\n 4. One tool call per turn. Never attempt to batch multiple actions.\\n\\n\\\n ## Tool guidance\\n\\\n-- fs.read / fs.list  — always your first move when working with files or directories. Use the <workspace> block above for real paths; do NOT guess directory names.\\n\\\n+- fs.read / fs.hash_read / fs.list — first inspect files/directories. Use fs.hash_read before line edits so you can edit by L<number>|hash| without copying large text.\\n\\\n - memory.read        — use for past tasks, learned procedures, or any recall requirement\\n\\\n - shell.restricted   — prefer standard tools (cargo, git, grep, find); always read stderr on failure\\n\\\n - patch.review       — inspect unified diffs before applying multi-file changes\\n\\\n@@ -2585,8 +2591,10 @@ Action Input: {\\\"reason\\\": \\\"<what was tried and why it did not work>\\\"}\";\n \n const TOOLS_DESCRIPTION: &str = \"Available tools:\n - fs.read          {\\\"path\\\": \\\"<path>\\\"} — read file contents\n+- fs.hash_read     {\\\"path\\\": \\\"<path>\\\"} — read file as L<number>|<hash>| content for anchored edits\n - fs.list          {\\\"path\\\": \\\"<path>\\\"} — list directory\n - fs.write         {\\\"path\\\": \\\"<path>\\\", \\\"content\\\": \\\"<text>\\\"} — write file\n+- fs.hash_edit     {\\\"path\\\": \\\"<path>\\\", \\\"line\\\": 12, \\\"hash\\\": \\\"abc\\\", \\\"new_text\\\": \\\"<full replacement line>\\\", \\\"mode\\\": \\\"check|apply\\\"} — replace one line only if the current line hash matches\n - fs.replace       {\\\"path\\\": \\\"<path>\\\", \\\"old\\\": \\\"<exact text>\\\", \\\"new\\\": \\\"<replacement>\\\", \\\"mode\\\": \\\"check|apply\\\"} — replace exactly one matching text span\n - fs.delete        {\\\"path\\\": \\\"<path>\\\"} — delete file (risk: high, may require approval)\n - web.search       {\\\"query\\\": \\\"<q>\\\", \\\"num_results\\\": 5} — search the web\ndiff --git a/professor-x/src/main.rs b/professor-x/src/main.rs\nindex 26fc210..2244180 100644\n--- a/professor-x/src/main.rs\n+++ b/professor-x/src/main.rs\n@@ -4960,11 +4960,24 @@ fn coding_session_plan(exercise: CodingExercise) -> Vec<String> {\n     vec![\n         format!(\"Create isolated Rust workspace for {}\", exercise.name),\n         \"Run cargo test before editing to capture the failing baseline\".to_string(),\n-        \"Apply the smallest exact source replacement through fs.replace\".to_string(),\n+        \"Read line hashes and apply the smallest hash-anchored edit\".to_string(),\n         \"Run cargo test again and keep command artifacts plus transcript\".to_string(),\n     ]\n }\n \n+fn replacement_line_number(source: &str, target_line: &str) -> Result<usize> {\n+    let matches: Vec<usize> = source\n+        .lines()\n+        .enumerate()\n+        .filter_map(|(index, line)| (line == target_line).then_some(index + 1))\n+        .collect();\n+    match matches.as_slice() {\n+        [line] => Ok(*line),\n+        [] => anyhow::bail!(\"replacement line not found in coding exercise source\"),\n+        _ => anyhow::bail!(\"replacement line is ambiguous in coding exercise source\"),\n+    }\n+}\n+\n async fn run_coding_smoke(\n     registry: Arc<std::sync::RwLock<ToolRegistry>>,\n     policy: Arc<PolicyEngine>,\n@@ -5089,15 +5102,46 @@ async fn run_coding_smoke_exercise(\n     artifacts.extend(initial.artifacts.clone());\n     let initial_test_failed = !initial.success;\n \n+    let hash_read_action = Action {\n+        tool_name: \"fs.hash_read\".to_string(),\n+        params: serde_json::json!({\"path\": \"src/lib.rs\"}),\n+        risk_score: 12,\n+    };\n+    let hash_read = run_smoke_tool(\n+        &executor,\n+        Arc::clone(&policy),\n+        Arc::clone(&memory),\n+        &events,\n+        &scope,\n+        session_id,\n+        task.id,\n+        2,\n+        hash_read_action.clone(),\n+    )\n+    .await?;\n+    record_smoke_step(\n+        &mut task,\n+        2,\n+        \"read hash-anchored source lines before editing\",\n+        hash_read_action,\n+        &hash_read,\n+    );\n+    task_runs.step_recorded(&task)?;\n+    emit_smoke_tool_event(&events, session_id, task.id, 2, &task.steps[1])?;\n+    artifacts.extend(hash_read.artifacts.clone());\n+\n+    let edit_line = replacement_line_number(exercise.source, exercise.replacement_old)?;\n+    let edit_hash = crate::toolbridge::hashedit::line_hash(exercise.replacement_old, 3);\n     let edit_action = Action {\n-        tool_name: \"fs.replace\".to_string(),\n+        tool_name: \"fs.hash_edit\".to_string(),\n         params: serde_json::json!({\n             \"path\": \"src/lib.rs\",\n-            \"old\": exercise.replacement_old,\n-            \"new\": exercise.replacement_new,\n+            \"line\": edit_line,\n+            \"hash\": edit_hash,\n+            \"new_text\": exercise.replacement_new,\n             \"mode\": \"apply\",\n         }),\n-        risk_score: 42,\n+        risk_score: 40,\n     };\n     let edit = run_smoke_tool(\n         &executor,\n@@ -5107,19 +5151,19 @@ async fn run_coding_smoke_exercise(\n         &scope,\n         session_id,\n         task.id,\n-        2,\n+        3,\n         edit_action.clone(),\n     )\n     .await?;\n     record_smoke_step(\n         &mut task,\n-        2,\n-        \"apply the minimal exact replacement\",\n+        3,\n+        \"apply the minimal hash-anchored edit\",\n         edit_action,\n         &edit,\n     );\n     task_runs.step_recorded(&task)?;\n-    emit_smoke_tool_event(&events, session_id, task.id, 2, &task.steps[1])?;\n+    emit_smoke_tool_event(&events, session_id, task.id, 3, &task.steps[2])?;\n     artifacts.extend(edit.artifacts.clone());\n \n     let final_action = Action {\n@@ -5135,19 +5179,19 @@ async fn run_coding_smoke_exercise(\n         &scope,\n         session_id,\n         task.id,\n-        3,\n+        4,\n         final_action.clone(),\n     )\n     .await?;\n     record_smoke_step(\n         &mut task,\n-        3,\n+        4,\n         \"rerun tests after the fix\",\n         final_action,\n         &final_test,\n     );\n     task_runs.step_recorded(&task)?;\n-    emit_smoke_tool_event(&events, session_id, task.id, 3, &task.steps[2])?;\n+    emit_smoke_tool_event(&events, session_id, task.id, 4, &task.steps[3])?;\n     artifacts.extend(final_test.artifacts.clone());\n     let final_test_passed = final_test.success;\n     let passed = initial_test_failed && edit.success && final_test_passed;\n@@ -5280,7 +5324,7 @@ async fn run_coding_smoke_exercise(\n             println!(\"  transcript: {path}\");\n         }\n         println!(\"  initial cargo test failed: {initial_test_failed}\");\n-        println!(\"  fs.replace applied: {}\", edit.success);\n+        println!(\"  fs.hash_edit applied: {}\", edit.success);\n         println!(\"  final cargo test passed: {final_test_passed}\");\n     }\n \ndiff --git a/professor-x/src/policyd/gating.rs b/professor-x/src/policyd/gating.rs\nindex a976c6c..c7d0ac2 100644\n--- a/professor-x/src/policyd/gating.rs\n+++ b/professor-x/src/policyd/gating.rs\n@@ -46,11 +46,13 @@ pub fn tool_risk_score(tool: &str) -> u8 {\n         \"repo.map\" => 8,\n         \"fs.list\" => 8,\n         \"fs.read\" => 10,\n+        \"fs.hash_read\" => 12,\n         \"web.search\" => 15,\n         \"memory.write\" => 10,\n         \"web.fetch\" => 20,\n         \"ollama.complete\" => 15,\n         \"patch.review\" => 20,\n+        \"fs.hash_edit\" => 40,\n         \"fs.replace\" => 42,\n         \"fs.write\" => 45,\n         \"shell.restricted\" => 60,\n@@ -261,8 +263,8 @@ enum FileAccess {\n \n fn path_denied_reason(tool: &str, path: &str, scope: &PermissionScope) -> Option<String> {\n     let access = match tool {\n-        \"fs.read\" | \"fs.list\" => FileAccess::Read,\n-        \"fs.write\" | \"fs.replace\" | \"fs.delete\" => FileAccess::Write,\n+        \"fs.read\" | \"fs.hash_read\" | \"fs.list\" => FileAccess::Read,\n+        \"fs.write\" | \"fs.hash_edit\" | \"fs.replace\" | \"fs.delete\" => FileAccess::Write,\n         _ => return None,\n     };\n     path_access_denied_reason(path, access, scope)\n@@ -323,10 +325,16 @@ fn patch_denied_reason(patch: &str, scope: &PermissionScope) -> Option<String> {\n             continue;\n         }\n         if path.starts_with('/') || path.contains('\\0') {\n-            return Some(format!(\"patch path '{}' is not a relative workspace path\", path));\n+            return Some(format!(\n+                \"patch path '{}' is not a relative workspace path\",\n+                path\n+            ));\n         }\n         if path.split('/').any(|part| part == \"..\" || part == \".git\") {\n-            return Some(format!(\"patch path '{}' contains a blocked component\", path));\n+            return Some(format!(\n+                \"patch path '{}' contains a blocked component\",\n+                path\n+            ));\n         }\n         if let Some(reason) = path_access_denied_reason(&path, FileAccess::Write, scope) {\n             return Some(format!(\"patch path denied: {reason}\"));\n@@ -623,6 +631,9 @@ mod tests {\n         let allowed = gate(\"fs.read\", json!({\"path\": \"Cargo.toml\"}), &scope).await;\n         assert_eq!(allowed.decision, Decision::Allow);\n \n+        let hash_read = gate(\"fs.hash_read\", json!({\"path\": \"src/lib.rs\"}), &scope).await;\n+        assert_eq!(hash_read.decision, Decision::Allow);\n+\n         let denied = gate(\"fs.read\", json!({\"path\": \"/etc/passwd\"}), &scope).await;\n         assert_eq!(denied.decision, Decision::Deny);\n         assert!(denied.reason.contains(\"blocked as sensitive\"));\n@@ -644,6 +655,14 @@ mod tests {\n         .await;\n         assert_eq!(replace.decision, Decision::Allow);\n \n+        let hash_edit = gate(\n+            \"fs.hash_edit\",\n+            json!({\"path\": \"src/lib.rs\", \"line\": 1, \"hash\": \"abc\", \"new_text\": \"pub fn y() {}\"}),\n+            &scope,\n+        )\n+        .await;\n+        assert_eq!(hash_edit.decision, Decision::Allow);\n+\n         let replace_escape = gate(\n             \"fs.replace\",\n             json!({\"path\": \"../outside.txt\", \"old\": \"x\", \"new\": \"y\"}),\n@@ -652,6 +671,15 @@ mod tests {\n         .await;\n         assert_eq!(replace_escape.decision, Decision::Deny);\n         assert!(replace_escape.reason.contains(\"outside workspace\"));\n+\n+        let hash_edit_escape = gate(\n+            \"fs.hash_edit\",\n+            json!({\"path\": \"../outside.txt\", \"line\": 1, \"hash\": \"abc\", \"new_text\": \"x\"}),\n+            &scope,\n+        )\n+        .await;\n+        assert_eq!(hash_edit_escape.decision, Decision::Deny);\n+        assert!(hash_edit_escape.reason.contains(\"outside workspace\"));\n     }\n \n     #[tokio::test]\ndiff --git a/professor-x/src/policyd/permissions.rs b/professor-x/src/policyd/permissions.rs\nindex 360a08d..c3193b1 100644\n--- a/professor-x/src/policyd/permissions.rs\n+++ b/professor-x/src/policyd/permissions.rs\n@@ -24,8 +24,10 @@ impl PermissionScope {\n         Self {\n             granted_tools: vec![\n                 \"fs.read\".to_string(),\n+                \"fs.hash_read\".to_string(),\n                 \"fs.list\".to_string(),\n                 \"fs.write\".to_string(),\n+                \"fs.hash_edit\".to_string(),\n                 \"fs.replace\".to_string(),\n                 \"fs.delete\".to_string(),\n                 \"web.search\".to_string(),\ndiff --git a/professor-x/src/toolbridge/executor.rs b/professor-x/src/toolbridge/executor.rs\nindex 39d85e0..c5147ce 100644\n--- a/professor-x/src/toolbridge/executor.rs\n+++ b/professor-x/src/toolbridge/executor.rs\n@@ -10,9 +10,10 @@ use std::sync::Arc;\n use std::time::Instant;\n use tracing::{debug, warn};\n \n-use crate::memd::MemoryManager;\n use crate::memd::semantic::SemanticEntry;\n+use crate::memd::MemoryManager;\n use crate::ollama::OllamaClient;\n+use crate::toolbridge::hashedit::{hash_edit_file, hash_read_file};\n use crate::toolbridge::ToolRegistry;\n \n #[derive(Debug, Clone, Serialize, Deserialize)]\n@@ -209,6 +210,13 @@ impl ToolExecutor {\n                 };\n                 Ok(ToolDispatch::output(out))\n             }\n+            \"fs.hash_read\" => {\n+                let path = req_str(&action.params, \"path\")?;\n+                Ok(ToolDispatch::output(hash_read_file(\n+                    &self.workspace_root,\n+                    path,\n+                )?))\n+            }\n             \"fs.list\" => {\n                 let path = req_str(&action.params, \"path\")?;\n                 let entries: Vec<String> = std::fs::read_dir(path)?\n@@ -249,6 +257,25 @@ impl ToolExecutor {\n                 };\n                 Ok(ToolDispatch::output(summary))\n             }\n+            \"fs.hash_edit\" => {\n+                let path = req_str(&action.params, \"path\")?;\n+                let line = req_usize(&action.params, \"line\")?;\n+                let hash = req_str(&action.params, \"hash\")?;\n+                let new_text = req_str(&action.params, \"new_text\")?;\n+                let mode = action.params[\"mode\"].as_str().unwrap_or(\"apply\");\n+                let outcome =\n+                    hash_edit_file(&self.workspace_root, path, line, hash, new_text, mode)?;\n+                let diff_artifact =\n+                    self.write_replace_artifact(path, &outcome.before, &outcome.after)?;\n+                Ok(ToolDispatch::with_artifact(\n+                    format!(\n+                        \"{} — {}\",\n+                        outcome.summary,\n+                        diff_summary(&outcome.before, &outcome.after)\n+                    ),\n+                    diff_artifact,\n+                ))\n+            }\n             \"fs.replace\" => {\n                 let path = req_str(&action.params, \"path\")?;\n                 let old = req_str(&action.params, \"old\")?;\n@@ -977,6 +1004,13 @@ fn req_str<'a>(p: &'a serde_json::Value, key: &str) -> Result<&'a str> {\n         .ok_or_else(|| anyhow::anyhow!(\"missing param '{key}'\"))\n }\n \n+fn req_usize(p: &serde_json::Value, key: &str) -> Result<usize> {\n+    p[key]\n+        .as_u64()\n+        .and_then(|value| usize::try_from(value).ok())\n+        .ok_or_else(|| anyhow::anyhow!(\"missing numeric param '{key}'\"))\n+}\n+\n /// Extract the primary shell command from a skill body for cerebellum bypass.\n /// Looks for the first non-comment line inside a ```bash/```sh block,\n /// or the first line prefixed with `$ `.\n@@ -1013,8 +1047,13 @@ fn is_known_builtin_tool(tool_name: &str) -> bool {\n     matches!(\n         tool_name,\n         \"fs.read\"\n+            | \"fs.hash_read\"\n             | \"fs.list\"\n             | \"fs.write\"\n+            | \"fs.hash_edit\"\n+            | \"fs.replace\"\n+            | \"fs.delete\"\n+            | \"fs.search\"\n             | \"shell.restricted\"\n             | \"scratchpad.write\"\n             | \"plan.write\"\n@@ -1065,14 +1104,20 @@ fn patch_review_summary(paths: &[String], patch: &str) -> String {\n         if let Some(added) = line.strip_prefix('+') {\n             additions += 1;\n             if preview.len() < 8 && !added.trim().is_empty() {\n-                preview.push(format!(\"  + {}\", added.chars().take(96).collect::<String>()));\n+                preview.push(format!(\n+                    \"  + {}\",\n+                    added.chars().take(96).collect::<String>()\n+                ));\n             }\n             continue;\n         }\n         if let Some(deleted) = line.strip_prefix('-') {\n             deletions += 1;\n             if preview.len() < 8 && !deleted.trim().is_empty() {\n-                preview.push(format!(\"  - {}\", deleted.chars().take(96).collect::<String>()));\n+                preview.push(format!(\n+                    \"  - {}\",\n+                    deleted.chars().take(96).collect::<String>()\n+                ));\n             }\n         }\n     }\n@@ -1237,6 +1282,28 @@ mod tests {\n         }\n     }\n \n+    fn hash_read_action(path: &str) -> Action {\n+        Action {\n+            tool_name: \"fs.hash_read\".to_string(),\n+            params: json!({\"path\": path}),\n+            risk_score: 12,\n+        }\n+    }\n+\n+    fn hash_edit_action(mode: &str, line: usize, hash: &str, new_text: &str) -> Action {\n+        Action {\n+            tool_name: \"fs.hash_edit\".to_string(),\n+            params: json!({\n+                \"path\": \"src/lib.rs\",\n+                \"line\": line,\n+                \"hash\": hash,\n+                \"new_text\": new_text,\n+                \"mode\": mode,\n+            }),\n+            risk_score: 40,\n+        }\n+    }\n+\n     #[tokio::test]\n     async fn patch_apply_checks_and_applies_reviewable_diff() {\n         let root = temp_workspace();\n@@ -1246,7 +1313,9 @@ mod tests {\n         let check = executor.execute(&patch_action(\"check\")).await;\n         assert!(check.success, \"{:?}\", check.error);\n         assert!(check.output.contains(\"patch check succeeded\"));\n-        assert!(check.output.contains(\"patch review: 1 path(s), 1 hunk(s), Δ +1 -1 lines\"));\n+        assert!(check\n+            .output\n+            .contains(\"patch review: 1 path(s), 1 hunk(s), Δ +1 -1 lines\"));\n         assert!(check.output.contains(\"path src/lib.rs\"));\n         assert_eq!(check.artifacts.len(), 1);\n         assert_eq!(\n@@ -1257,7 +1326,9 @@ mod tests {\n         let apply = executor.execute(&patch_action(\"apply\")).await;\n         assert!(apply.success, \"{:?}\", apply.error);\n         assert!(apply.output.contains(\"patch apply succeeded\"));\n-        assert!(apply.output.contains(\"patch review: 1 path(s), 1 hunk(s), Δ +1 -1 lines\"));\n+        assert!(apply\n+            .output\n+            .contains(\"patch review: 1 path(s), 1 hunk(s), Δ +1 -1 lines\"));\n         assert_eq!(apply.artifacts.len(), 1);\n         assert_eq!(\n             std::fs::read_to_string(root.join(\"src/lib.rs\")).unwrap(),\n@@ -1277,7 +1348,9 @@ mod tests {\n         let review = executor.execute(&patch_review_action()).await;\n         assert!(review.success, \"{:?}\", review.error);\n         assert!(review.output.contains(\"patch review passed\"));\n-        assert!(review.output.contains(\"patch review: 1 path(s), 1 hunk(s), Δ +1 -1 lines\"));\n+        assert!(review\n+            .output\n+            .contains(\"patch review: 1 path(s), 1 hunk(s), Δ +1 -1 lines\"));\n         assert!(review.output.contains(\"path src/lib.rs\"));\n         assert!(review.output.contains(\"- pub fn x() {}\"));\n         assert!(review.output.contains(\"+ pub fn x() { }\"));\n@@ -1350,12 +1423,71 @@ mod tests {\n             .execute(&replace_action(\"apply\", \"same\", \"changed\"))\n             .await;\n         assert!(!ambiguous.success);\n-        assert!(\n-            ambiguous\n-                .error\n-                .as_deref()\n-                .unwrap_or_default()\n-                .contains(\"expected exactly one match\")\n+        assert!(ambiguous\n+            .error\n+            .as_deref()\n+            .unwrap_or_default()\n+            .contains(\"expected exactly one match\"));\n+\n+        let _ = std::fs::remove_dir_all(root);\n+    }\n+\n+    #[tokio::test]\n+    async fn fs_hash_edit_checks_and_applies_single_line_by_hash() {\n+        let root = temp_workspace();\n+        std::fs::write(root.join(\"src/lib.rs\"), \"pub fn x() {}\\npub fn y() {}\\n\").unwrap();\n+        let registry = Arc::new(std::sync::RwLock::new(ToolRegistry::new()));\n+        let executor = ToolExecutor::new(registry).with_workspace_root(root.clone());\n+\n+        let read = executor.execute(&hash_read_action(\"src/lib.rs\")).await;\n+        assert!(read.success, \"{:?}\", read.error);\n+        assert!(read.output.contains(\"L1|\"));\n+        assert!(read.output.contains(\"| pub fn x() {}\"));\n+\n+        let hash = crate::toolbridge::hashedit::line_hash(\"pub fn x() {}\", 3);\n+        let check = executor\n+            .execute(&hash_edit_action(\"check\", 1, &hash, \"pub fn\n[... git diff truncated in transcript]",
+    "git_diff_truncated": true
+  },
+  "events": [
+    {
+      "id": 132326,
+      "timestamp": "2026-06-10T18:09:08.203018597Z",
+      "session_id": null,
+      "event_type": "task.queued",
+      "summary": "queued task: deterministic coding smoke: fix a failing Rust addition test and verify it passes",
+      "payload": {
+        "max_attempts": 1,
+        "priority": 100,
+        "task_type": "UserRequest",
+        "workspace": "/tmp/px-coding-smoke-b2cd58fa-48dd-4b2b-9499-1137e8b8b27c"
+      }
+    },
+    {
+      "id": 132327,
+      "timestamp": "2026-06-10T18:09:08.203341007Z",
+      "session_id": null,
+      "event_type": "task.started",
+      "summary": "started task: deterministic coding smoke: fix a failing Rust addition test and verify it passes",
+      "payload": {
+        "max_attempts": 1,
+        "priority": 100,
+        "task_type": "UserRequest",
+        "workspace": "/tmp/px-coding-smoke-b2cd58fa-48dd-4b2b-9499-1137e8b8b27c"
+      }
+    },
+    {
+      "id": 132328,
+      "timestamp": "2026-06-10T18:09:08.203601821Z",
+      "session_id": "ab846cb2-481a-485a-909f-3dc8a69e3771",
+      "event_type": "task.attempt.started",
+      "summary": "attempt 1/1 started",
+      "payload": {
+        "attempt": 1
+      }
+    },
+    {
+      "id": 132329,
+      "timestamp": "2026-06-10T18:09:08.203785104Z",
+      "session_id": null,
+      "event_type": "coding.smoke.started",
+      "summary": "starting deterministic coding-agent smoke",
+      "payload": {
+        "exercise": "add_i32",
+        "workspace": "/tmp/px-coding-smoke-b2cd58fa-48dd-4b2b-9499-1137e8b8b27c"
+      }
+    },
+    {
+      "id": 132330,
+      "timestamp": "2026-06-10T18:09:08.219228322Z",
+      "session_id": "ab846cb2-481a-485a-909f-3dc8a69e3771",
+      "event_type": "policy.allowed",
+      "summary": "policy Allow for 'shell.restricted': policy pass",
+      "payload": {
+        "params_preview": "command=cargo test",
+        "reason": "policy pass",
+        "risk_score": 60,
+        "step": 1,
+        "tool": "shell.restricted"
+      }
+    },
+    {
+      "id": 132331,
+      "timestamp": "2026-06-10T18:09:08.219503907Z",
+      "session_id": "ab846cb2-481a-485a-909f-3dc8a69e3771",
+      "event_type": "tool.started",
+      "summary": "running tool 'shell.restricted' :: command=cargo test",
+      "payload": {
+        "params_preview": "command=cargo test",
+        "step": 1,
+        "tool": "shell.restricted"
+      }
+    },
+    {
+      "id": 132332,
+      "timestamp": "2026-06-10T18:09:08.383195918Z",
+      "session_id": "ab846cb2-481a-485a-909f-3dc8a69e3771",
+      "event_type": "tool.failed",
+      "summary": "tool 'shell.restricted' failed in 146ms",
+      "payload": {
+        "artifacts": [],
+        "error": "exit 101:    Compiling px-coding-smoke v0.1.0 (/tmp/px-coding-smoke-b2cd58fa-48dd-4b2b-9499-1137e8b8b27c)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s\n     Running unittests src/lib.rs (target/debug/deps/px_coding_smoke-dc3dddb89fd8a772)\nerror: test failed, to rerun pass `--lib`\n; artifact=/tmp/px-coding-smoke-b2cd58fa-48dd-4b2b-9499-1137e8b8b27c/artifacts/commands/2026-06-10/bf5fd287-21a2-469a-8927-e798cfcea863.json",
+        "execution_ms": 146,
+        "output_preview": "",
+        "step": 1,
+        "success": false,
+        "tool": "shell.restricted"
+      }
+    },
+    {
+      "id": 132333,
+      "timestamp": "2026-06-10T18:09:08.400291914Z",
+      "session_id": "ab846cb2-481a-485a-909f-3dc8a69e3771",
+      "event_type": "policy.allowed",
+      "summary": "policy Allow for 'fs.hash_read': policy pass",
+      "payload": {
+        "params_preview": "path=src/lib.rs",
+        "reason": "policy pass",
+        "risk_score": 12,
+        "step": 2,
+        "tool": "fs.hash_read"
+      }
+    },
+    {
+      "id": 132334,
+      "timestamp": "2026-06-10T18:09:08.400601209Z",
+      "session_id": "ab846cb2-481a-485a-909f-3dc8a69e3771",
+      "event_type": "tool.started",
+      "summary": "running tool 'fs.hash_read' :: path=src/lib.rs",
+      "payload": {
+        "params_preview": "path=src/lib.rs",
+        "step": 2,
+        "tool": "fs.hash_read"
+      }
+    },
+    {
+      "id": 132335,
+      "timestamp": "2026-06-10T18:09:08.416981004Z",
+      "session_id": "ab846cb2-481a-485a-909f-3dc8a69e3771",
+      "event_type": "tool.succeeded",
+      "summary": "tool 'fs.hash_read' succeeded in 0ms",
+      "payload": {
+        "artifacts": [],
+        "error": null,
+        "execution_ms": 0,
+        "output_preview": "L1|c05| pub fn add(left: i32, right: i32) -> i32 {\nL2|c08|     left - right\nL3|d10| }\nL4|e3b| \nL5|3ba| #[cfg(test)]\nL6|150| mod tests {\nL7|e9f|     use super::*;\nL8|e3b| \nL9|a09|     #[test]\nL10|bf3|     fn adds_numbers() {\nL11|f12|         assert_eq!(add(2, 3), 5);\nL12|28d|     }\nL13|d10| }",
+        "step": 2,
+        "success": true,
+        "tool": "fs.hash_read"
+      }
+    },
+    {
+      "id": 132336,
+      "timestamp": "2026-06-10T18:09:08.433146065Z",
+      "session_id": "ab846cb2-481a-485a-909f-3dc8a69e3771",
+      "event_type": "policy.allowed",
+      "summary": "policy Allow for 'fs.hash_edit': policy pass",
+      "payload": {
+        "params_preview": "path=src/lib.rs mode=apply",
+        "reason": "policy pass",
+        "risk_score": 40,
+        "step": 3,
+        "tool": "fs.hash_edit"
+      }
+    },
+    {
+      "id": 132337,
+      "timestamp": "2026-06-10T18:09:08.433434932Z",
+      "session_id": "ab846cb2-481a-485a-909f-3dc8a69e3771",
+      "event_type": "tool.started",
+      "summary": "running tool 'fs.hash_edit' :: path=src/lib.rs mode=apply",
+      "payload": {
+        "params_preview": "path=src/lib.rs mode=apply",
+        "step": 3,
+        "tool": "fs.hash_edit"
+      }
+    },
+    {
+      "id": 132338,
+      "timestamp": "2026-06-10T18:09:08.449292653Z",
+      "session_id": "ab846cb2-481a-485a-909f-3dc8a69e3771",
+      "event_type": "tool.succeeded",
+      "summary": "tool 'fs.hash_edit' succeeded in 0ms",
+      "payload": {
+        "artifacts": [
+          "/tmp/px-coding-smoke-b2cd58fa-48dd-4b2b-9499-1137e8b8b27c/artifacts/replacements/2026-06-10/de3168e1-c008-4984-aac7-3429ccf8f268.diff"
+        ],
+        "error": null,
+        "execution_ms": 0,
+        "output_preview": "hash_edit apply src/lib.rs line 2 — Δ +1 -1 lines\n  +     left + right",
+        "step": 3,
+        "success": true,
+        "tool": "fs.hash_edit"
+      }
+    },
+    {
+      "id": 132339,
+      "timestamp": "2026-06-10T18:09:08.464974412Z",
+      "session_id": "ab846cb2-481a-485a-909f-3dc8a69e3771",
+      "event_type": "policy.allowed",
+      "summary": "policy Allow for 'shell.restricted': policy pass",
+      "payload": {
+        "params_preview": "command=cargo test",
+        "reason": "policy pass",
+        "risk_score": 60,
+        "step": 4,
+        "tool": "shell.restricted"
+      }
+    },
+    {
+      "id": 132340,
+      "timestamp": "2026-06-10T18:09:08.465258101Z",
+      "session_id": "ab846cb2-481a-485a-909f-3dc8a69e3771",
+      "event_type": "tool.started",
+      "summary": "running tool 'shell.restricted' :: command=cargo test",
+      "payload": {
+        "params_preview": "command=cargo test",
+        "step": 4,
+        "tool": "shell.restricted"
+      }
+    },
+    {
+      "id": 132341,
+      "timestamp": "2026-06-10T18:09:08.597329610Z",
+      "session_id": "ab846cb2-481a-485a-909f-3dc8a69e3771",
+      "event_type": "tool.succeeded",
+      "summary": "tool 'shell.restricted' succeeded in 114ms",
+      "payload": {
+        "artifacts": [
+          "/tmp/px-coding-smoke-b2cd58fa-48dd-4b2b-9499-1137e8b8b27c/artifacts/commands/2026-06-10/977789eb-998d-4d18-960f-0c311588e2e1.json"
+        ],
+        "error": null,
+        "execution_ms": 114,
+        "output_preview": "\nrunning 1 test\ntest tests::adds_numbers ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nstderr:    Compiling px-coding-smoke v0.1....",
+        "step": 4,
+        "success": true,
+        "tool": "shell.restricted"
+      }
+    },
+    {
+      "id": 132342,
+      "timestamp": "2026-06-10T18:09:08.598017058Z",
+      "session_id": null,
+      "event_type": "coding.smoke.artifacts.persisted",
+      "summary": "persisted 2 coding smoke artifact(s) into repo evidence",
+      "payload": {
+        "artifacts": [
+          "artifacts/coding-smoke/2026-06-10/d7fca9ed/evidence/artifacts/replacements/2026-06-10/de3168e1-c008-4984-aac7-3429ccf8f268.diff",
+          "artifacts/coding-smoke/2026-06-10/d7fca9ed/evidence/artifacts/commands/2026-06-10/977789eb-998d-4d18-960f-0c311588e2e1.json"
+        ],
+        "original_artifacts": [
+          "/tmp/px-coding-smoke-b2cd58fa-48dd-4b2b-9499-1137e8b8b27c/artifacts/replacements/2026-06-10/de3168e1-c008-4984-aac7-3429ccf8f268.diff",
+          "/tmp/px-coding-smoke-b2cd58fa-48dd-4b2b-9499-1137e8b8b27c/artifacts/commands/2026-06-10/977789eb-998d-4d18-960f-0c311588e2e1.json"
+        ],
+        "workspace": "/tmp/px-coding-smoke-b2cd58fa-48dd-4b2b-9499-1137e8b8b27c"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "index": 1,
+      "thought": "run the failing test before editing",
+      "tool_name": "shell.restricted",
+      "params": {
+        "command": "cargo test"
+      },
+      "risk_score": 60,
+      "observation_success": false,
+      "observation_output": "",
+      "observation_error": "exit 101:    Compiling px-coding-smoke v0.1.0 (/tmp/px-coding-smoke-b2cd58fa-48dd-4b2b-9499-1137e8b8b27c)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s\n     Running unittests src/lib.rs (target/debug/deps/px_coding_smoke-dc3dddb89fd8a772)\nerror: test failed, to rerun pass `--lib`\n; artifact=/tmp/px-coding-smoke-b2cd58fa-48dd-4b2b-9499-1137e8b8b27c/artifacts/commands/2026-06-10/bf5fd287-21a2-469a-8927-e798cfcea863.json",
+      "observation_artifacts": [],
+      "execution_ms": 146,
+      "timestamp": "2026-06-10T18:09:08.383048511Z"
+    },
+    {
+      "index": 2,
+      "thought": "read hash-anchored source lines before editing",
+      "tool_name": "fs.hash_read",
+      "params": {
+        "path": "src/lib.rs"
+      },
+      "risk_score": 12,
+      "observation_success": true,
+      "observation_output": "L1|c05| pub fn add(left: i32, right: i32) -> i32 {\nL2|c08|     left - right\nL3|d10| }\nL4|e3b| \nL5|3ba| #[cfg(test)]\nL6|150| mod tests {\nL7|e9f|     use super::*;\nL8|e3b| \nL9|a09|     #[test]\nL10|bf3|     fn adds_numbers() {\nL11|f12|         assert_eq!(add(2, 3), 5);\nL12|28d|     }\nL13|d10| }",
+      "observation_error": null,
+      "observation_artifacts": [],
+      "execution_ms": 0,
+      "timestamp": "2026-06-10T18:09:08.416865508Z"
+    },
+    {
+      "index": 3,
+      "thought": "apply the minimal hash-anchored edit",
+      "tool_name": "fs.hash_edit",
+      "params": {
+        "hash": "c08",
+        "line": 2,
+        "mode": "apply",
+        "new_text": "    left + right",
+        "path": "src/lib.rs"
+      },
+      "risk_score": 40,
+      "observation_success": true,
+      "observation_output": "hash_edit apply src/lib.rs line 2 — Δ +1 -1 lines\n  +     left + right",
+      "observation_error": null,
+      "observation_artifacts": [
+        "artifacts/coding-smoke/2026-06-10/d7fca9ed/evidence/artifacts/replacements/2026-06-10/de3168e1-c008-4984-aac7-3429ccf8f268.diff"
+      ],
+      "execution_ms": 0,
+      "timestamp": "2026-06-10T18:09:08.449170973Z"
+    },
+    {
+      "index": 4,
+      "thought": "rerun tests after the fix",
+      "tool_name": "shell.restricted",
+      "params": {
+        "command": "cargo test"
+      },
+      "risk_score": 60,
+      "observation_success": true,
+      "observation_output": "\nrunning 1 test\ntest tests::adds_numbers ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nstderr:    Compiling px-coding-smoke v0.1.0 (/tmp/px-coding-smoke-b2cd58fa-48dd-4b2b-9499-1137e8b8b27c)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s\n     Running unittests src/lib.rs (target/debug/deps/px_coding_smoke-dc3dddb89fd8a772)\n   Doc-tests px_coding_smoke\n\n[full output: /tmp/px-coding-smoke-b2cd58fa-48dd-4b2b-9499-1137e8b8b27c/artifacts/commands/2026-06-10/977789eb-998d-4d18-960f-0c311588e2e1.json]",
+      "observation_error": null,
+      "observation_artifacts": [
+        "artifacts/coding-smoke/2026-06-10/d7fca9ed/evidence/artifacts/commands/2026-06-10/977789eb-998d-4d18-960f-0c311588e2e1.json"
+      ],
+      "execution_ms": 114,
+      "timestamp": "2026-06-10T18:09:08.597152587Z"
+    }
+  ],
+  "recorded_at": "2026-06-10T18:09:08.598618376Z"
+}

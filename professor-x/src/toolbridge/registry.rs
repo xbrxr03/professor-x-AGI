@@ -56,8 +56,10 @@ impl ToolRegistry {
         // Risk scores ported from ClawOS policyd/service.py, extended for Professor X.
         let builtins = [
             ("fs.read",          "Read file contents",                    10, 5_000),
+            ("fs.hash_read",     "Read file contents with line hashes for anchored edits", 12, 5_000),
             ("fs.list",          "List directory contents",               8,  5_000),
             ("fs.write",         "Write content to a file",               45, 10_000),
+            ("fs.hash_edit",     "Replace one line after verifying its line hash", 40, 10_000),
             ("fs.replace",       "Replace exactly one text span in a file", 42, 10_000),
             ("fs.delete",        "Delete a file or directory",            70, 10_000),
             ("fs.search",        "Search for files matching a pattern",   12, 15_000),

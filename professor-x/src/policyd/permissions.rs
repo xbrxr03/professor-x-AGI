@@ -24,8 +24,10 @@ impl PermissionScope {
         Self {
             granted_tools: vec![
                 "fs.read".to_string(),
+                "fs.hash_read".to_string(),
                 "fs.list".to_string(),
                 "fs.write".to_string(),
+                "fs.hash_edit".to_string(),
                 "fs.replace".to_string(),
                 "fs.delete".to_string(),
                 "web.search".to_string(),

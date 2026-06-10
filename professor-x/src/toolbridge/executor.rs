@@ -10,9 +10,10 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, warn};
 
-use crate::memd::MemoryManager;
 use crate::memd::semantic::SemanticEntry;
+use crate::memd::MemoryManager;
 use crate::ollama::OllamaClient;
+use crate::toolbridge::hashedit::{hash_edit_file, hash_read_file};
 use crate::toolbridge::ToolRegistry;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -209,6 +210,13 @@ impl ToolExecutor {
                 };
                 Ok(ToolDispatch::output(out))
             }
+            "fs.hash_read" => {
+                let path = req_str(&action.params, "path")?;
+                Ok(ToolDispatch::output(hash_read_file(
+                    &self.workspace_root,
+                    path,
+                )?))
+            }
             "fs.list" => {
                 let path = req_str(&action.params, "path")?;
                 let entries: Vec<String> = std::fs::read_dir(path)?
@@ -248,6 +256,25 @@ impl ToolExecutor {
                     format!("edited {path} — {}", diff_summary(&old, content))
                 };
                 Ok(ToolDispatch::output(summary))
+            }
+            "fs.hash_edit" => {
+                let path = req_str(&action.params, "path")?;
+                let line = req_usize(&action.params, "line")?;
+                let hash = req_str(&action.params, "hash")?;
+                let new_text = req_str(&action.params, "new_text")?;
+                let mode = action.params["mode"].as_str().unwrap_or("apply");
+                let outcome =
+                    hash_edit_file(&self.workspace_root, path, line, hash, new_text, mode)?;
+                let diff_artifact =
+                    self.write_replace_artifact(path, &outcome.before, &outcome.after)?;
+                Ok(ToolDispatch::with_artifact(
+                    format!(
+                        "{} — {}",
+                        outcome.summary,
+                        diff_summary(&outcome.before, &outcome.after)
+                    ),
+                    diff_artifact,
+                ))
             }
             "fs.replace" => {
                 let path = req_str(&action.params, "path")?;
@@ -977,6 +1004,13 @@ fn req_str<'a>(p: &'a serde_json::Value, key: &str) -> Result<&'a str> {
         .ok_or_else(|| anyhow::anyhow!("missing param '{key}'"))
 }
 
+fn req_usize(p: &serde_json::Value, key: &str) -> Result<usize> {
+    p[key]
+        .as_u64()
+        .and_then(|value| usize::try_from(value).ok())
+        .ok_or_else(|| anyhow::anyhow!("missing numeric param '{key}'"))
+}
+
 /// Extract the primary shell command from a skill body for cerebellum bypass.
 /// Looks for the first non-comment line inside a ```bash/```sh block,
 /// or the first line prefixed with `$ `.
@@ -1013,8 +1047,13 @@ fn is_known_builtin_tool(tool_name: &str) -> bool {
     matches!(
         tool_name,
         "fs.read"
+            | "fs.hash_read"
             | "fs.list"
             | "fs.write"
+            | "fs.hash_edit"
+            | "fs.replace"
+            | "fs.delete"
+            | "fs.search"
             | "shell.restricted"
             | "scratchpad.write"
             | "plan.write"
@@ -1065,14 +1104,20 @@ fn patch_review_summary(paths: &[String], patch: &str) -> String {
         if let Some(added) = line.strip_prefix('+') {
             additions += 1;
             if preview.len() < 8 && !added.trim().is_empty() {
-                preview.push(format!("  + {}", added.chars().take(96).collect::<String>()));
+                preview.push(format!(
+                    "  + {}",
+                    added.chars().take(96).collect::<String>()
+                ));
             }
             continue;
         }
         if let Some(deleted) = line.strip_prefix('-') {
             deletions += 1;
             if preview.len() < 8 && !deleted.trim().is_empty() {
-                preview.push(format!("  - {}", deleted.chars().take(96).collect::<String>()));
+                preview.push(format!(
+                    "  - {}",
+                    deleted.chars().take(96).collect::<String>()
+                ));
             }
         }
     }
@@ -1237,6 +1282,28 @@ mod tests {
         }
     }
 
+    fn hash_read_action(path: &str) -> Action {
+        Action {
+            tool_name: "fs.hash_read".to_string(),
+            params: json!({"path": path}),
+            risk_score: 12,
+        }
+    }
+
+    fn hash_edit_action(mode: &str, line: usize, hash: &str, new_text: &str) -> Action {
+        Action {
+            tool_name: "fs.hash_edit".to_string(),
+            params: json!({
+                "path": "src/lib.rs",
+                "line": line,
+                "hash": hash,
+                "new_text": new_text,
+                "mode": mode,
+            }),
+            risk_score: 40,
+        }
+    }
+
     #[tokio::test]
     async fn patch_apply_checks_and_applies_reviewable_diff() {
         let root = temp_workspace();
@@ -1246,7 +1313,9 @@ mod tests {
         let check = executor.execute(&patch_action("check")).await;
         assert!(check.success, "{:?}", check.error);
         assert!(check.output.contains("patch check succeeded"));
-        assert!(check.output.contains("patch review: 1 path(s), 1 hunk(s), Δ +1 -1 lines"));
+        assert!(check
+            .output
+            .contains("patch review: 1 path(s), 1 hunk(s), Δ +1 -1 lines"));
         assert!(check.output.contains("path src/lib.rs"));
         assert_eq!(check.artifacts.len(), 1);
         assert_eq!(
@@ -1257,7 +1326,9 @@ mod tests {
         let apply = executor.execute(&patch_action("apply")).await;
         assert!(apply.success, "{:?}", apply.error);
         assert!(apply.output.contains("patch apply succeeded"));
-        assert!(apply.output.contains("patch review: 1 path(s), 1 hunk(s), Δ +1 -1 lines"));
+        assert!(apply
+            .output
+            .contains("patch review: 1 path(s), 1 hunk(s), Δ +1 -1 lines"));
         assert_eq!(apply.artifacts.len(), 1);
         assert_eq!(
             std::fs::read_to_string(root.join("src/lib.rs")).unwrap(),
@@ -1277,7 +1348,9 @@ mod tests {
         let review = executor.execute(&patch_review_action()).await;
         assert!(review.success, "{:?}", review.error);
         assert!(review.output.contains("patch review passed"));
-        assert!(review.output.contains("patch review: 1 path(s), 1 hunk(s), Δ +1 -1 lines"));
+        assert!(review
+            .output
+            .contains("patch review: 1 path(s), 1 hunk(s), Δ +1 -1 lines"));
         assert!(review.output.contains("path src/lib.rs"));
         assert!(review.output.contains("- pub fn x() {}"));
         assert!(review.output.contains("+ pub fn x() { }"));
@@ -1350,12 +1423,71 @@ mod tests {
             .execute(&replace_action("apply", "same", "changed"))
             .await;
         assert!(!ambiguous.success);
-        assert!(
-            ambiguous
-                .error
-                .as_deref()
-                .unwrap_or_default()
-                .contains("expected exactly one match")
+        assert!(ambiguous
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("expected exactly one match"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn fs_hash_edit_checks_and_applies_single_line_by_hash() {
+        let root = temp_workspace();
+        std::fs::write(root.join("src/lib.rs"), "pub fn x() {}\npub fn y() {}\n").unwrap();
+        let registry = Arc::new(std::sync::RwLock::new(ToolRegistry::new()));
+        let executor = ToolExecutor::new(registry).with_workspace_root(root.clone());
+
+        let read = executor.execute(&hash_read_action("src/lib.rs")).await;
+        assert!(read.success, "{:?}", read.error);
+        assert!(read.output.contains("L1|"));
+        assert!(read.output.contains("| pub fn x() {}"));
+
+        let hash = crate::toolbridge::hashedit::line_hash("pub fn x() {}", 3);
+        let check = executor
+            .execute(&hash_edit_action("check", 1, &hash, "pub fn x() { 1 }"))
+            .await;
+        assert!(check.success, "{:?}", check.error);
+        assert!(check.output.contains("hash_edit check src/lib.rs line 1"));
+        assert_eq!(
+            std::fs::read_to_string(root.join("src/lib.rs")).unwrap(),
+            "pub fn x() {}\npub fn y() {}\n"
+        );
+
+        let apply = executor
+            .execute(&hash_edit_action("apply", 1, &hash, "pub fn x() { 1 }"))
+            .await;
+        assert!(apply.success, "{:?}", apply.error);
+        assert!(apply.output.contains("hash_edit apply src/lib.rs line 1"));
+        assert_eq!(apply.artifacts.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(root.join("src/lib.rs")).unwrap(),
+            "pub fn x() { 1 }\npub fn y() {}\n"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn fs_hash_edit_rejects_stale_hash_without_mutating() {
+        let root = temp_workspace();
+        std::fs::write(root.join("src/lib.rs"), "pub fn x() {}\n").unwrap();
+        let registry = Arc::new(std::sync::RwLock::new(ToolRegistry::new()));
+        let executor = ToolExecutor::new(registry).with_workspace_root(root.clone());
+
+        let stale = executor
+            .execute(&hash_edit_action("apply", 1, "bad", "pub fn x() { 1 }"))
+            .await;
+        assert!(!stale.success);
+        assert!(stale
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("stale line hash"));
+        assert_eq!(
+            std::fs::read_to_string(root.join("src/lib.rs")).unwrap(),
+            "pub fn x() {}\n"
         );
 
         let _ = std::fs::remove_dir_all(root);

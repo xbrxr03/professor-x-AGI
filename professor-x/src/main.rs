@@ -4960,9 +4960,22 @@ fn coding_session_plan(exercise: CodingExercise) -> Vec<String> {
     vec![
         format!("Create isolated Rust workspace for {}", exercise.name),
         "Run cargo test before editing to capture the failing baseline".to_string(),
-        "Apply the smallest exact source replacement through fs.replace".to_string(),
+        "Read line hashes and apply the smallest hash-anchored edit".to_string(),
         "Run cargo test again and keep command artifacts plus transcript".to_string(),
     ]
+}
+
+fn replacement_line_number(source: &str, target_line: &str) -> Result<usize> {
+    let matches: Vec<usize> = source
+        .lines()
+        .enumerate()
+        .filter_map(|(index, line)| (line == target_line).then_some(index + 1))
+        .collect();
+    match matches.as_slice() {
+        [line] => Ok(*line),
+        [] => anyhow::bail!("replacement line not found in coding exercise source"),
+        _ => anyhow::bail!("replacement line is ambiguous in coding exercise source"),
+    }
 }
 
 async fn run_coding_smoke(
@@ -5089,15 +5102,46 @@ async fn run_coding_smoke_exercise(
     artifacts.extend(initial.artifacts.clone());
     let initial_test_failed = !initial.success;
 
+    let hash_read_action = Action {
+        tool_name: "fs.hash_read".to_string(),
+        params: serde_json::json!({"path": "src/lib.rs"}),
+        risk_score: 12,
+    };
+    let hash_read = run_smoke_tool(
+        &executor,
+        Arc::clone(&policy),
+        Arc::clone(&memory),
+        &events,
+        &scope,
+        session_id,
+        task.id,
+        2,
+        hash_read_action.clone(),
+    )
+    .await?;
+    record_smoke_step(
+        &mut task,
+        2,
+        "read hash-anchored source lines before editing",
+        hash_read_action,
+        &hash_read,
+    );
+    task_runs.step_recorded(&task)?;
+    emit_smoke_tool_event(&events, session_id, task.id, 2, &task.steps[1])?;
+    artifacts.extend(hash_read.artifacts.clone());
+
+    let edit_line = replacement_line_number(exercise.source, exercise.replacement_old)?;
+    let edit_hash = crate::toolbridge::hashedit::line_hash(exercise.replacement_old, 3);
     let edit_action = Action {
-        tool_name: "fs.replace".to_string(),
+        tool_name: "fs.hash_edit".to_string(),
         params: serde_json::json!({
             "path": "src/lib.rs",
-            "old": exercise.replacement_old,
-            "new": exercise.replacement_new,
+            "line": edit_line,
+            "hash": edit_hash,
+            "new_text": exercise.replacement_new,
             "mode": "apply",
         }),
-        risk_score: 42,
+        risk_score: 40,
     };
     let edit = run_smoke_tool(
         &executor,
@@ -5107,19 +5151,19 @@ async fn run_coding_smoke_exercise(
         &scope,
         session_id,
         task.id,
-        2,
+        3,
         edit_action.clone(),
     )
     .await?;
     record_smoke_step(
         &mut task,
-        2,
-        "apply the minimal exact replacement",
+        3,
+        "apply the minimal hash-anchored edit",
         edit_action,
         &edit,
     );
     task_runs.step_recorded(&task)?;
-    emit_smoke_tool_event(&events, session_id, task.id, 2, &task.steps[1])?;
+    emit_smoke_tool_event(&events, session_id, task.id, 3, &task.steps[2])?;
     artifacts.extend(edit.artifacts.clone());
 
     let final_action = Action {
@@ -5135,19 +5179,19 @@ async fn run_coding_smoke_exercise(
         &scope,
         session_id,
         task.id,
-        3,
+        4,
         final_action.clone(),
     )
     .await?;
     record_smoke_step(
         &mut task,
-        3,
+        4,
         "rerun tests after the fix",
         final_action,
         &final_test,
     );
     task_runs.step_recorded(&task)?;
-    emit_smoke_tool_event(&events, session_id, task.id, 3, &task.steps[2])?;
+    emit_smoke_tool_event(&events, session_id, task.id, 4, &task.steps[3])?;
     artifacts.extend(final_test.artifacts.clone());
     let final_test_passed = final_test.success;
     let passed = initial_test_failed && edit.success && final_test_passed;
@@ -5280,7 +5324,7 @@ async fn run_coding_smoke_exercise(
             println!("  transcript: {path}");
         }
         println!("  initial cargo test failed: {initial_test_failed}");
-        println!("  fs.replace applied: {}", edit.success);
+        println!("  fs.hash_edit applied: {}", edit.success);
         println!("  final cargo test passed: {final_test_passed}");
     }
 

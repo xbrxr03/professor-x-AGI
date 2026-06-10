@@ -46,11 +46,13 @@ pub fn tool_risk_score(tool: &str) -> u8 {
         "repo.map" => 8,
         "fs.list" => 8,
         "fs.read" => 10,
+        "fs.hash_read" => 12,
         "web.search" => 15,
         "memory.write" => 10,
         "web.fetch" => 20,
         "ollama.complete" => 15,
         "patch.review" => 20,
+        "fs.hash_edit" => 40,
         "fs.replace" => 42,
         "fs.write" => 45,
         "shell.restricted" => 60,
@@ -261,8 +263,8 @@ enum FileAccess {
 
 fn path_denied_reason(tool: &str, path: &str, scope: &PermissionScope) -> Option<String> {
     let access = match tool {
-        "fs.read" | "fs.list" => FileAccess::Read,
-        "fs.write" | "fs.replace" | "fs.delete" => FileAccess::Write,
+        "fs.read" | "fs.hash_read" | "fs.list" => FileAccess::Read,
+        "fs.write" | "fs.hash_edit" | "fs.replace" | "fs.delete" => FileAccess::Write,
         _ => return None,
     };
     path_access_denied_reason(path, access, scope)
@@ -323,10 +325,16 @@ fn patch_denied_reason(patch: &str, scope: &PermissionScope) -> Option<String> {
             continue;
         }
         if path.starts_with('/') || path.contains('\0') {
-            return Some(format!("patch path '{}' is not a relative workspace path", path));
+            return Some(format!(
+                "patch path '{}' is not a relative workspace path",
+                path
+            ));
         }
         if path.split('/').any(|part| part == ".." || part == ".git") {
-            return Some(format!("patch path '{}' contains a blocked component", path));
+            return Some(format!(
+                "patch path '{}' contains a blocked component",
+                path
+            ));
         }
         if let Some(reason) = path_access_denied_reason(&path, FileAccess::Write, scope) {
             return Some(format!("patch path denied: {reason}"));
@@ -623,6 +631,9 @@ mod tests {
         let allowed = gate("fs.read", json!({"path": "Cargo.toml"}), &scope).await;
         assert_eq!(allowed.decision, Decision::Allow);
 
+        let hash_read = gate("fs.hash_read", json!({"path": "src/lib.rs"}), &scope).await;
+        assert_eq!(hash_read.decision, Decision::Allow);
+
         let denied = gate("fs.read", json!({"path": "/etc/passwd"}), &scope).await;
         assert_eq!(denied.decision, Decision::Deny);
         assert!(denied.reason.contains("blocked as sensitive"));
@@ -644,6 +655,14 @@ mod tests {
         .await;
         assert_eq!(replace.decision, Decision::Allow);
 
+        let hash_edit = gate(
+            "fs.hash_edit",
+            json!({"path": "src/lib.rs", "line": 1, "hash": "abc", "new_text": "pub fn y() {}"}),
+            &scope,
+        )
+        .await;
+        assert_eq!(hash_edit.decision, Decision::Allow);
+
         let replace_escape = gate(
             "fs.replace",
             json!({"path": "../outside.txt", "old": "x", "new": "y"}),
@@ -652,6 +671,15 @@ mod tests {
         .await;
         assert_eq!(replace_escape.decision, Decision::Deny);
         assert!(replace_escape.reason.contains("outside workspace"));
+
+        let hash_edit_escape = gate(
+            "fs.hash_edit",
+            json!({"path": "../outside.txt", "line": 1, "hash": "abc", "new_text": "x"}),
+            &scope,
+        )
+        .await;
+        assert_eq!(hash_edit_escape.decision, Decision::Deny);
+        assert!(hash_edit_escape.reason.contains("outside workspace"));
     }
 
     #[tokio::test]

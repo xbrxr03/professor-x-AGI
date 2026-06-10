@@ -1,0 +1,31 @@
+--- src/lib.rs.before
++++ src/lib.rs.after
+@@ exact replacement preview @@
+- before:
+pub fn add(left: i32, right: i32) -> i32 {
+    left - right
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adds_numbers() {
+        assert_eq!(add(2, 3), 5);
+    }
+}
++ after:
+pub fn add(left: i32, right: i32) -> i32 {
+    left + right
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adds_numbers() {
+        assert_eq!(add(2, 3), 5);
+    }
+}

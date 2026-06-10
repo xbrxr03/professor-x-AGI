@@ -542,9 +542,10 @@ impl ReactLoop {
         // Error is measured at task end; persistent error = genuine self-ignorance.
         {
             let tool_names: Vec<&str> = vec![
-                "fs.read", "fs.list", "fs.write", "fs.replace", "web.search",
-                "web.fetch", "vision.analyze", "shell.restricted", "patch.review",
-                "patch.apply", "memory.read", "memory.write", "finish", "fail",
+                "fs.read", "fs.hash_read", "fs.list", "fs.write", "fs.hash_edit",
+                "fs.replace", "web.search", "web.fetch", "vision.analyze",
+                "shell.restricted", "patch.review", "patch.apply", "memory.read",
+                "memory.write", "finish", "fail",
             ];
             let pred_prompt =
                 self_prediction::build_prediction_prompt(&task.description, &tool_names);
@@ -2425,6 +2426,11 @@ fn augment_with_repair_hint(
             "FIX: the old text did not match exactly. Read the file first, copy an exact unique snippet including whitespace, then retry."
                 .to_string(),
         )
+    } else if tool == "fs.hash_edit" && combined.contains("stale line hash") {
+        Some(
+            "FIX: the file changed or the line/hash is wrong. Re-read it with fs.hash_read, then retry with the current L<number>|hash| line."
+                .to_string(),
+        )
     } else if combined.contains("no such file")
         || combined.contains("cannot find")
         || (combined.contains("not found") && !combined.contains("granted"))
@@ -2544,7 +2550,7 @@ Complete tasks precisely and efficiently using the available tools.\n\n\
 3. Check memory first (memory.read) when the task involves prior work, domain knowledge, or past failures.\n\
 4. One tool call per turn. Never attempt to batch multiple actions.\n\n\
 ## Tool guidance\n\
-- fs.read / fs.list  — always your first move when working with files or directories. Use the <workspace> block above for real paths; do NOT guess directory names.\n\
+- fs.read / fs.hash_read / fs.list — first inspect files/directories. Use fs.hash_read before line edits so you can edit by L<number>|hash| without copying large text.\n\
 - memory.read        — use for past tasks, learned procedures, or any recall requirement\n\
 - shell.restricted   — prefer standard tools (cargo, git, grep, find); always read stderr on failure\n\
 - patch.review       — inspect unified diffs before applying multi-file changes\n\
@@ -2585,8 +2591,10 @@ Action Input: {\"reason\": \"<what was tried and why it did not work>\"}";
 
 const TOOLS_DESCRIPTION: &str = "Available tools:
 - fs.read          {\"path\": \"<path>\"} — read file contents
+- fs.hash_read     {\"path\": \"<path>\"} — read file as L<number>|<hash>| content for anchored edits
 - fs.list          {\"path\": \"<path>\"} — list directory
 - fs.write         {\"path\": \"<path>\", \"content\": \"<text>\"} — write file
+- fs.hash_edit     {\"path\": \"<path>\", \"line\": 12, \"hash\": \"abc\", \"new_text\": \"<full replacement line>\", \"mode\": \"check|apply\"} — replace one line only if the current line hash matches
 - fs.replace       {\"path\": \"<path>\", \"old\": \"<exact text>\", \"new\": \"<replacement>\", \"mode\": \"check|apply\"} — replace exactly one matching text span
 - fs.delete        {\"path\": \"<path>\"} — delete file (risk: high, may require approval)
 - web.search       {\"query\": \"<q>\", \"num_results\": 5} — search the web
