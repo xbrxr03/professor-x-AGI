@@ -23,7 +23,7 @@ into FINISHED tasks — edit interface + anti-thrash + context governance first.
 ---
 
 ## Phase 0 — Diagnose the wall (do this FIRST, gates everything)
-- [ ] **0.1 Failure taxonomy.** Parse `artifacts/trajectories/2026-06-08/trajectories.jsonl`
+- [x] **0.1 Failure taxonomy.** Parse `artifacts/trajectories/2026-06-08/trajectories.jsonl`
   + `/tmp/ab_on.log` `/tmp/ab_off.log`. Classify every max-steps / failed task into:
   (a) bad edit-match, (b) wrong/no plan, (c) tool error, (d) judge too strict, (e) ran out
   of context. Write counts to `docs/research/failure-taxonomy.md`.
@@ -31,10 +31,28 @@ into FINISHED tasks — edit interface + anti-thrash + context governance first.
   **Blocked by:** nothing.
   **Note:** if (a) bad edit-match is NOT top-2, re-order Phase 1 vs 3 accordingly.
 
+## Phase 0.5 — Fix the measured `p_correct=0` cause
+*Inserted after 0.1 because `docs/research/failure-taxonomy.md` found bad edit-match
+at 0% and answerless finish / max-step thrash as the real top blockers.*
+- [~] **0.5.1 Answer-gated finish.** `finish` must include a non-empty final answer
+  payload; empty `finish {}` is rejected with a structured retry observation.
+  **Done-when:** future trajectories preserve answer-bearing final actions and unit
+  tests reject empty finish payloads.
+  **Blocked by:** 0.1.
+- [ ] **0.5.2 Repeated-failure / synthesis-forfeit guard.** Detect repeated max-step
+  patterns and force either synthesis from gathered observations or `fail` before
+  burning all attempts.
+  **Done-when:** max-step warnings drop on the same 12-task null run.
+  **Blocked by:** 0.5.1.
+- [ ] **0.5.3 RE-MEASURE.** Re-run the 12-task HIRO null baseline and record
+  `p_tool`, `p_plan`, `p_correct`, `pass@3`, and max-step count.
+  **Blocked by:** 0.5.2.
+
 ---
 
 ## Phase 1 — The edit lever (highest expected `p_correct` gain)
-*Blocked by: 0.1*
+*Blocked by: 0.5.3. The taxonomy found edit-match at 0% in the current sample, so
+this remains high-value but no longer precedes answer/loop reliability.*
 - [ ] **1.1 Hash-anchored edit tool (PRIMARY).** New `src/toolbridge/hashedit.rs`. File
   reads emit `Lnn|hash| content` (2–3 char content hash/line); edit tool takes
   `(file, line-hash, new_text)`, verifies hash before writing, rejects with a re-read

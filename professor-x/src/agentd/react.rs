@@ -1155,16 +1155,73 @@ impl ReactLoop {
                             "params": parsed.params,
                         }),
                     );
-                    // Special finish actions
+                    // Special finish actions. A bare `finish {}` is not enough:
+                    // HIRO showed the agent can use tools correctly and still
+                    // get p_correct=0 by terminating without reporting the
+                    // requested answer. Treat empty finish as a retryable
+                    // interface error and make the expected payload explicit.
                     if parsed.tool_name == "finish" || parsed.tool_name == "done" {
+                        if let Some(answer) = finish_answer_from_params(&parsed.params) {
+                            let step = ExecutionStep {
+                                index: (step_idx + 1) as u32,
+                                thought: parsed.thought,
+                                action: Action {
+                                    tool_name: parsed.tool_name,
+                                    params: parsed.params,
+                                    risk_score: 0,
+                                },
+                                observation: Observation {
+                                    success: true,
+                                    output: answer,
+                                    error: None,
+                                    tokens_used: 0,
+                                    execution_ms: 0,
+                                    artifacts: Vec::new(),
+                                },
+                                timestamp: Utc::now(),
+                            };
+                            task.steps.push(step);
+                            let _ = TaskRunStore::new(Arc::clone(&self.memory.db))
+                                .step_recorded(task);
+                            self.emit_event(
+                                Some(session_id),
+                                Some(task.id),
+                                "task.finish_requested",
+                                "model requested finish with answer",
+                                json!({"step": step_idx + 1}),
+                            );
+                            return Ok(true);
+                        }
+
                         self.emit_event(
                             Some(session_id),
                             Some(task.id),
-                            "task.finish_requested",
-                            "model requested finish",
+                            "task.finish_rejected",
+                            "model requested empty finish",
                             json!({"step": step_idx + 1}),
                         );
-                        return Ok(true);
+                        let guidance = Observation {
+                            success: false,
+                            output: "FINISH REJECTED — include the actual answer in the action input, e.g. `Action Input: {\"answer\":\"<concise result with the requested facts>\"}`. Use the observations you already gathered; do not finish with `{}`.".to_string(),
+                            error: Some("empty finish has no answer".to_string()),
+                            tokens_used: 0,
+                            execution_ms: 0,
+                            artifacts: Vec::new(),
+                        };
+                        task.steps.push(ExecutionStep {
+                            index: (step_idx + 1) as u32,
+                            thought: parsed.thought,
+                            action: Action {
+                                tool_name: parsed.tool_name,
+                                params: parsed.params,
+                                risk_score: 0,
+                            },
+                            observation: guidance,
+                            timestamp: Utc::now(),
+                        });
+                        let _ = TaskRunStore::new(Arc::clone(&self.memory.db))
+                            .step_recorded(task);
+                        continue;
                     }
                     if parsed.tool_name == "fail" {
                         self.emit_event(
@@ -2028,10 +2085,23 @@ impl ReactLoop {
             };
             messages.push(json!({"role": "tool", "content": obs}));
         }
-        messages.push(json!({
-            "role": "assistant",
-            "content": "Thought: The task is complete.\nAction: finish\nAction Input: {}"
-        }));
+        let has_finish_step = task.steps.iter().any(|s| s.action.tool_name == "finish");
+        if !has_finish_step {
+            let answer = task
+                .steps
+                .iter()
+                .rev()
+                .find(|s| s.observation.success && !s.observation.output.trim().is_empty())
+                .map(|s| s.observation.output.chars().take(800).collect::<String>())
+                .unwrap_or_else(|| "Task completed; see prior observations.".to_string());
+            messages.push(json!({
+                "role": "assistant",
+                "content": format!(
+                    "Thought: The task is complete — final answer recorded.\nAction: finish\nAction Input: {}",
+                    serde_json::to_string(&json!({"answer": answer})).unwrap_or_default()
+                )
+            }));
+        }
 
         let record = json!({
             "task": task.description,
@@ -2175,6 +2245,19 @@ fn parse_react_step(text: &str) -> Option<ParsedStep> {
         tool_name,
         params,
     })
+}
+
+fn finish_answer_from_params(params: &Value) -> Option<String> {
+    const KEYS: [&str; 6] = ["answer", "result", "summary", "final", "message", "content"];
+    for key in KEYS {
+        if let Some(answer) = params.get(key).and_then(|v| v.as_str()) {
+            let answer = answer.trim();
+            if !answer.is_empty() {
+                return Some(answer.chars().take(4000).collect());
+            }
+        }
+    }
+    None
 }
 
 fn extract_field(text: &str, field: &str) -> Option<String> {
@@ -2392,7 +2475,7 @@ Action Input: <valid JSON object>\n\n\
 Task complete:\n\
 Thought: Task complete — <one-sentence summary of what was accomplished>\n\
 Action: finish\n\
-Action Input: {}\n\n\
+Action Input: {\"answer\": \"<the concise final answer/result requested by the user>\"}\n\n\
 All options exhausted:\n\
 Action: fail\n\
 Action Input: {\"reason\": \"<what was tried and why it did not work>\"}";
@@ -2419,7 +2502,7 @@ const TOOLS_DESCRIPTION: &str = "Available tools:
 - memory.write     {\"content\": \"<text>\", \"layer\": \"semantic\", \"source\": \"<src>\"} — store knowledge
 - git.commit       {\"message\": \"<msg>\"} — commit current changes
 - ollama.complete  {\"prompt\": \"<p>\"} — run a sub-query through the LLM
-- finish           {} — signal task complete
+- finish           {\"answer\": \"<concise final answer/result>\"} — signal task complete; empty {} is rejected
 - fail             {\"reason\": \"<why>\"} — signal task failed (all options exhausted)";
 
 const REACT_SUFFIX: &str = "Now complete the task. Follow the ReAct format.\n\nThought:";
@@ -2478,9 +2561,10 @@ pub(crate) fn effective_memory_ceiling(lcap_ceiling: u32, override_budget: Optio
 mod tests {
     use super::{
         augment_with_repair_hint, auto_repair_enabled_value, effective_memory_ceiling,
-        predict_success_from_ice, Observation,
+        finish_answer_from_params, predict_success_from_ice, Observation,
     };
     use crate::policyd::PermissionScope;
+    use serde_json::json;
 
     #[test]
     fn override_clamps_below_lcap() {
@@ -2507,6 +2591,30 @@ mod tests {
         // Useful sanity case: --memory-budget 0 forces zero injection,
         // matching H1's left endpoint of the sweep.
         assert_eq!(effective_memory_ceiling(8192, Some(0)), 0);
+    }
+
+    #[test]
+    fn finish_answer_accepts_nonempty_answer_field() {
+        assert_eq!(
+            finish_answer_from_params(&json!({"answer": "VERSION_ID=24.04; kernel=6.17.0"})),
+            Some("VERSION_ID=24.04; kernel=6.17.0".to_string())
+        );
+    }
+
+    #[test]
+    fn finish_answer_rejects_empty_payload() {
+        assert_eq!(finish_answer_from_params(&json!({})), None);
+        assert_eq!(finish_answer_from_params(&json!({"answer": "   "})), None);
+    }
+
+    #[test]
+    fn finish_answer_accepts_legacy_summary_field() {
+        assert_eq!(
+            finish_answer_from_params(
+                &json!({"summary": "Task passed after running cargo check."})
+            ),
+            Some("Task passed after running cargo check.".to_string())
+        );
     }
 
     #[test]
