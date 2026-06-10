@@ -1,0 +1,280 @@
+{
+  "id": "263837af-88d0-40ff-9cdc-a35682d84785",
+  "task_id": "69c32462-5fa6-4731-a49e-b1aa5263a3fa",
+  "session_ids": [
+    "694700ce-b4fd-4a65-ba72-9159d9519350"
+  ],
+  "task_description": "deterministic coding smoke: fix a failing Rust addition test and verify it passes",
+  "task_type": "UserRequest",
+  "status": "succeeded",
+  "started_at": "2026-06-10T07:53:20.420085386Z",
+  "completed_at": "2026-06-10T07:53:20.818068771Z",
+  "attempt_count": 1,
+  "max_attempts": 1,
+  "step_count": 3,
+  "summary": "deterministic coding smoke fixed the test and verified it",
+  "review": {
+    "tool_artifacts": [
+      "artifacts/coding-smoke/2026-06-10/69c32462/evidence/artifacts/commands/2026-06-10/733bf405-a912-4cd1-92f6-84db6f5e08e3.json",
+      "artifacts/coding-smoke/2026-06-10/69c32462/evidence/artifacts/replacements/2026-06-10/2a90f370-30d2-44f9-96cc-94d3a742212a.diff"
+    ],
+    "changed_files": [],
+    "git_status": [
+      "?? professor-x/artifacts/evolution/2026-06-10/"
+    ],
+    "git_diff": "",
+    "git_diff_truncated": false
+  },
+  "events": [
+    {
+      "id": 130670,
+      "timestamp": "2026-06-10T07:53:20.420547650Z",
+      "session_id": null,
+      "event_type": "task.queued",
+      "summary": "queued task: deterministic coding smoke: fix a failing Rust addition test and verify it passes",
+      "payload": {
+        "max_attempts": 1,
+        "priority": 100,
+        "task_type": "UserRequest",
+        "workspace": "/tmp/px-coding-smoke-6229ff04-7014-47e2-9778-aec3a4502d1d"
+      }
+    },
+    {
+      "id": 130671,
+      "timestamp": "2026-06-10T07:53:20.420870577Z",
+      "session_id": null,
+      "event_type": "task.started",
+      "summary": "started task: deterministic coding smoke: fix a failing Rust addition test and verify it passes",
+      "payload": {
+        "max_attempts": 1,
+        "priority": 100,
+        "task_type": "UserRequest",
+        "workspace": "/tmp/px-coding-smoke-6229ff04-7014-47e2-9778-aec3a4502d1d"
+      }
+    },
+    {
+      "id": 130672,
+      "timestamp": "2026-06-10T07:53:20.421104648Z",
+      "session_id": "694700ce-b4fd-4a65-ba72-9159d9519350",
+      "event_type": "task.attempt.started",
+      "summary": "attempt 1/1 started",
+      "payload": {
+        "attempt": 1
+      }
+    },
+    {
+      "id": 130673,
+      "timestamp": "2026-06-10T07:53:20.421342306Z",
+      "session_id": null,
+      "event_type": "coding.smoke.started",
+      "summary": "starting deterministic coding-agent smoke",
+      "payload": {
+        "exercise": "add_i32",
+        "workspace": "/tmp/px-coding-smoke-6229ff04-7014-47e2-9778-aec3a4502d1d"
+      }
+    },
+    {
+      "id": 130674,
+      "timestamp": "2026-06-10T07:53:20.439820081Z",
+      "session_id": "694700ce-b4fd-4a65-ba72-9159d9519350",
+      "event_type": "policy.allowed",
+      "summary": "policy Allow for 'shell.restricted': policy pass",
+      "payload": {
+        "params_preview": "command=cargo test",
+        "reason": "policy pass",
+        "risk_score": 60,
+        "step": 1,
+        "tool": "shell.restricted"
+      }
+    },
+    {
+      "id": 130675,
+      "timestamp": "2026-06-10T07:53:20.440140228Z",
+      "session_id": "694700ce-b4fd-4a65-ba72-9159d9519350",
+      "event_type": "tool.started",
+      "summary": "running tool 'shell.restricted' :: command=cargo test",
+      "payload": {
+        "params_preview": "command=cargo test",
+        "step": 1,
+        "tool": "shell.restricted"
+      }
+    },
+    {
+      "id": 130676,
+      "timestamp": "2026-06-10T07:53:20.622705129Z",
+      "session_id": "694700ce-b4fd-4a65-ba72-9159d9519350",
+      "event_type": "tool.failed",
+      "summary": "tool 'shell.restricted' failed in 157ms",
+      "payload": {
+        "artifacts": [],
+        "error": "exit 101:    Compiling px-coding-smoke v0.1.0 (/tmp/px-coding-smoke-6229ff04-7014-47e2-9778-aec3a4502d1d)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s\n     Running unittests src/lib.rs (target/debug/deps/px_coding_smoke-dc3dddb89fd8a772)\nerror: test failed, to rerun pass `--lib`\n; artifact=/tmp/px-coding-smoke-6229ff04-7014-47e2-9778-aec3a4502d1d/artifacts/commands/2026-06-10/ec1eda40-4043-48d5-9d38-7c86ad13b164.json",
+        "execution_ms": 157,
+        "output_preview": "",
+        "step": 1,
+        "success": false,
+        "tool": "shell.restricted"
+      }
+    },
+    {
+      "id": 130677,
+      "timestamp": "2026-06-10T07:53:20.640753092Z",
+      "session_id": "694700ce-b4fd-4a65-ba72-9159d9519350",
+      "event_type": "policy.allowed",
+      "summary": "policy Allow for 'fs.replace': policy pass",
+      "payload": {
+        "params_preview": "path=src/lib.rs mode=apply",
+        "reason": "policy pass",
+        "risk_score": 42,
+        "step": 2,
+        "tool": "fs.replace"
+      }
+    },
+    {
+      "id": 130678,
+      "timestamp": "2026-06-10T07:53:20.641138774Z",
+      "session_id": "694700ce-b4fd-4a65-ba72-9159d9519350",
+      "event_type": "tool.started",
+      "summary": "running tool 'fs.replace' :: path=src/lib.rs mode=apply",
+      "payload": {
+        "params_preview": "path=src/lib.rs mode=apply",
+        "step": 2,
+        "tool": "fs.replace"
+      }
+    },
+    {
+      "id": 130679,
+      "timestamp": "2026-06-10T07:53:20.658477199Z",
+      "session_id": "694700ce-b4fd-4a65-ba72-9159d9519350",
+      "event_type": "tool.succeeded",
+      "summary": "tool 'fs.replace' succeeded in 0ms",
+      "payload": {
+        "artifacts": [
+          "/tmp/px-coding-smoke-6229ff04-7014-47e2-9778-aec3a4502d1d/artifacts/replacements/2026-06-10/2a90f370-30d2-44f9-96cc-94d3a742212a.diff"
+        ],
+        "error": null,
+        "execution_ms": 0,
+        "output_preview": "replace apply src/lib.rs — Δ +1 -1 lines\n  +     left + right",
+        "step": 2,
+        "success": true,
+        "tool": "fs.replace"
+      }
+    },
+    {
+      "id": 130680,
+      "timestamp": "2026-06-10T07:53:20.675150123Z",
+      "session_id": "694700ce-b4fd-4a65-ba72-9159d9519350",
+      "event_type": "policy.allowed",
+      "summary": "policy Allow for 'shell.restricted': policy pass",
+      "payload": {
+        "params_preview": "command=cargo test",
+        "reason": "policy pass",
+        "risk_score": 60,
+        "step": 3,
+        "tool": "shell.restricted"
+      }
+    },
+    {
+      "id": 130681,
+      "timestamp": "2026-06-10T07:53:20.675493701Z",
+      "session_id": "694700ce-b4fd-4a65-ba72-9159d9519350",
+      "event_type": "tool.started",
+      "summary": "running tool 'shell.restricted' :: command=cargo test",
+      "payload": {
+        "params_preview": "command=cargo test",
+        "step": 3,
+        "tool": "shell.restricted"
+      }
+    },
+    {
+      "id": 130682,
+      "timestamp": "2026-06-10T07:53:20.816382538Z",
+      "session_id": "694700ce-b4fd-4a65-ba72-9159d9519350",
+      "event_type": "tool.succeeded",
+      "summary": "tool 'shell.restricted' succeeded in 123ms",
+      "payload": {
+        "artifacts": [
+          "/tmp/px-coding-smoke-6229ff04-7014-47e2-9778-aec3a4502d1d/artifacts/commands/2026-06-10/733bf405-a912-4cd1-92f6-84db6f5e08e3.json"
+        ],
+        "error": null,
+        "execution_ms": 123,
+        "output_preview": "\nrunning 1 test\ntest tests::adds_numbers ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nstderr:    Compiling px-coding-smoke v0.1....",
+        "step": 3,
+        "success": true,
+        "tool": "shell.restricted"
+      }
+    },
+    {
+      "id": 130683,
+      "timestamp": "2026-06-10T07:53:20.817487484Z",
+      "session_id": null,
+      "event_type": "coding.smoke.artifacts.persisted",
+      "summary": "persisted 2 coding smoke artifact(s) into repo evidence",
+      "payload": {
+        "artifacts": [
+          "artifacts/coding-smoke/2026-06-10/69c32462/evidence/artifacts/replacements/2026-06-10/2a90f370-30d2-44f9-96cc-94d3a742212a.diff",
+          "artifacts/coding-smoke/2026-06-10/69c32462/evidence/artifacts/commands/2026-06-10/733bf405-a912-4cd1-92f6-84db6f5e08e3.json"
+        ],
+        "original_artifacts": [
+          "/tmp/px-coding-smoke-6229ff04-7014-47e2-9778-aec3a4502d1d/artifacts/replacements/2026-06-10/2a90f370-30d2-44f9-96cc-94d3a742212a.diff",
+          "/tmp/px-coding-smoke-6229ff04-7014-47e2-9778-aec3a4502d1d/artifacts/commands/2026-06-10/733bf405-a912-4cd1-92f6-84db6f5e08e3.json"
+        ],
+        "workspace": "/tmp/px-coding-smoke-6229ff04-7014-47e2-9778-aec3a4502d1d"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "index": 1,
+      "thought": "run the failing test before editing",
+      "tool_name": "shell.restricted",
+      "params": {
+        "command": "cargo test"
+      },
+      "risk_score": 60,
+      "observation_success": false,
+      "observation_output": "",
+      "observation_error": "exit 101:    Compiling px-coding-smoke v0.1.0 (/tmp/px-coding-smoke-6229ff04-7014-47e2-9778-aec3a4502d1d)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s\n     Running unittests src/lib.rs (target/debug/deps/px_coding_smoke-dc3dddb89fd8a772)\nerror: test failed, to rerun pass `--lib`\n; artifact=/tmp/px-coding-smoke-6229ff04-7014-47e2-9778-aec3a4502d1d/artifacts/commands/2026-06-10/ec1eda40-4043-48d5-9d38-7c86ad13b164.json",
+      "observation_artifacts": [],
+      "execution_ms": 157,
+      "timestamp": "2026-06-10T07:53:20.622566415Z"
+    },
+    {
+      "index": 2,
+      "thought": "apply the minimal exact replacement",
+      "tool_name": "fs.replace",
+      "params": {
+        "mode": "apply",
+        "new": "    left + right",
+        "old": "    left - right",
+        "path": "src/lib.rs"
+      },
+      "risk_score": 42,
+      "observation_success": true,
+      "observation_output": "replace apply src/lib.rs — Δ +1 -1 lines\n  +     left + right",
+      "observation_error": null,
+      "observation_artifacts": [
+        "artifacts/coding-smoke/2026-06-10/69c32462/evidence/artifacts/replacements/2026-06-10/2a90f370-30d2-44f9-96cc-94d3a742212a.diff"
+      ],
+      "execution_ms": 0,
+      "timestamp": "2026-06-10T07:53:20.658328076Z"
+    },
+    {
+      "index": 3,
+      "thought": "rerun tests after the fix",
+      "tool_name": "shell.restricted",
+      "params": {
+        "command": "cargo test"
+      },
+      "risk_score": 60,
+      "observation_success": true,
+      "observation_output": "\nrunning 1 test\ntest tests::adds_numbers ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\nstderr:    Compiling px-coding-smoke v0.1.0 (/tmp/px-coding-smoke-6229ff04-7014-47e2-9778-aec3a4502d1d)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s\n     Running unittests src/lib.rs (target/debug/deps/px_coding_smoke-dc3dddb89fd8a772)\n   Doc-tests px_coding_smoke\n\n[full output: /tmp/px-coding-smoke-6229ff04-7014-47e2-9778-aec3a4502d1d/artifacts/commands/2026-06-10/733bf405-a912-4cd1-92f6-84db6f5e08e3.json]",
+      "observation_error": null,
+      "observation_artifacts": [
+        "artifacts/coding-smoke/2026-06-10/69c32462/evidence/artifacts/commands/2026-06-10/733bf405-a912-4cd1-92f6-84db6f5e08e3.json"
+      ],
+      "execution_ms": 123,
+      "timestamp": "2026-06-10T07:53:20.816129917Z"
+    }
+  ],
+  "recorded_at": "2026-06-10T07:53:20.818342082Z"
+}
