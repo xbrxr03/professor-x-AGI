@@ -34,11 +34,12 @@ into FINISHED tasks — edit interface + anti-thrash + context governance first.
 ## Phase 0.5 — Fix the measured `p_correct=0` cause
 *Inserted after 0.1 because `docs/research/failure-taxonomy.md` found bad edit-match
 at 0% and answerless finish / max-step thrash as the real top blockers.*
-- [~] **0.5.1 Answer-gated finish.** `finish` must include a non-empty final answer
+- [x] **0.5.1 Answer-gated finish.** `finish` must include a non-empty final answer
   payload; empty `finish {}` is rejected with a structured retry observation.
   **Done-when:** future trajectories preserve answer-bearing final actions and unit
   tests reject empty finish payloads.
   **Blocked by:** 0.1.
+  **Commit:** `e1bdd99`.
 - [ ] **0.5.2 Repeated-failure / synthesis-forfeit guard.** Detect repeated max-step
   patterns and force either synthesis from gathered observations or `fail` before
   burning all attempts.
@@ -144,3 +145,6 @@ thrash/over-stepping is still a top failure.*
 ## Status log (append one line per completed task)
 - 2026-06-10: `harness-gaps` research plan and trajectory corpus merged into `main`;
   Phase 0.1 remains the next ordered task.
+- 2026-06-10: Phase 0.1 taxonomy completed in `docs/research/failure-taxonomy.md`;
+  bad edit-match was 0%, answerless finish/max-step thrash are the top blockers.
+- 2026-06-10: Phase 0.5.1 answer-gated finish implemented in `e1bdd99`.
