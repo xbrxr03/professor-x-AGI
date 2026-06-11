@@ -1238,9 +1238,11 @@ impl ReactLoop {
             // the retry to break determinism so it tries a genuinely different action.
             let mut step_opts = react_opts.clone();
             if consecutive_duplicates > 0 {
-                let t = (0.6 + 0.3 * consecutive_duplicates as f32).min(1.1);
+                // Aggressive: jump to high temperature immediately so the greedy loop breaks
+                // on the very next step rather than grinding through several duplicates.
+                let t = (0.9 + 0.2 * consecutive_duplicates as f32).min(1.3);
                 step_opts.temperature = Some(t);
-                step_opts.top_p = Some(0.95);
+                step_opts.top_p = Some(0.98);
             }
 
             // Ask the model for the next Thought + Action
@@ -1475,12 +1477,29 @@ impl ReactLoop {
                         } else {
                             format!("(it failed: {})", prior.observation.error.as_deref().unwrap_or("unknown"))
                         };
-                        let nudge = format!(
-                            "DUPLICATE ACTION — you already ran `{}` with these exact inputs. \
-                             Its result was:\n{}\n\nDo NOT run it again. Use this result to make \
-                             progress, or take a DIFFERENT action. If the task is complete, call finish.",
-                            parsed.tool_name, prior_out
-                        );
+                        // Escalate the nudge once the model is visibly stuck (2nd+ consecutive
+                        // duplicate): name the concrete next action instead of a soft "do
+                        // something different" that weak models ignore.
+                        let nudge = if consecutive_duplicates >= 1 {
+                            format!(
+                                "STOP — you have now repeated `{}` {} times and it is BLOCKED. You \
+                                 ALREADY have its result:\n{}\n\nYou are stuck in a loop. Your next \
+                                 action MUST be different: if you have not yet read the target file, \
+                                 use `fs.read` or `fs.window_open` on it; once you have read it, make \
+                                 the fix with `fs.hash_edit` or `fs.write`. Do NOT call `{}` again.",
+                                parsed.tool_name,
+                                consecutive_duplicates + 1,
+                                prior_out,
+                                parsed.tool_name
+                            )
+                        } else {
+                            format!(
+                                "DUPLICATE ACTION — you already ran `{}` with these exact inputs. \
+                                 Its result was:\n{}\n\nDo NOT run it again. Use this result to make \
+                                 progress, or take a DIFFERENT action. If the task is complete, call finish.",
+                                parsed.tool_name, prior_out
+                            )
+                        };
                         self.emit_event(
                             Some(session_id),
                             Some(task.id),

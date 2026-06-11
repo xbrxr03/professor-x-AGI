@@ -1679,24 +1679,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fs_hash_edit_rejects_stale_hash_without_mutating() {
+    async fn fs_hash_edit_falls_back_to_line_on_invented_hash() {
+        // M2: weak local models invent the line hash, so a fabricated hash provides no real
+        // safety. A mismatched hash now falls back to a line-based apply; editverify (the
+        // lint/parse gate) is the real correctness guard — see
+        // `fs_hash_edit_rejects_syntax_error_and_restores_original_file`.
         let root = temp_workspace();
         std::fs::write(root.join("src/lib.rs"), "pub fn x() {}\n").unwrap();
         let registry = Arc::new(std::sync::RwLock::new(ToolRegistry::new()));
         let executor = ToolExecutor::new(registry).with_workspace_root(root.clone());
 
-        let stale = executor
-            .execute(&hash_edit_action("apply", 1, "bad", "pub fn x() { 1 }"))
+        let res = executor
+            .execute(&hash_edit_action("apply", 1, "bad", "pub fn y() {}"))
             .await;
-        assert!(!stale.success);
-        assert!(stale
+        assert!(
+            res.success,
+            "invented hash should fall back to line apply: {:?}",
+            res.error
+        );
+        assert!(!res
             .error
             .as_deref()
             .unwrap_or_default()
             .contains("stale line hash"));
         assert_eq!(
             std::fs::read_to_string(root.join("src/lib.rs")).unwrap(),
-            "pub fn x() {}\n"
+            "pub fn y() {}\n"
         );
 
         let _ = std::fs::remove_dir_all(root);
