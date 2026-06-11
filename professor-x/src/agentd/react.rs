@@ -96,6 +96,9 @@ pub struct ReactLoop {
     /// clamps the ceiling to N tokens per task. Lets `--memory-budget N`
     /// sweep T* without touching LCAP arm state.
     memory_budget_override: Option<u32>,
+    /// M1 repo-fix benchmark: override the agent's workspace root so it edits inside a
+    /// per-task /tmp workdir instead of the repo. `None` keeps the default workspace.
+    workspace_override: Option<std::path::PathBuf>,
     /// Stable identifier for this loop's affect session (one per ReactLoop instance).
     session_id: String,
     /// Running affect state (valence + arousal) updated after each task attempt.
@@ -156,6 +159,7 @@ impl ReactLoop {
             events: None,
             transcripts: None,
             memory_budget_override: None,
+            workspace_override: None,
             affect: std::sync::Mutex::new(AffectState::neutral(session_id.clone(), 0)),
             fed_samples: std::sync::Mutex::new(Vec::new()),
             canvas: std::sync::Mutex::new(MermaidCanvas::default()),
@@ -170,6 +174,13 @@ impl ReactLoop {
                 .map(|v| v.to_lowercase() != "off")
                 .unwrap_or(true),
         }
+    }
+
+    /// M1: point the agent at a specific workspace root (e.g. a per-task /tmp workdir
+    /// for the repo-fix benchmark) instead of the default repo workspace.
+    pub fn with_workspace_root(mut self, root: std::path::PathBuf) -> Self {
+        self.workspace_override = Some(root);
+        self
     }
 
     /// Internal: build a sub-agent loop sharing this loop's resources, one level
@@ -1101,7 +1112,12 @@ impl ReactLoop {
         const MAX_STEPS: usize = 20;
         const SYNTHESIS_CHECKPOINT_STEP: usize = 14;
         const FORFEIT_AFTER_SYNTHESIS_STEP: usize = 18;
-        let scope = PermissionScope::default_autonomous();
+        let scope = match &self.workspace_override {
+            Some(root) => {
+                PermissionScope::default_autonomous().with_workspace_root(root.clone())
+            }
+            None => PermissionScope::default_autonomous(),
+        };
         let executor = ToolExecutor::new(Arc::clone(&self.registry))
             .with_workspace_root(scope.workspace_root.clone())
             .with_memory(Arc::clone(&self.memory))

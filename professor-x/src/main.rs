@@ -134,6 +134,7 @@ struct CliArgs {
     patch_apply_live_path: Option<PathBuf>,
     /// Validate HIRO task inventory and evaluator substrate and exit.
     hiro_smoke: bool,
+    repo_fix_bench: bool,
     /// Run deterministic local coding-agent edit/verify smoke and exit.
     coding_smoke: bool,
     /// Run a first-class bounded local coding-agent session and exit.
@@ -321,6 +322,7 @@ where
         patch_apply_path: None,
         patch_apply_live_path: None,
         hiro_smoke: false,
+        repo_fix_bench: false,
         coding_smoke: false,
         coding_session: false,
         coding_session_live: false,
@@ -597,6 +599,10 @@ where
             }
             "--hiro-smoke" => {
                 cli.hiro_smoke = true;
+                i += 1;
+            }
+            "--repo-fix-bench" => {
+                cli.repo_fix_bench = true;
                 i += 1;
             }
             "--coding-smoke" => {
@@ -1650,6 +1656,18 @@ async fn main() -> Result<()> {
             cancel,
             cli.hiro_limit,
             cli.memory_budget,
+        )
+        .await;
+    }
+
+    if cli.repo_fix_bench {
+        return run_repo_fix_bench(
+            Arc::clone(&ollama),
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            cancel,
         )
         .await;
     }
@@ -7811,6 +7829,133 @@ async fn run_single_task(
     );
     if let Some(ref fm) = outcome.failure_mode {
         info!("failure_mode: {fm}");
+    }
+    Ok(())
+}
+
+/// M1: offline repo-fix benchmark. Each task is a self-contained mini-repo with a planted
+/// bug + a test. Deterministic, ungameable: pass iff the repo's own test goes red→green
+/// after the agent's edit (no LLM-judge — see docs/research/eval-trust.md for why).
+async fn run_repo_fix_bench(
+    ollama: Arc<ollama::OllamaClient>,
+    registry: Arc<std::sync::RwLock<ToolRegistry>>,
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    cancel: CancellationToken,
+) -> Result<()> {
+    use std::process::Command;
+
+    #[derive(serde::Deserialize)]
+    struct RepoFixTask {
+        id: String,
+        #[allow(dead_code)]
+        category: String,
+        setup: String,
+        description: String,
+        verify_cmd: String,
+        expect_exit: i32,
+    }
+    #[derive(serde::Deserialize)]
+    struct RepoFixFile {
+        tasks: Vec<RepoFixTask>,
+    }
+
+    let manifest = std::path::Path::new("scripts/benchmarks/repo_fix/tasks.json");
+    let json = std::fs::read_to_string(manifest)
+        .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", manifest.display()))?;
+    let file: RepoFixFile = serde_json::from_str(&json)?;
+    info!("repo-fix bench: {} tasks", file.tasks.len());
+
+    let run_verify = |verify_cmd: &str, wd: &std::path::Path| -> i32 {
+        let mut parts = verify_cmd.split_whitespace();
+        let prog = parts.next().unwrap_or("true");
+        let args: Vec<&str> = parts.collect();
+        Command::new(prog)
+            .args(&args)
+            .current_dir(wd)
+            .output()
+            .map(|o| o.status.code().unwrap_or(-1))
+            .unwrap_or(-1)
+    };
+
+    let mut passed = 0usize;
+    let mut ran = 0usize;
+    for task in &file.tasks {
+        // 1. copy fixture into a fresh /tmp workdir (never mutate the source fixtures).
+        let workdir =
+            std::env::temp_dir().join(format!("px-repofix-{}-{}", task.id, std::process::id()));
+        let _ = std::fs::remove_dir_all(&workdir);
+        copy_dir_recursive(std::path::Path::new(&task.setup), &workdir)?;
+
+        // 2. confirm the task starts RED (guards against trivially-passing fixtures).
+        let pre = run_verify(&task.verify_cmd, &workdir);
+        if pre == task.expect_exit {
+            warn!(
+                "repo-fix {}: fixture already passes (exit={}), skipping",
+                task.id, pre
+            );
+            let _ = std::fs::remove_dir_all(&workdir);
+            continue;
+        }
+        ran += 1;
+
+        // 3. run the agent inside the workdir.
+        let desc = format!(
+            "{}\n\nYou are working inside the directory {}. The relevant files are there. \
+             Read them, edit to fix the bug, then finish.",
+            task.description,
+            workdir.display()
+        );
+        let mut node = TaskNode::new(desc, TaskType::UserRequest, 100);
+        let react = ReactLoop::new(
+            Arc::clone(&ollama),
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            cancel.clone(),
+        )
+        .with_events(Arc::clone(&events))
+        .with_workspace_root(workdir.clone());
+        let _ = react.run(&mut node).await;
+
+        // 4. re-verify: pass iff the repo's own test now meets expect_exit.
+        let post = run_verify(&task.verify_cmd, &workdir);
+        let ok = post == task.expect_exit;
+        if ok {
+            passed += 1;
+        }
+        println!(
+            "repo-fix {:8} pre={} post={} -> {}",
+            task.id,
+            pre,
+            post,
+            if ok { "PASS" } else { "fail" }
+        );
+        let _ = std::fs::remove_dir_all(&workdir);
+    }
+
+    let p1 = if ran > 0 {
+        passed as f64 / ran as f64
+    } else {
+        0.0
+    };
+    println!("\n=== REPO-FIX BENCH ===\npass@1 = {p1:.3}  ({passed}/{ran} tasks)");
+    info!("repo-fix bench complete: pass@1={p1:.3} ({passed}/{ran})");
+    Ok(())
+}
+
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let path = entry.path();
+        let target = dst.join(entry.file_name());
+        if path.is_dir() {
+            copy_dir_recursive(&path, &target)?;
+        } else {
+            std::fs::copy(&path, &target)?;
+        }
     }
     Ok(())
 }
