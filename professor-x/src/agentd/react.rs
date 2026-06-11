@@ -1140,6 +1140,9 @@ impl ReactLoop {
         // M2: count exact-duplicate-action blocks; thrashing on duplicates triggers an
         // early forced synthesis instead of burning steps until the forfeit guard fires.
         let mut duplicate_blocks: u32 = 0;
+        // Consecutive duplicates (reset on any real progress) drive the temperature
+        // escalation that breaks the greedy regenerate-the-same-stuck-action loop.
+        let mut consecutive_duplicates: u32 = 0;
 
         // LCAP: apply context budget
         let mut react_opts = ModelOptions::for_react();
@@ -1229,10 +1232,21 @@ impl ReactLoop {
             // Build the full prompt for this step
             let prompt = self.build_step_prompt(task, ice_examples, cognition_context);
 
+            // M2: a duplicate-blocked action means the model is stuck regenerating the same
+            // step at low temperature (greedy loop) — the real repo-fix failure mode (it
+            // re-runs fs.list forever and never reaches read→edit). Escalate temperature on
+            // the retry to break determinism so it tries a genuinely different action.
+            let mut step_opts = react_opts.clone();
+            if consecutive_duplicates > 0 {
+                let t = (0.6 + 0.3 * consecutive_duplicates as f32).min(1.1);
+                step_opts.temperature = Some(t);
+                step_opts.top_p = Some(0.95);
+            }
+
             // Ask the model for the next Thought + Action
             let resp = self
                 .ollama
-                .generate(&prompt, Some(SYSTEM_PROMPT), Some(react_opts.clone()))
+                .generate(&prompt, Some(SYSTEM_PROMPT), Some(step_opts))
                 .await?;
 
             let (_, answer) = resp.split_thinking();
@@ -1494,6 +1508,7 @@ impl ReactLoop {
                         };
                         task.steps.push(step);
                         duplicate_blocks += 1;
+                        consecutive_duplicates += 1;
                         continue;
                     }
 
@@ -1573,6 +1588,8 @@ impl ReactLoop {
                                 }),
                             );
                             let obs = executor.execute(&action).await;
+                            // A real (non-duplicate) tool ran — the greedy-loop streak is broken.
+                            consecutive_duplicates = 0;
                             let exec_reason = if obs.success {
                                 consecutive_failures = 0;
                                 "executed"
