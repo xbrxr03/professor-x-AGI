@@ -55,16 +55,43 @@ pub fn hash_edit_file(
 
     let resolved = resolve_workspace_path(workspace_root, path);
     let original = std::fs::read_to_string(&resolved)?;
-    let updated = hash_edit_content(&original, line, expected_hash, new_text)?;
+    // Weak local models frequently INVENT the line hash (e.g. "abc", "e3e") even when their
+    // edit is correct — a strict hash check then blocks correct edits while providing no real
+    // safety (a fabricated hash guarantees nothing). Try strict first; on a hash mismatch,
+    // fall back to a line-based apply. The caller runs editverify on the candidate, so a
+    // wrong-line edit that breaks the file is still rejected — that is the real guard.
+    let (updated, note) = match hash_edit_content(&original, line, expected_hash, new_text) {
+        Ok(u) => (u, ""),
+        Err(e) if e.to_string().contains("stale line hash") => (
+            apply_by_line(&original, line, new_text)?,
+            " (hash mismatch; applied by line, verified by lint)",
+        ),
+        Err(e) => return Err(e),
+    };
     if mode == "apply" {
         std::fs::write(&resolved, &updated)?;
     }
 
     Ok(HashEditOutcome {
-        summary: format!("hash_edit {mode} {path} line {line}"),
+        summary: format!("hash_edit {mode} {path} line {line}{note}"),
         before: original,
         after: updated,
     })
+}
+
+/// Apply `new_text` to a 1-based line without a hash check (forgiving fallback for weak
+/// models that invent hashes). Correctness is guarded downstream by editverify.
+fn apply_by_line(content: &str, line: usize, new_text: &str) -> Result<String> {
+    let mut lines = split_preserving_trailing_newline(content);
+    let idx = line - 1;
+    let Some(current) = lines.get_mut(idx) else {
+        bail!("line {line} is outside file; file has {} line(s)", lines.len());
+    };
+    *current = new_text.to_string();
+    Ok(join_preserving_final_newline(
+        &lines,
+        content.ends_with('\n'),
+    ))
 }
 
 pub fn hash_edit_content(
