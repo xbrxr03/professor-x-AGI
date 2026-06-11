@@ -75,3 +75,62 @@ could hold wrong answers. So `p_tool` is a *did-it-do-something* signal, not a
    diagnostic so the headline number is honest.
 4. **Gate (M0.2 done-when):** on ~15 hand-labeled trajectories, the new judge agrees
    with human ≥ 90%; all three category metrics are non-degenerate on a balanced run.
+
+---
+
+## M0.2b Calibration run (2026-06-11, run `4ed499a6`, qwen3:8b, 15 stratified tasks)
+
+Command: `--hiro-null 1 --hiro-limit 15 --model qwen3:8b-q4_K_M`.
+
+### The sampling fix is validated in production
+Tasks ran **interleaved across all three categories** (`tu→pl→sc→tu→…`), and the
+metrics are **non-degenerate** for the first time:
+
+| Metric | Old (0.5.3, broken) | New (4ed499a6) |
+|---|---|---|
+| `p_tool` | 0.333 (trace-inflated) | **0.000** (0/5) |
+| `p_plan` | 0.000 (never ran) | **0.400** (2/5) |
+| `p_correct` | 0.000 (never ran) | **0.200** (1/5) |
+| `pass@3` | 0.333 | **0.200** (3/15) |
+
+`p_tool` *fell* because the new judge rejects trace-only "passes" — the old 0.333 was
+inflated. This is the scoreboard getting **more honest**, not the agent getting worse.
+
+### Per-task verdicts (best of 3 attempts)
+| Task | Cat | Verdict | Judge path / reason |
+|---|---|---|---|
+| tu_001 | tool | fail | LLM-judge FAIL |
+| tu_002–005 | tool | fail | duplicate-action-blocked (thrash) |
+| pl_001,002 | plan | fail | duplicate-action-blocked |
+| pl_003 | plan | fail | LLM-judge FAIL (src/ not found) |
+| **pl_004** | plan | **PASS** | LLM-judge (generate 3 hypotheses) |
+| **pl_005** | plan | **PASS** | LLM-judge (hypotheses.md) |
+| sc_001,004,005 | self_corr | fail | duplicate-action-blocked |
+| sc_002 | self_corr | fail | deterministic: answer lacked `/tmp` path |
+| **sc_003** | self_corr | **PASS** | LLM-judge (web-search fallback) |
+
+### Hybrid judge: all three paths fired
+deterministic (sc_002), LLM-judge (pl_003/tu_001 FAIL; pl_004/pl_005/sc_003 PASS),
+and trace-fallback. Wired and live.
+
+### Hand-label vs the ≥90% gate — PARTIAL, gate NOT yet formally cleared
+- **~9/15 are structurally certain-correct**: the agent produced *no valid answer*
+  (duplicate-action-blocked / no-tool-trace / ReAct-failed). A human agrees these are
+  fails. Judge correct.
+- **6/15 (3 passes + tu_001/pl_003/sc_002) cannot be independently verified**: this run
+  persisted only an `output_hash`, not the final-answer text (no transcript, collection
+  fired only conceptually). So I can't confirm the LLM-judge passes aren't false positives
+  or that sc_002 isn't a false negative.
+- **Verdict: do NOT claim ≥90%.** Honest status: judge is non-degenerate and plausible,
+  but unaudited on the 6 decisive cases.
+
+### Blocker found → fix before re-run
+**The harness must persist the final-answer text for every task** (pass or fail), not
+just a hash, or judge audits are impossible. Small change (dump `final_answer(task)` into
+the attempt artifact). Then re-run and complete the hand-label.
+
+### Capability signal (honest, for M2)
+**9/15 failures were "duplicate action blocked"** — the agent repeats an identical action,
+a guard blocks it, and it dies. The dominant real failure mode is **action-loop thrash**,
+not bad edits. That is the concrete M2 / Phase-3 target.
+

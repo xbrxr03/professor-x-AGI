@@ -75,11 +75,18 @@ metrics before. No new features until the scoreboard is honest.*
   **Blocked by:** M0.2.
 
 ## M2 — Make the core loop actually finish (the capability grind)
-- [ ] **M2.1 Drive reliability** using the built edit stack + failure taxonomy + remaining
+- [◐] **M2.1 Drive reliability** using the built edit stack + failure taxonomy + remaining
   loop fixes (thrash/forfeit, tool/backend stability). Relentless re-measure.
   **Done-when:** toy HIRO-null `pass@3 ≥ 0.8` with a *meaningful* `p_correct`; real
   benchmark first non-zero then climbing run-over-run.
   **Blocked by:** M1.1.
+  **Progress:** the calibration taxonomy showed the dominant failure (9/15) is
+  **action-loop thrash** ("duplicate action blocked" → forfeit), NOT bad edits. The old
+  forced-synthesis just *nudged* a stuck model and forfeited. Implemented (pending
+  measurement): `synthesize_final_answer` — at the synthesis checkpoint OR after 3
+  duplicate-blocks, directly call the model to produce the final answer from gathered
+  observations and `finish`, instead of nudging. Builds + 267 tests pass; needs an
+  A/B HIRO run to confirm it lifts pass@3.
 - [ ] **M2.2 Stranger task end-to-end.** A "fix this bug in this small repo" task completes,
   verified by its own tests, fully offline. **Done-when:** green tests, no network.
   **Blocked by:** M2.1.

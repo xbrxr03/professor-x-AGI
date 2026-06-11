@@ -1050,6 +1050,46 @@ impl ReactLoop {
         }
     }
 
+    /// M2: force a final answer out of the observations already gathered, instead of
+    /// nudging a stuck model (which tends to keep thrashing until forfeit). Returns the
+    /// synthesized answer, or None if there's nothing to synthesize or the model judges
+    /// the evidence insufficient.
+    async fn synthesize_final_answer(
+        &self,
+        task: &TaskNode,
+        opts: &ModelOptions,
+    ) -> Option<String> {
+        let summary = successful_observation_summary(task, 8, 1400);
+        if summary.trim().is_empty() {
+            return None;
+        }
+        let system = "You are finishing a task. Using ONLY the observations already \
+            gathered below, write the final answer: concise, directly stating the facts \
+            the task asked for. Do not propose any more tool calls. If the observations \
+            are genuinely insufficient to answer, reply with exactly the single word \
+            INSUFFICIENT.";
+        let prompt = format!(
+            "TASK:\n{}\n\nOBSERVATIONS GATHERED:\n{}\n\nFINAL ANSWER:",
+            task.description, summary
+        );
+        match self
+            .ollama
+            .generate(&prompt, Some(system), Some(opts.clone()))
+            .await
+        {
+            Ok(resp) => {
+                let (_, ans) = resp.split_thinking();
+                let ans = ans.trim();
+                if ans.is_empty() || ans.to_uppercase().contains("INSUFFICIENT") {
+                    None
+                } else {
+                    Some(ans.chars().take(4000).collect())
+                }
+            }
+            Err(_) => None,
+        }
+    }
+
     /// Run one attempt. Returns Ok(true) on success, Ok(false) on failure.
     async fn run_attempt(
         &self,
@@ -1081,6 +1121,9 @@ impl ReactLoop {
         let mut escalated = false;
         let auto_repair_on = auto_repair_enabled_from_env();
         let mut synthesis_forced = false;
+        // M2: count exact-duplicate-action blocks; thrashing on duplicates triggers an
+        // early forced synthesis instead of burning steps until the forfeit guard fires.
+        let mut duplicate_blocks: u32 = 0;
 
         // LCAP: apply context budget
         let mut react_opts = ModelOptions::for_react();
@@ -1106,8 +1149,43 @@ impl ReactLoop {
                 return Ok(false);
             }
 
-            if should_force_synthesis(step_idx, synthesis_forced, SYNTHESIS_CHECKPOINT_STEP) {
+            if should_force_synthesis(step_idx, synthesis_forced, SYNTHESIS_CHECKPOINT_STEP)
+                || (!synthesis_forced && duplicate_blocks >= 3)
+            {
                 synthesis_forced = true;
+                // M2: directly synthesize the final answer from the gathered observations
+                // and finish, rather than nudging a stuck model into more thrash → forfeit.
+                if let Some(answer) = self.synthesize_final_answer(task, &react_opts).await {
+                    task.steps.push(ExecutionStep {
+                        index: (task.steps.len() + 1) as u32,
+                        thought: "loop guard: synthesizing final answer from gathered observations"
+                            .to_string(),
+                        action: Action {
+                            tool_name: "finish".to_string(),
+                            params: json!({ "answer": answer }),
+                            risk_score: 0,
+                        },
+                        observation: Observation {
+                            success: true,
+                            output: answer,
+                            error: None,
+                            tokens_used: 0,
+                            execution_ms: 0,
+                            artifacts: Vec::new(),
+                        },
+                        timestamp: Utc::now(),
+                    });
+                    let _ = TaskRunStore::new(Arc::clone(&self.memory.db)).step_recorded(task);
+                    self.emit_event(
+                        Some(session_id),
+                        Some(task.id),
+                        "react.synthesis_finish",
+                        "forced synthesis produced a final answer",
+                        json!({"step": step_idx + 1, "trigger": if duplicate_blocks >= 3 { "duplicates" } else { "checkpoint" }}),
+                    );
+                    return Ok(true);
+                }
+                // Fallback: nudge (old behavior) if nothing could be synthesized yet.
                 let guidance = synthesis_guidance(task);
                 self.emit_event(
                     Some(session_id),
@@ -1399,6 +1477,7 @@ impl ReactLoop {
                             timestamp: Utc::now(),
                         };
                         task.steps.push(step);
+                        duplicate_blocks += 1;
                         continue;
                     }
 
