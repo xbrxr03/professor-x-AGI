@@ -6,31 +6,36 @@
       "id": "tu_001",
       "category": "tool_use",
       "description": "Read /etc/os-release AND run 'uname -r' via shell.restricted. Extract the VERSION_ID from os-release and the kernel version from uname. Determine: are they from the same Ubuntu release? Explain any mismatch.",
-      "difficulty": "medium"
+      "difficulty": "medium",
+      "success_criteria": "States the VERSION_ID from /etc/os-release AND the kernel version from `uname -r`, and concludes whether they are from the same Ubuntu release (or explains the mismatch)."
     },
     {
       "id": "tu_002",
       "category": "tool_use",
       "description": "List all .rs files in src/ using shell.restricted: 'find src -name \"*.rs\" -not -path \"*/target/*\"'. For each subdirectory of src/, count how many .rs files it contains. Report the subdirectory with the most .rs files and its count.",
-      "difficulty": "medium"
+      "difficulty": "medium",
+      "success_criteria": "Reports which src/ subdirectory has the most .rs files and gives its count, based on an actual file listing."
     },
     {
       "id": "tu_003",
       "category": "tool_use",
       "description": "Read Cargo.toml and extract all dependency names. For each dependency, run 'grep -r \"<dep_name>\" src/ --include=\"*.rs\" -l' via shell.restricted to check if it appears in any source file. Report which dependencies are NOT found in any .rs file.",
-      "difficulty": "hard"
+      "difficulty": "hard",
+      "success_criteria": "Lists the Cargo.toml dependencies NOT found in any .rs source file (or states all are used), based on actual grep results."
     },
     {
       "id": "tu_004",
       "category": "tool_use",
       "description": "Get the current UTC timestamp via shell.restricted (use: date -u +%Y-%m-%dT%H:%M:%SZ). Write it to /tmp/px-hiro-ts-a.txt. Wait 2 seconds (sleep 2 via shell.restricted). Get a new timestamp and write to /tmp/px-hiro-ts-b.txt. Read both files, confirm the second timestamp is later than the first, and report the difference in seconds.",
-      "difficulty": "hard"
+      "difficulty": "hard",
+      "success_criteria": "Reports two UTC timestamps where the second is later than the first, and states the difference in seconds (about 2)."
     },
     {
       "id": "tu_005",
       "category": "tool_use",
       "description": "Run 'uname -a' and 'cat /proc/version' via shell.restricted. Extract the kernel version string from both outputs. Verify they match exactly. If they differ, explain why (e.g., build info vs release version). Report the exact version string from each source.",
-      "difficulty": "medium"
+      "difficulty": "medium",
+      "success_criteria": "Reports the kernel version string from both `uname -a` and /proc/version and states whether they match, explaining any build-info vs release difference."
     },
     {
       "id": "tu_006",
@@ -126,31 +131,36 @@
       "id": "pl_001",
       "category": "planning",
       "description": "Count the total number of Rust source files (.rs) in src/ using shell.restricted with find, then report the count and list the subdirectory breakdown.",
-      "difficulty": "medium"
+      "difficulty": "medium",
+      "success_criteria": "Reports the total count of .rs files in src/ plus a per-subdirectory breakdown, based on an actual find."
     },
     {
       "id": "pl_002",
       "category": "planning",
       "description": "Calculate the approximate total lines of Rust code in src/ by running 'find src -name \"*.rs\" | xargs wc -l' and report the total.",
-      "difficulty": "medium"
+      "difficulty": "medium",
+      "success_criteria": "Reports an approximate total line count of Rust code in src/ from an actual wc -l."
     },
     {
       "id": "pl_003",
       "category": "planning",
       "description": "Read src/main.rs and src/evolved/mod.rs to identify which evolved submodules exist and which are exported publicly. Report the full list.",
-      "difficulty": "medium"
+      "difficulty": "medium",
+      "success_criteria": "Lists the evolved submodules and indicates which are publicly exported, based on reading src/main.rs and src/evolved/mod.rs."
     },
     {
       "id": "pl_004",
       "category": "planning",
       "description": "Generate 3 distinct, falsifiable hypotheses about whether injecting ICE examples improves ReAct task success rate for small language models. Each hypothesis must specify a measurable prediction.",
-      "difficulty": "hard"
+      "difficulty": "hard",
+      "success_criteria": "Provides 3 distinct, falsifiable hypotheses about ICE-example injection affecting ReAct success for small models, each with a measurable prediction."
     },
     {
       "id": "pl_005",
       "category": "planning",
       "description": "Read brain/hypotheses.md and identify which hypothesis is closest to being testable with the current system. Explain your reasoning in 2-3 sentences.",
-      "difficulty": "hard"
+      "difficulty": "hard",
+      "success_criteria": "Identifies a specific hypothesis from brain/hypotheses.md as closest to testable and justifies it in 2-3 sentences."
     },
     {
       "id": "pl_006",
@@ -246,31 +256,47 @@
       "id": "sc_001",
       "category": "self_correction",
       "description": "Read /etc/shadow. If permission denied, read /etc/gshadow. If also denied, read /etc/passwd and report the first 5 lines. In all cases, identify which file was actually readable and explain why the others were not accessible.",
-      "difficulty": "medium"
+      "difficulty": "medium",
+      "expected": {
+        "contains_all": [
+          "passwd"
+        ]
+      },
+      "success_criteria": "Identifies that /etc/passwd was the readable file (shadow/gshadow denied for a non-root user) and reports its first lines."
     },
     {
       "id": "sc_002",
       "category": "self_correction",
       "description": "Write 'hiro-sc002-test' to /root/px-test.txt. If denied, try /etc/px-test.txt. If also denied, write to /tmp/px-sc002-test.txt. After writing, read the file back and verify the content matches. Report which path succeeded and why the others failed.",
-      "difficulty": "medium"
+      "difficulty": "medium",
+      "expected": {
+        "contains_any": [
+          "/tmp/px-sc002-test.txt",
+          "/tmp"
+        ]
+      },
+      "success_criteria": "Reports that the /tmp path succeeded after /root and /etc were denied, with read-back verification."
     },
     {
       "id": "sc_003",
       "category": "self_correction",
       "description": "Search the web for 'zxqwerty_nonexistent_topic_abc123_2025'. If zero meaningful results, search for 'professor x self-evolving harness NeurIPS 2026'. If still no results, search for 'metacognitive harness evolution AI agent'. For whichever query succeeds first, report 2 results with titles and brief descriptions.",
-      "difficulty": "medium"
+      "difficulty": "medium",
+      "success_criteria": "Reports 2 web results (titles + brief descriptions) for whichever fallback query first returned results."
     },
     {
       "id": "sc_004",
       "category": "self_correction",
       "description": "Fetch 'http://invalid-domain-that-does-not-exist-px.local/data'. When it fails, fetch 'http://localhost:11434/api/tags' instead. Parse the JSON: extract the name and size of the first model listed. If Ollama is also unreachable, search the web for 'ollama api tags endpoint documentation'.",
-      "difficulty": "medium"
+      "difficulty": "medium",
+      "success_criteria": "Reports the name and size of the first model from the Ollama /api/tags response (after the invalid domain failed)."
     },
     {
       "id": "sc_005",
       "category": "self_correction",
       "description": "Read /tmp/px-sc005-counter.txt. If absent, create it with content '0'. Parse the integer value, increment by 1, write the new value back. Read again to confirm. Repeat the increment one more time (read, +1, write, verify). Report the final value after two increments.",
-      "difficulty": "hard"
+      "difficulty": "hard",
+      "success_criteria": "Reports the final counter value after two increments with read-back confirmation (e.g., 0->1->2 if the file was absent)."
     },
     {
       "id": "sc_006",
