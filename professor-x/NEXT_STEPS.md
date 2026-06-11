@@ -1,9 +1,16 @@
 # NEXT STEPS — ordered to-do (read before starting any work)
 
-**Source of truth for the plan:** `docs/research/2026-06-10-frankenstein-harness-master-plan.md`.
-This file is the *execution order*. The goal everything serves: lift `p_correct`
-(last A/B = 0.000). Build the harness mechanics that turn the same local 8B's output
-into FINISHED tasks — edit interface + anti-thrash + context governance first.
+**North star:** `MILESTONE.md` (read it first). **Plan detail:**
+`docs/research/2026-06-10-frankenstein-harness-master-plan.md`.
+This file is the *execution order*. The milestone we're driving to: ship a daily-driver
+**offline local coding agent people actually try (#2)**, then make it **improve itself
+on real usage (#1)**. The goal everything serves: an honest, externally-credible number
++ a one-command try-it — not more features.
+
+> **RE-AIMED 2026-06-10.** The edit stack (Phase 1.1–1.4 below) is built but the
+> taxonomy showed it was NOT the bottleneck. **The current execution order is
+> `M0 → M1 → M2` (below), which supersedes the remaining Phase 1.5 / 2 / 3 / 4 / 5
+> polish.** Do M0 next. Phases 1.5–5 are deferred until M2's gates pass.
 
 ## Rules for agents (do not violate)
 1. **Do tasks in number order.** Do NOT start a task whose `Blocked by` is unfinished.
@@ -19,6 +26,47 @@ into FINISHED tasks — edit interface + anti-thrash + context governance first.
    the master plan. codex (Rust) ports most directly.
 7. If a task's premise turns out false (e.g. taxonomy says bad-edits are NOT the main
    failure), STOP and update this file + the plan before continuing.
+
+---
+
+# ★ CURRENT PRIORITY — M0 → M1 → M2 (do these next; supersede everything below)
+
+See `MILESTONE.md` for the full ladder. Every gate is a number, not a vibe.
+
+## M0 — Trust the scoreboard (DO THIS NEXT, gates everything)
+*Why: the 0.5.3 re-measure was `p_correct=0.000` AND `p_plan=0.000` even after the
+answer-gate fix. A metric that reads 0 after the fix, and a `p_plan` that never fires,
+is degenerate — we cannot trust the number, and this project has shipped fabricated
+metrics before. No new features until the scoreboard is honest.*
+- [ ] **M0.1 Diagnose the degenerate metrics.** For the 0.5.3 run, determine per task
+  whether `p_correct=0` is (a) the judge rejecting a correct answer, (b) a genuinely
+  wrong/absent answer, or (c) a scoring bug. Same for `p_plan` never firing.
+  **Done-when:** a written cause per metric in `docs/research/eval-trust.md`.
+  **Blocked by:** nothing.
+- [ ] **M0.2 Fix the eval so scores mean something.** Fix the judge/scoring so
+  `p_correct` reflects real correctness and `p_plan` either fires meaningfully or is removed.
+  **Done-when:** on ~15 hand-labeled trajectories the metric agrees with human ≥ 90%.
+  **Blocked by:** M0.1.
+
+## M1 — Wire a real benchmark
+- [ ] **M1.1 Adopt a small REAL coding benchmark** runnable offline on the 3060: a curated
+  mini-SWE-bench / SWE-bench-Verified-Lite subset, or a handful of real GitHub-issue tasks
+  on a sample repo. Reference: `_refs/harnesses/SWE-agent`, augment-swebench-agent.
+  **Done-when:** an honest `pass@1` baseline is recorded (even if near-zero).
+  **Blocked by:** M0.2.
+
+## M2 — Make the core loop actually finish (the capability grind)
+- [ ] **M2.1 Drive reliability** using the built edit stack + failure taxonomy + remaining
+  loop fixes (thrash/forfeit, tool/backend stability). Relentless re-measure.
+  **Done-when:** toy HIRO-null `pass@3 ≥ 0.8` with a *meaningful* `p_correct`; real
+  benchmark first non-zero then climbing run-over-run.
+  **Blocked by:** M1.1.
+- [ ] **M2.2 Stranger task end-to-end.** A "fix this bug in this small repo" task completes,
+  verified by its own tests, fully offline. **Done-when:** green tests, no network.
+  **Blocked by:** M2.1.
+
+*M3 (try-it product) and M4 (self-improvement curve) follow in `MILESTONE.md`. Do not
+start them, or any Phase 1.5–5 item below, until M2's gates pass.*
 
 ---
 
@@ -109,6 +157,9 @@ this remains high-value but no longer precedes answer/loop reliability.*
 - [ ] **1.5 RE-MEASURE.** Re-run the 12-task A/B (or HIRO null round) with the new edit
   stack. **Done-when:** `p_correct` and edit-success-rate recorded vs the 0.000 baseline.
   **Blocked by:** 1.1–1.4.
+  **⚠ DEFERRED (2026-06-10):** subsumed by **M0 + M2** above — do not run a re-measure
+  until the scoreboard is trustworthy (M0), or the number is meaningless. Phases 3/2/4/5
+  below are likewise deferred until M2's gates pass.
 
 ---
 
