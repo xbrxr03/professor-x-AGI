@@ -59,7 +59,17 @@ metrics before. No new features until the scoreboard is honest.*
   **Done-when:** compiles + unit tests (stratified balance 3/3/3 not 9/0/0; ExpectedSpec
   pass/fail). **Result:** 267 tests pass; `--hiro-smoke` validates the 60-task file. **Hybrid
   judge design chosen by Abrar.**
-- [◐] **M0.2b Author ground truth + calibrate.** Authored a balanced calibration set —
+- [◐] **M0.2b STILL OPEN — LLM-judge deemed untrustworthy; pivoting to deterministic.**
+  Two calibration runs proved a qwen3:8b LLM-judge is unstable in BOTH directions: harsh
+  prompt → false negatives (80% agreement), lenient prompt → false positives crediting
+  wrong/hallucinated answers (60% agreement, inflated pass@3 to a *mirage* 0.733). See
+  `docs/research/eval-trust.md`. **Decision:** the trustworthy scoreboard becomes the
+  **M1 repo-fix benchmark (deterministic test pass/fail)**, which a lenient judge can't
+  inflate; HIRO LLM-judged tasks become a non-gating diagnostic. Tighten deterministic
+  specs (sc_002/tu_005 were brittle). **M2.1 didn't fire** (synthesizes only from
+  successful obs; thrash tasks have none) — real wall is failed-action recovery, not
+  post-hoc synthesis.
+- [◐] **M0.2b (original) Author ground truth + calibrate.** Authored a balanced calibration set —
   5 tool_use + 5 planning + 5 self_correction (15 tasks) in `hiro/tasks.json` (deterministic
   `expected` for the crisp self-correction fallbacks, `success_criteria` for env-dependent ones).
   **REMAINING:** run a balanced HIRO round (needs the local model, ~30–60 min), hand-label

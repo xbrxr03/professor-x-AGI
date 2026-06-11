@@ -168,3 +168,61 @@ wrong-path (sc_002).
    the judge fix and measures whether thrash deaths convert to scored answers.
 Re-audit against the ≥90% gate after `bgh7z2hgd`.
 
+---
+
+## M0.2b RE-AUDIT (run `16538627`) — the 0.733 is a MIRAGE. Gate still NOT met.
+
+Headline looked great: `pass@3=0.733 p_tool=0.800 p_plan=0.600 p_correct=0.800` (up from
+0.200). **It is not real.** Two facts kill it:
+
+1. **`synthesis_finish` fired 0 times → M2.1 contributed NOTHING.** The thrash fix did not
+   trigger this run. So none of the gain is capability.
+2. **The judge over-corrected from too-harsh into too-lenient — it now credits wrong and
+   hallucinated answers.** Hand-labeled agreement *dropped to ~9/15 = 60%* (worse than the
+   80% before). The false POSITIVES:
+   - `pl_002` "495 lines" of Rust — wrong (repo is ~20k+ LOC) → false PASS
+   - `sc_002` wrote to the repo root, only *mentioned* failing at `/tmp`; the loose
+     deterministic `contains "/tmp"` matched the failure mention → false PASS
+   - `sc_003` invented paper titles (hallucination) → false PASS
+   - `tu_002` "_refs (3530 .rs)" — that's the cloned-harness dir, not a `src/` subdir → false PASS
+   - `tu_003` claims `anyhow`/`thiserror`/`regex` are unused — they're everywhere → false PASS
+   - `tu_005` gave both (identical) kernel strings but didn't say "match" → my brittle
+     `contains_any` spec → false FAIL
+
+**True capability this run ≈ 0.40** (pl_004, pl_005, sc_005, tu_001, tu_004, ~sc_001) —
+unchanged. The 0.20→0.733 swing is pure judge noise.
+
+### The real conclusion (the hard one)
+**A qwen3:8b LLM-judge cannot be trusted to grade correctness — it is unstable in BOTH
+directions** (one prompt → false negatives, the next → false positives). Tuning the prompt
+is whack-a-mole. The only trustworthy signal is **deterministic, machine-checkable ground
+truth** — and the cleanest form of that is *the code's own tests passing* (the M1 repo-fix
+benchmark), which a lenient judge cannot inflate.
+
+### Decision → pivot the trustworthy scoreboard to deterministic/test-based
+- The **M1 `repo-fix` benchmark (red→edit→green, exit-code judged)** becomes the trusted
+  metric. It is ungameable by judge leniency. Build its runner next.
+- HIRO's LLM-judged tasks are demoted to a **non-gating diagnostic**; only its
+  deterministic `expected` tasks count toward a trustworthy number, and those specs must be
+  tightened (sc_002/tu_005 showed brittle specs cut both ways).
+- **M2.1 must be debugged** (why `synthesis_finish=0` while tasks still thrash) before it
+  can be credited.
+
+**M0 is NOT closed.** But its *purpose* held perfectly: it stopped a fabricated 0.733 from
+being recorded as progress. That is the whole point of M0.
+
+### Why M2.1 didn't fire (debugged from the log)
+All 16 forfeited attempts hit the step-18 forfeit; `synthesize_final_answer` returned
+`None` every time because the thrash tasks **never gathered a successful observation** —
+they repeat a *failing* action (`fs.window_open` on a directory; policy-denied `web.fetch`)
+from the start. So M2.1 only helps "gathered data but didn't report it"; the true wall is
+**"the agent repeats a failing action instead of changing approach."** The duplicate guard
+*nudges* but qwen3:8b ignores the nudge. The right M2 fix is about **failed-action
+recovery / forcing a different action after a failure**, not post-hoc synthesis.
+
+### Honest capability baseline (trustworthy subset only)
+Counting only deterministically-verifiable + clearly-correct answers, the agent sits at
+**~0.40 on HIRO**, with failures split: ~33% action-loop thrash on failing actions, ~20%
+hallucination (fabricates results instead of using tools), ~13% wrong answers. This is the
+real starting line for M2.
+
