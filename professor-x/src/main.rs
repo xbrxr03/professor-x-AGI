@@ -7932,6 +7932,26 @@ async fn run_repo_fix_bench(
             post,
             if ok { "PASS" } else { "fail" }
         );
+        // On failure, capture what the agent actually did (diff vs the original fixture)
+        // so the miss is diagnosable — same lesson as M0.2b answer persistence.
+        if !ok {
+            let diff = Command::new("diff")
+                .args(["-ru", &task.setup])
+                .arg(&workdir)
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                .unwrap_or_default();
+            let shown: String = diff.chars().take(1500).collect();
+            println!(
+                "  └─ agent diff for {} (empty = no edit made):\n{}",
+                task.id,
+                if shown.trim().is_empty() {
+                    "    <none>".to_string()
+                } else {
+                    shown
+                }
+            );
+        }
         let _ = std::fs::remove_dir_all(&workdir);
     }
 
