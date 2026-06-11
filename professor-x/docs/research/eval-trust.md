@@ -286,3 +286,9 @@ The model never changed — this is the "small model + great harness" thesis on 
 number. Caveat: one run, trivial tasks, real variance; confirm with repeats. Remaining
 failures: KeyError, string-reverse, multi-file (8B malformed the replacement text — a genuine
 model slip the lint-gate caught).
+
+### CONFIRMED (3 runs): 0.50 → mean ~0.77
+Repeats with both fixes: **0.70, 0.70, 0.90** (mean 0.767, peak 9/10) vs baseline 0.50 (seen
+3×). The lift is real, not run-to-run noise. Same qwen3:8b — the ~27pt gain is entirely
+harness (greedy-loop temp escalation + forgiving hash-edit). "The harness is the intelligence"
+shown on an ungameable number. Remaining misses cluster on fix_004/005/009 (next to peel).
