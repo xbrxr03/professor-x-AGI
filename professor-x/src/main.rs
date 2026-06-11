@@ -7903,9 +7903,13 @@ async fn run_repo_fix_bench(
         // 3. run the agent inside the workdir.
         let desc = format!(
             "{}\n\nYou are working inside the directory {}. The relevant files are there. \
-             Read them, edit to fix the bug, then finish.",
+             Workflow: (1) list and read the buggy file; (2) make a minimal edit to fix it; \
+             (3) run `{}` via shell.restricted to verify — it exits 0 when the fix is correct; \
+             (4) if it still fails, read the error, fix again, and re-run the check. Only call \
+             finish once the check passes (exit 0).",
             task.description,
-            workdir.display()
+            workdir.display(),
+            task.verify_cmd
         );
         let mut node = TaskNode::new(desc, TaskType::UserRequest, 100);
         let react = ReactLoop::new(
