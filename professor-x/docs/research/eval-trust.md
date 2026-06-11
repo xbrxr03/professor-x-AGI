@@ -263,3 +263,26 @@ bool-logic, multi-file (imported helper). `fix_003` passed at n=4 but failed at 
 This 0.50 is the honest M2 starting line. Next: diff-capture diagnosis of the 5 misses →
 targeted fix → re-measure.
 
+
+---
+
+## M2 PROGRESS — harness fixes lift repo-fix 0.50 → 0.70 (same 8B)
+
+Two bugs found by reading real trajectories (not guessing):
+1. **Greedy loop** — at temp 0.3 the 8B re-emits the identical thought+`fs.list` forever,
+   never reaching read→edit. Fix: escalate temperature on a duplicate-blocked retry.
+2. **Invented hashes** — after the loop broke, the agent reaches `fs.hash_edit` with the
+   CORRECT fix but a fabricated line-hash (`"abc"`,`"e3e"`), so the strict hash check
+   rejected a correct edit. Fix: fall back to line-based apply; editverify (lint) is the
+   real guard.
+
+| benchmark | pass@1 |
+|---|---|
+| baseline (seen 3×) | 0.50 |
+| + temp escalation alone | 0.50 (broke loop, exposed hash bug) |
+| + forgiving hash_edit | **0.70 (7/10)** |
+
+The model never changed — this is the "small model + great harness" thesis on a trustworthy
+number. Caveat: one run, trivial tasks, real variance; confirm with repeats. Remaining
+failures: KeyError, string-reverse, multi-file (8B malformed the replacement text — a genuine
+model slip the lint-gate caught).
