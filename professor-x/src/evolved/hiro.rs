@@ -776,12 +776,18 @@ impl HiroRunner {
                 failure_reason: Some("empty final answer (nothing to judge)".to_string()),
             };
         }
-        let system = "You are a strict grader for an AI agent benchmark. Given a TASK, \
-            its SUCCESS CRITERIA, and the agent's FINAL ANSWER, decide if the final answer \
-            satisfies the criteria. Respond with exactly one word on the first line: PASS or \
-            FAIL. Be strict: if the answer is missing required facts or is wrong, answer FAIL.";
+        // Calibrated 2026-06-11: the previous "be strict" prompt produced false
+        // negatives (failing answers that clearly met the criteria), dropping
+        // judge-vs-human agreement to 80%. Judge presence-of-facts, not phrasing.
+        let system = "You are grading an AI agent's FINAL ANSWER against SUCCESS CRITERIA. \
+            Judge ONLY whether the answer contains the facts the criteria require. PASS if \
+            those facts are present and consistent with the criteria — extra detail, \
+            different wording, or added explanation are all fine. FAIL only if a required \
+            fact is missing or clearly wrong, or the agent declined, hallucinated, or did \
+            not actually perform the task. If the required facts are present, you MUST \
+            answer PASS. Respond with exactly one word on the first line: PASS or FAIL.";
         let prompt = format!(
-            "TASK:\n{}\n\nSUCCESS CRITERIA:\n{}\n\nAGENT FINAL ANSWER:\n{}\n\nVerdict (PASS or FAIL):",
+            "TASK:\n{}\n\nSUCCESS CRITERIA:\n{}\n\nAGENT FINAL ANSWER:\n{}\n\nDoes the answer contain the required facts? Verdict (PASS or FAIL):",
             hiro_task.description, criteria, answer
         );
         match self.ollama.generate(&prompt, Some(system), None).await {

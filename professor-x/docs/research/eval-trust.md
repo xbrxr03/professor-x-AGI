@@ -134,3 +134,37 @@ the attempt artifact). Then re-run and complete the hand-label.
 a guard blocks it, and it dies. The dominant real failure mode is **action-loop thrash**,
 not bad edits. That is the concrete M2 / Phase-3 target.
 
+---
+
+## M0.2b AUDIT (run `61b991ca`, with answer persistence) — gate NOT met (80%)
+
+With the agent's final answers now persisted, I hand-labeled all 15 verdicts.
+
+**Judge-vs-human agreement: 12/15 = 80%** (gate is ≥90% → **NOT met**).
+
+All 3 disagreements are **LLM-judge FALSE NEGATIVES** — qwen3:8b grading its own output
+too harshly, failing answers that clearly met the criteria:
+- `pl_001` answered "68 .rs files; memd(25), evolved(13)…" (complete count + breakdown) → judge FAIL ✗
+- `tu_001` answered "VERSION_ID 24.04 … kernel 6.17.0-29-generic … same release" → judge FAIL ✗
+- `tu_005` quoted both kernel strings in full + "Both outputs match exactly" → judge FAIL ✗
+
+Deterministic checks were reliable (sc_002 correctly failed — the agent wrote to the repo
+root, never the required `/tmp`). **The LLM-judge is the weak link, not sampling or the
+deterministic path.**
+
+### Honest capability note
+The LLM-judge harshness was *hiding real passes*. True correct answers this run:
+`pl_001, pl_003, pl_004, pl_005, tu_001, tu_005` = **6/15 (0.40)**, vs the scoreboard's
+0.20. Remaining real failures: **action-loop thrash** (5: pl_002, sc_001, sc_005, tu_003,
+tu_004 — the M2.1 target), hallucination (sc_003, sc_004), wrong answer (sc_005, tu_002),
+wrong-path (sc_002).
+
+### Fix applied (→ re-run `bgh7z2hgd`)
+1. **Calibrated the LLM-judge prompt** — judge *presence of required facts*, not phrasing;
+   "if the required facts are present you MUST answer PASS." Targets the false-negative mode.
+2. **Converted stable-fact tasks to deterministic** — `tu_001` (`24.04` + `6.17.0-29`),
+   `tu_005` (`6.17.0-29-generic` + match), removing them from the LLM-judge entirely.
+3. The re-run also carries the **M2.1 thrash→synthesis** binary, so it simultaneously tests
+   the judge fix and measures whether thrash deaths convert to scored answers.
+Re-audit against the ≥90% gate after `bgh7z2hgd`.
+
