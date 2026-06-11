@@ -51,10 +51,21 @@ metrics before. No new features until the scoreboard is honest.*
   checks the answer; tasks carry no `expected`/ground-truth at all. So `p_tool=0.333` =
   "finished with a tool call" (8/12 died at max-steps), NOT answer-correct. True
   planning/self-correction ability is UNKNOWN, not 0.
-- [ ] **M0.2 Fix the eval so scores mean something.** Fix the judge/scoring so
-  `p_correct` reflects real correctness and `p_plan` either fires meaningfully or is removed.
-  **Done-when:** on ~15 hand-labeled trajectories the metric agrees with human ≥ 90%.
-  **Blocked by:** M0.1.
+- [x] **M0.2a Stratified sampling + hybrid judge infra.** Replace `tasks.truncate(limit)`
+  with `stratified_sample` (round-robin across categories — every category now runs).
+  Add `expected` (deterministic) + `success_criteria` (LLM-judge) to `HiroTask`; new hybrid
+  `judge_answer`: assert → LLM-judge → trace-fallback flagged `UNVERIFIED`. `passed` now
+  means real correctness when ground truth exists.
+  **Done-when:** compiles + unit tests (stratified balance 3/3/3 not 9/0/0; ExpectedSpec
+  pass/fail). **Result:** 267 tests pass; `--hiro-smoke` validates the 60-task file. **Hybrid
+  judge design chosen by Abrar.**
+- [◐] **M0.2b Author ground truth + calibrate.** Authored a balanced calibration set —
+  5 tool_use + 5 planning + 5 self_correction (15 tasks) in `hiro/tasks.json` (deterministic
+  `expected` for the crisp self-correction fallbacks, `success_criteria` for env-dependent ones).
+  **REMAINING:** run a balanced HIRO round (needs the local model, ~30–60 min), hand-label
+  ~15 trajectories, verify the new judge agrees with human ≥ 90% and all three category metrics
+  are non-degenerate. Record in `docs/research/eval-trust.md`.
+  **Blocked by:** M0.2a (done).
 
 ## M1 — Wire a real benchmark
 - [ ] **M1.1 Adopt a small REAL coding benchmark** runnable offline on the 3060: a curated

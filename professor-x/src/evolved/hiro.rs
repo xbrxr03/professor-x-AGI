@@ -56,6 +56,67 @@ pub struct HiroTask {
     pub difficulty: String,
     #[serde(default)]
     pub evaluator: Option<String>,
+    /// Deterministic ground-truth check on the final answer (preferred).
+    #[serde(default)]
+    pub expected: Option<ExpectedSpec>,
+    /// Natural-language success criteria for the LLM-judge fallback, used only
+    /// when `expected` is absent. M0.2 hybrid judge: assert first, LLM second.
+    #[serde(default)]
+    pub success_criteria: Option<String>,
+}
+
+/// Deterministic answer check. A task passes iff the final answer satisfies all
+/// of the provided constraints (empty constraints = vacuously true → author error,
+/// so an all-empty spec is treated as "no check").
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ExpectedSpec {
+    /// Final answer must contain every one of these substrings (case-insensitive).
+    #[serde(default)]
+    pub contains_all: Vec<String>,
+    /// Final answer must contain at least one of these (case-insensitive).
+    #[serde(default)]
+    pub contains_any: Vec<String>,
+    /// Final answer must match this regex.
+    #[serde(default)]
+    pub regex: Option<String>,
+}
+
+impl ExpectedSpec {
+    fn is_empty(&self) -> bool {
+        self.contains_all.is_empty() && self.contains_any.is_empty() && self.regex.is_none()
+    }
+
+    /// Returns Ok(()) on pass, Err(reason) on fail.
+    fn check(&self, answer: &str) -> std::result::Result<(), String> {
+        let hay = answer.to_lowercase();
+        for needle in &self.contains_all {
+            if !hay.contains(&needle.to_lowercase()) {
+                return Err(format!("answer missing required substring {needle:?}"));
+            }
+        }
+        if !self.contains_any.is_empty()
+            && !self
+                .contains_any
+                .iter()
+                .any(|n| hay.contains(&n.to_lowercase()))
+        {
+            return Err(format!(
+                "answer contains none of the required alternatives {:?}",
+                self.contains_any
+            ));
+        }
+        if let Some(pat) = &self.regex {
+            match regex::Regex::new(pat) {
+                Ok(re) => {
+                    if !re.is_match(answer) {
+                        return Err(format!("answer does not match regex {pat:?}"));
+                    }
+                }
+                Err(e) => return Err(format!("invalid regex {pat:?}: {e}")),
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -277,7 +338,10 @@ impl HiroRunner {
     ) -> Result<HiroRoundResult> {
         let mut tasks = load_tasks()?;
         if let Some(limit) = task_limit {
-            tasks.truncate(limit);
+            // M0.2: stratify, do NOT truncate. tasks.json is category-ordered, so a
+            // flat truncate(12) ran only tool_use and made p_plan/p_correct degenerate
+            // (see docs/research/eval-trust.md). Round-robin across categories instead.
+            tasks = stratified_sample(tasks, limit);
         }
         let harness_commit = current_harness_commit().unwrap_or_else(|e| {
             warn!("hiro: failed to read harness commit: {e}");
@@ -614,7 +678,7 @@ impl HiroRunner {
 
         // H15 — Free Energy Delta: flush (predicted, actual) pairs to DB
         flush_fed_to_memory(&react, &self.memory, round, &self.run_id);
-        let evaluation = evaluate_task(hiro_task, &task, outcome.success);
+        let evaluation = self.judge_answer(hiro_task, &task, outcome.success).await;
         // Self-distillation corpus: collect ONLY judge-verified-correct
         // trajectories. The HIRO evaluator is the verdict — agent-finish alone
         // (outcome.success) is not proof the answer was right.
@@ -629,6 +693,115 @@ impl HiroRunner {
             duration_ms,
         );
         Ok((evaluation.passed, attempts))
+    }
+
+    /// M0.2 hybrid correctness judge. Priority:
+    /// 1. explicit `evaluator` override (`category_trace`/`finish_only`) — honored as-is;
+    /// 2. deterministic `expected` ground truth on the final answer;
+    /// 3. `success_criteria` → local LLM-judge of the final answer;
+    /// 4. no ground truth → trace-shape pass, flagged UNVERIFIED so it never masquerades
+    ///    as a trustworthy correctness signal.
+    async fn judge_answer(
+        &self,
+        hiro_task: &HiroTask,
+        task: &TaskNode,
+        react_success: bool,
+    ) -> HiroEvaluation {
+        if !react_success {
+            return HiroEvaluation {
+                passed: false,
+                failure_reason: Some("ReAct task failed before evaluator checks".to_string()),
+            };
+        }
+
+        // Explicit evaluator override still wins (back-compat / trace-only tasks).
+        if let Some(ev) = hiro_task.evaluator.as_deref() {
+            if ev == "category_trace" || ev == "finish_only" {
+                return evaluate_task(hiro_task, task, react_success);
+            }
+        }
+
+        let answer = final_answer(task);
+
+        // 1. Deterministic ground truth (preferred — free, reproducible).
+        if let Some(exp) = &hiro_task.expected {
+            if !exp.is_empty() {
+                return match exp.check(&answer) {
+                    Ok(()) => HiroEvaluation {
+                        passed: true,
+                        failure_reason: None,
+                    },
+                    Err(reason) => HiroEvaluation {
+                        passed: false,
+                        failure_reason: Some(reason),
+                    },
+                };
+            }
+        }
+
+        // 2. LLM-judge fallback for open-ended tasks.
+        if let Some(criteria) = &hiro_task.success_criteria {
+            return self.llm_judge(hiro_task, &answer, criteria).await;
+        }
+
+        // 3. No ground truth: fall back to trace-shape, but flag it. A flagged pass
+        //    still counts (non-disruptive), but the UNVERIFIED marker lets us measure
+        //    ground-truth coverage and keeps the headline honest once authoring is done.
+        let mut e = evaluate_category_trace(hiro_task, task);
+        if e.passed {
+            e.failure_reason = Some(
+                "UNVERIFIED: trace-only pass (task has no `expected`/`success_criteria`)"
+                    .to_string(),
+            );
+        }
+        e
+    }
+
+    /// Local LLM-judge: PASS/FAIL the final answer against natural-language criteria.
+    async fn llm_judge(
+        &self,
+        hiro_task: &HiroTask,
+        answer: &str,
+        criteria: &str,
+    ) -> HiroEvaluation {
+        if answer.trim().is_empty() {
+            return HiroEvaluation {
+                passed: false,
+                failure_reason: Some("empty final answer (nothing to judge)".to_string()),
+            };
+        }
+        let system = "You are a strict grader for an AI agent benchmark. Given a TASK, \
+            its SUCCESS CRITERIA, and the agent's FINAL ANSWER, decide if the final answer \
+            satisfies the criteria. Respond with exactly one word on the first line: PASS or \
+            FAIL. Be strict: if the answer is missing required facts or is wrong, answer FAIL.";
+        let prompt = format!(
+            "TASK:\n{}\n\nSUCCESS CRITERIA:\n{}\n\nAGENT FINAL ANSWER:\n{}\n\nVerdict (PASS or FAIL):",
+            hiro_task.description, criteria, answer
+        );
+        match self.ollama.generate(&prompt, Some(system), None).await {
+            Ok(resp) => {
+                let head = resp
+                    .response
+                    .trim()
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .to_uppercase();
+                let passed = head.contains("PASS") && !head.contains("FAIL");
+                HiroEvaluation {
+                    passed,
+                    failure_reason: if passed {
+                        None
+                    } else {
+                        Some(format!("llm-judge: FAIL ({})", resp.response.trim()))
+                    },
+                }
+            }
+            Err(e) => HiroEvaluation {
+                passed: false,
+                failure_reason: Some(format!("llm-judge error: {e}")),
+            },
+        }
     }
 
     fn record_attempts(
@@ -972,6 +1145,60 @@ fn successful_tool_steps(task: &TaskNode) -> usize {
         .count()
 }
 
+/// M0.2: pick `limit` tasks round-robin across categories so every category is
+/// represented (the old `truncate` ran only the first category — see eval-trust.md).
+/// Preserves per-category ordering.
+fn stratified_sample(tasks: Vec<HiroTask>, limit: usize) -> Vec<HiroTask> {
+    if limit == 0 {
+        return Vec::new();
+    }
+    if tasks.len() <= limit {
+        return tasks;
+    }
+    let mut buckets: [Vec<HiroTask>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+    for t in tasks {
+        let i = match t.category {
+            HiroCategory::ToolUse => 0,
+            HiroCategory::Planning => 1,
+            HiroCategory::SelfCorrection => 2,
+        };
+        buckets[i].push(t);
+    }
+    let mut idx = [0usize; 3];
+    let mut out = Vec::with_capacity(limit);
+    loop {
+        let mut added = false;
+        for b in 0..3 {
+            if out.len() >= limit {
+                break;
+            }
+            if idx[b] < buckets[b].len() {
+                out.push(buckets[b][idx[b]].clone());
+                idx[b] += 1;
+                added = true;
+            }
+        }
+        if out.len() >= limit || !added {
+            break;
+        }
+    }
+    out
+}
+
+/// Extract the agent's final answer for judging: prefer the explicit `finish`/`done`
+/// answer payload, else the last observation.
+fn final_answer(task: &TaskNode) -> String {
+    for step in task.steps.iter().rev() {
+        if step.action.tool_name == "finish" || step.action.tool_name == "done" {
+            return step.observation.output.clone();
+        }
+    }
+    task.steps
+        .last()
+        .map(|s| s.observation.output.clone())
+        .unwrap_or_default()
+}
+
 fn hiro_category_name(category: &HiroCategory) -> &'static str {
     match category {
         HiroCategory::ToolUse => "tool_use",
@@ -1012,7 +1239,74 @@ mod tests {
             description: "test task".to_string(),
             difficulty: "medium".to_string(),
             evaluator: None,
+            expected: None,
+            success_criteria: None,
         }
+    }
+
+    fn task_with_id(id: &str, category: HiroCategory) -> HiroTask {
+        let mut t = task(category);
+        t.id = id.to_string();
+        t
+    }
+
+    #[test]
+    fn stratified_sample_balances_categories() {
+        // 6 tool, 6 plan, 6 corr, category-ordered (like tasks.json).
+        let mut tasks = Vec::new();
+        for i in 0..6 {
+            tasks.push(task_with_id(&format!("tu_{i}"), HiroCategory::ToolUse));
+        }
+        for i in 0..6 {
+            tasks.push(task_with_id(&format!("pl_{i}"), HiroCategory::Planning));
+        }
+        for i in 0..6 {
+            tasks.push(task_with_id(&format!("sc_{i}"), HiroCategory::SelfCorrection));
+        }
+        let sample = stratified_sample(tasks, 9);
+        assert_eq!(sample.len(), 9);
+        let tool = sample
+            .iter()
+            .filter(|t| matches!(t.category, HiroCategory::ToolUse))
+            .count();
+        let plan = sample
+            .iter()
+            .filter(|t| matches!(t.category, HiroCategory::Planning))
+            .count();
+        let corr = sample
+            .iter()
+            .filter(|t| matches!(t.category, HiroCategory::SelfCorrection))
+            .count();
+        // The old truncate(9) gave 9/0/0; stratified must give every category.
+        assert_eq!((tool, plan, corr), (3, 3, 3));
+    }
+
+    #[test]
+    fn expected_spec_contains_all_and_regex() {
+        let spec = ExpectedSpec {
+            contains_all: vec!["llama4:scout".to_string(), "primary".to_string()],
+            contains_any: vec![],
+            regex: Some(r"\d+GB".to_string()),
+        };
+        assert!(spec
+            .check("The primary model llama4:scout needs 10GB")
+            .is_ok());
+        // missing required substring
+        assert!(spec.check("primary model uses 10GB").is_err());
+        // missing regex match
+        assert!(spec.check("primary llama4:scout model").is_err());
+    }
+
+    #[test]
+    fn expected_spec_contains_any() {
+        let spec = ExpectedSpec {
+            contains_all: vec![],
+            contains_any: vec!["yes".to_string(), "present".to_string()],
+            regex: None,
+        };
+        assert!(spec.check("The model is PRESENT in the list").is_ok());
+        assert!(spec.check("the model is absent").is_err());
+        assert!(ExpectedSpec::default().is_empty());
     }
 
     fn task_node_with_steps(steps: Vec<ExecutionStep>) -> TaskNode {
