@@ -255,3 +255,11 @@ benchmark is now the scoreboard for M2 (drive it up + harder tasks) and M4 (evol
 > Two mirages caught this session (LLM-judge 0.733, pytest-missing 0/4) before either was
 > recorded as truth. *Verify the ruler before trusting the measurement* — M0's whole point.
 
+### Representative baseline (10 fixtures): `pass@1 = 0.50 (5/10)`
+Expanding 4→10 fixtures gave a more honest number. Solves: operator, KeyError, even-filter,
+factorial base-case, accumulator. Misses: off-by-one, missing-return, string-reverse,
+bool-logic, multi-file (imported helper). `fix_003` passed at n=4 but failed at n=10 →
+**real run-to-run variance** (the agent is stochastic; a single run isn't a point estimate).
+This 0.50 is the honest M2 starting line. Next: diff-capture diagnosis of the 5 misses →
+targeted fix → re-measure.
+
