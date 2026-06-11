@@ -31,6 +31,54 @@
       "description": "In counts.py, get_count(d, k) raises KeyError when k is absent. Make it return 0 for missing keys.",
       "verify_cmd": "python3 check.py",
       "expect_exit": 0
+    },
+    {
+      "id": "fix_005",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fix_005",
+      "description": "In strutil.py, reverse(s) returns the string unchanged. Make it return the reversed string.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "fix_006",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fix_006",
+      "description": "In nums.py, evens(xs) keeps ODD numbers (x % 2 == 1). Fix it to keep even numbers.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "fix_007",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fix_007",
+      "description": "In fact.py, factorial(0) recurses forever because the base case is `n == 1`. Fix the base case so factorial(0) == 1.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "fix_008",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fix_008",
+      "description": "In valid.py, in_range(x, lo, hi) uses OR so it's always true. Fix it to require x within [lo, hi].",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "fix_009",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fix_009",
+      "description": "In helper.py, slugify replaces spaces with '' instead of '-', so make_slug in api.py is wrong. Fix slugify.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "fix_010",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fix_010",
+      "description": "In acc.py, Accumulator.add overwrites total (self.total = x) instead of accumulating. Fix it to add.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
     }
   ]
 }
