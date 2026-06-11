@@ -38,11 +38,19 @@ See `MILESTONE.md` for the full ladder. Every gate is a number, not a vibe.
 answer-gate fix. A metric that reads 0 after the fix, and a `p_plan` that never fires,
 is degenerate — we cannot trust the number, and this project has shipped fabricated
 metrics before. No new features until the scoreboard is honest.*
-- [ ] **M0.1 Diagnose the degenerate metrics.** For the 0.5.3 run, determine per task
+- [x] **M0.1 Diagnose the degenerate metrics.** For the 0.5.3 run, determine per task
   whether `p_correct=0` is (a) the judge rejecting a correct answer, (b) a genuinely
   wrong/absent answer, or (c) a scoring bug. Same for `p_plan` never firing.
   **Done-when:** a written cause per metric in `docs/research/eval-trust.md`.
   **Blocked by:** nothing.
+  **Result:** `docs/research/eval-trust.md`. TWO causes, both = (c) design bug, not the
+  agent: (1) **sampling** — `--limit 12` over a category-ordered `tasks.json` (tool_use
+  first) ran ZERO planning/self_correction tasks, so `p_plan`/`p_correct` are `pass/0 = 0`
+  by construction (`hiro.rs:362-386`); (2) **the judge measures trace-shape, not
+  correctness** — default `category_trace` passes on `react_success` + a tool call, never
+  checks the answer; tasks carry no `expected`/ground-truth at all. So `p_tool=0.333` =
+  "finished with a tool call" (8/12 died at max-steps), NOT answer-correct. True
+  planning/self-correction ability is UNKNOWN, not 0.
 - [ ] **M0.2 Fix the eval so scores mean something.** Fix the judge/scoring so
   `p_correct` reflects real correctness and `p_plan` either fires meaningfully or is removed.
   **Done-when:** on ~15 hand-labeled trajectories the metric agrees with human ≥ 90%.
@@ -243,3 +251,7 @@ thrash/over-stepping is still a top failure.*
 - 2026-06-10: Phase 1.4 fuzzy patch fallback implemented in `b29ca08`;
   `patch.apply` falls back to normalized-whitespace hunk matching when exact git apply fails,
   and `fs.replace` is removed from the active ReAct tool surface.
+- 2026-06-11: M0.1 done — `docs/research/eval-trust.md`. The `p_correct=0`/`p_plan=0`
+  headline is an EVAL ARTIFACT (only tool_use tasks ran under `--limit 12`; the judge
+  checks trace-shape not correctness; tasks have no ground truth). The scoreboard is
+  untrustworthy on both axes. Next: M0.2 — balanced sampling + a real answer-checking judge.
