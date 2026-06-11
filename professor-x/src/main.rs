@@ -7901,15 +7901,15 @@ async fn run_repo_fix_bench(
         ran += 1;
 
         // 3. run the agent inside the workdir.
+        // Kept minimal on purpose: the verbose 4-step "edit→test→iterate" workflow dropped
+        // pass@1 0.50→0.30 on qwen3:8b — a small model's instruction-following is limited and
+        // a multi-step procedure overwhelms it. One short line of guidance wins. (See
+        // docs/research/eval-trust.md.)
         let desc = format!(
-            "{}\n\nYou are working inside the directory {}. The relevant files are there. \
-             Workflow: (1) list and read the buggy file; (2) make a minimal edit to fix it; \
-             (3) run `{}` via shell.restricted to verify — it exits 0 when the fix is correct; \
-             (4) if it still fails, read the error, fix again, and re-run the check. Only call \
-             finish once the check passes (exit 0).",
+            "{}\n\nThe files are in {}. Read the buggy file, make a minimal edit to fix it, \
+             then finish.",
             task.description,
-            workdir.display(),
-            task.verify_cmd
+            workdir.display()
         );
         let mut node = TaskNode::new(desc, TaskType::UserRequest, 100);
         let react = ReactLoop::new(
