@@ -1,0 +1,36 @@
+{
+  "tasks": [
+    {
+      "id": "fix_001",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fix_001",
+      "description": "In calc.py, the add(a, b) function returns a - b instead of a + b. Fix it so the tests pass.",
+      "verify_cmd": "python3 -m pytest -q",
+      "expect_exit": 0
+    },
+    {
+      "id": "fix_002",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fix_002",
+      "description": "In seq.py, last(xs) raises IndexError because it uses xs[len(xs)] (off by one). Fix it to return the last element.",
+      "verify_cmd": "python3 -m pytest -q",
+      "expect_exit": 0
+    },
+    {
+      "id": "fix_003",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fix_003",
+      "description": "In mathx.py, double(x) computes x * 2 but never returns it (returns None). Add the missing return.",
+      "verify_cmd": "python3 -m pytest -q",
+      "expect_exit": 0
+    },
+    {
+      "id": "fix_004",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fix_004",
+      "description": "In counts.py, get_count(d, k) raises KeyError when k is absent. Make it return 0 for missing keys.",
+      "verify_cmd": "python3 -m pytest -q",
+      "expect_exit": 0
+    }
+  ]
+}
