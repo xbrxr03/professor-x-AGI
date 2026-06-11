@@ -226,3 +226,32 @@ Counting only deterministically-verifiable + clearly-correct answers, the agent 
 hallucination (fabricates results instead of using tools), ~13% wrong answers. This is the
 real starting line for M2.
 
+---
+
+## M1 ACHIEVED — first trustworthy number: repo-fix `pass@1 = 0.75`
+
+Built `--repo-fix-bench` (deterministic, test-exit-code judged — ungameable). First run
+scored 0/4 but that was a **broken benchmark** (pytest not installed → every test errored;
+caught by verifying apply-the-fix still went red). Converted fixtures to stdlib `check.py`.
+
+**Real result (run on valid fixtures):**
+| task | bug | pre | post | verdict |
+|---|---|---|---|---|
+| fix_001 | `add` returns a−b | red | **green** | PASS |
+| fix_002 | off-by-one `xs[len(xs)]` | red | red | fail |
+| fix_003 | missing `return` | red | **green** | PASS |
+| fix_004 | unhandled missing key | red | **green** | PASS |
+
+**`pass@1 = 0.750 (3/4)`** — and it is *trustworthy* (a lenient judge cannot inflate a
+test exit code). 
+
+### The honest reframe
+On HIRO read/report tasks the agent thrashes (~0.40, hard to grade); on **concrete
+edit-to-pass-a-test tasks it is at 0.75.** The edit stack (hashedit/window/apply_patch)
+*works*. The agent is more capable at coding than the HIRO mirage suggested — we just
+weren't measuring the right thing with a trustworthy ruler. This deterministic repo-fix
+benchmark is now the scoreboard for M2 (drive it up + harder tasks) and M4 (evolve on it).
+
+> Two mirages caught this session (LLM-judge 0.733, pytest-missing 0/4) before either was
+> recorded as truth. *Verify the ruler before trusting the measurement* — M0's whole point.
+

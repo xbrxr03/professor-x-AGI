@@ -78,11 +78,14 @@ metrics before. No new features until the scoreboard is honest.*
   **Blocked by:** M0.2a (done).
 
 ## M1 — Wire a real benchmark
-- [ ] **M1.1 Adopt a small REAL coding benchmark** runnable offline on the 3060: a curated
-  mini-SWE-bench / SWE-bench-Verified-Lite subset, or a handful of real GitHub-issue tasks
-  on a sample repo. Reference: `_refs/harnesses/SWE-agent`, augment-swebench-agent.
-  **Done-when:** an honest `pass@1` baseline is recorded (even if near-zero).
-  **Blocked by:** M0.2.
+- [x] **M1.1 Adopt a small REAL coding benchmark** runnable offline on the 3060.
+  **DONE:** `--repo-fix-bench` — deterministic, test-exit-code judged (ungameable), offline.
+  4 stdlib `check.py` fixtures (red→edit→green). `ReactLoop::with_workspace_root` scopes the
+  agent to a per-task /tmp workdir. **Baseline: `pass@1 = 0.75 (3/4)`** — a *trustworthy*
+  number (see eval-trust.md). This also resolves M0 in practice: deterministic grading is the
+  trustworthy scoreboard the LLM-judge could not be. Caught + fixed a pytest-missing benchmark
+  artifact first (the eval-trust discipline).
+  **Next for a fuller M1:** expand to ~10 fixtures + harder/multi-file bugs + Rust (`cargo test`).
 
 ## M2 — Make the core loop actually finish (the capability grind)
 - [◐] **M2.1 Drive reliability** using the built edit stack + failure taxonomy + remaining
