@@ -12,6 +12,36 @@ should run on consumer hardware (developed on an RTX 3060, 12 GB).
 > on simpler tasks reliably and harder ones intermittently. See
 > [Daily-driver readiness](#daily-driver-readiness).
 
+## What's proven (and how it's measured)
+
+The thesis — *"the harness, not the model, is the lever"* — is demonstrated on an
+**ungameable** benchmark: `repo-fix`, where a planted bug must go **red → green** by the
+agent's edit (judged by the repo's own test exit code, which no lenient LLM-judge can inflate).
+
+> On `repo-fix`, the **same** `qwen3:8b` went **pass@1 0.50 → ~0.85** — *purely from harness
+> improvements; the model never changed.* The fixes weren't guesses: each came from reading a
+> real failure trajectory (a greedy decode-loop; a tool rejecting correct edits). That is the
+> whole thesis, on a number that can't be faked.
+
+Reproduce it yourself (≈7 min, on a local 8B):
+```bash
+cd professor-x && cargo build --release
+PROFESSOR_X_DATA_DIR=$HOME/.professor-x ./target/release/professor-x \
+    --repo-fix-bench --model qwen3:8b-q4_K_M
+```
+
+**Self-improvement with an empirical gate.** Professor X can try to improve its own harness and
+keep a change *only if it measurably beats baseline beyond noise* — unlike tools that accept
+changes on an LLM's say-so and drift:
+```bash
+./target/release/professor-x --evolve-on-repofix 2 --model qwen3:8b-q4_K_M
+```
+
+**Integrity first.** Every headline number is mechanism-checked before it's believed — this
+repo has caught and discarded two "mirages" (an inflated LLM-judge score; a benchmark that
+scored 0 only because a test runner was missing). See
+[`docs/research/eval-trust.md`](docs/research/eval-trust.md).
+
 ## Quickstart
 
 ### 1. Prerequisites
