@@ -108,13 +108,15 @@ experience — the hard problem is real.)
 | Interactive UX | ✅ working REPL + coding session + live event stream |
 | Tools / memory / security | ✅ solid |
 | Onboarding | ✅ this README |
-| **Capability** | ⚠️ local 8B (~0.2–0.3 pass@3 on our benchmark) — reliable on simple tasks, intermittent on hard ones |
+| **Capability** | ⚠️ local 8B — **~0.85 pass@1 on the deterministic `repo-fix` bench** (trivial single-file bug-fixes); reliable on simple coding tasks, intermittent on harder/multi-file ones. (The old `~0.2 pass@3` HIRO figure used an untrustworthy LLM-judge — see `docs/research/eval-trust.md`.) |
 | Speed | ⚠️ ~minutes/task locally |
 | Diff-review-before-apply | ⚠️ planned (see `docs/backlog.md`) |
 
-The path to a true daily driver is **capability** — either the self-distillation
-flywheel (fine-tune the local model on its own verified trajectories,
-`distill/README.md`) or pluggable stronger models. Tracked in `docs/backlog.md`.
+The path to a true daily driver is **capability**, and this repo shows the primary lever is the
+**harness** — trajectory-diagnosed harness fixes lifted `repo-fix` 0.50 → ~0.85 on a fixed 8B.
+Next: harder/multi-file fixtures, then either the self-distillation flywheel (fine-tune the local
+model on its own verified trajectories, `distill/README.md`) or pluggable stronger models. Tracked
+in `docs/backlog.md`.
 
 ## Docs
 - `docs/backlog.md` — prioritized roadmap
