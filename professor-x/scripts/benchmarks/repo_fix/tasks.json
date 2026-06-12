@@ -79,6 +79,38 @@
       "description": "In acc.py, Accumulator.add overwrites total (self.total = x) instead of accumulating. Fix it to add.",
       "verify_cmd": "python3 check.py",
       "expect_exit": 0
+    },
+    {
+      "id": "fix_011",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fix_011",
+      "description": "In math_utils.py, square(x) returns x + x instead of x * x, so sum_of_squares in stats.py is wrong. Fix square.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "fix_012",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fix_012",
+      "description": "In running.py, running_max initializes m = 0, so it returns 0 for all-negative inputs. Fix the initialization to handle negatives.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "fix_013",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fix_013",
+      "description": "In avg.py, average(xs) raises ZeroDivisionError on an empty list. Make it return 0 for empty input.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "fix_014",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fix_014",
+      "description": "In ops.py, one of the four functions is wrong: mul(a, b) returns a + b instead of a * b. Fix it.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
     }
   ]
 }
