@@ -360,3 +360,16 @@ the benchmark got harder (not trivial-task overfitting). New fixtures: fix_011 m
 fix_013 empty-input edge case ✅, fix_012 all-negative init ✗, fix_014 find-the-bug-among-four ✗.
 Persistent misses (fix_002 off-by-one, fix_009 multi-file slugify) are the same stochastic /
 malformed-edit cases. The benchmark is now a more representative, harder-to-game scoreboard.
+
+---
+
+## M3 stranger-install smoke — PASSED end-to-end
+
+`scripts/stranger_smoke.sh` ran the documented onboarding as a fresh user:
+1. `install.sh` → release build + `profx` linked to `~/.local/bin` (on PATH) ✓
+2. binary sanity (`--hiro-smoke`) ✓
+3. **real-task completion: the installed `profx --repo-fix-bench` fixed 10/14 bugs red→green
+   (pass@1=0.714)** ✓
+
+The M3 "install + complete a real task" gate is met from a clean install via the documented
+steps. Remaining for full M3: a literal third-party user + a screencast/GIF (needs a human).
