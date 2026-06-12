@@ -136,6 +136,7 @@ struct CliArgs {
     hiro_smoke: bool,
     repo_fix_bench: bool,
     evolve_on_repofix: Option<u32>,
+    evolve_skill_on_repofix: Option<u32>,
     /// Run deterministic local coding-agent edit/verify smoke and exit.
     coding_smoke: bool,
     /// Run a first-class bounded local coding-agent session and exit.
@@ -325,6 +326,7 @@ where
         hiro_smoke: false,
         repo_fix_bench: false,
         evolve_on_repofix: None,
+        evolve_skill_on_repofix: None,
         coding_smoke: false,
         coding_session: false,
         coding_session_live: false,
@@ -609,6 +611,10 @@ where
             }
             "--evolve-on-repofix" if i + 1 < args.len() => {
                 cli.evolve_on_repofix = args[i + 1].parse::<u32>().ok();
+                i += 2;
+            }
+            "--evolve-skill-on-repofix" if i + 1 < args.len() => {
+                cli.evolve_skill_on_repofix = args[i + 1].parse::<u32>().ok();
                 i += 2;
             }
             "--coding-smoke" => {
@@ -1680,6 +1686,19 @@ async fn main() -> Result<()> {
 
     if let Some(rounds) = cli.evolve_on_repofix {
         return run_evolve_on_repofix(
+            Arc::clone(&ollama),
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            cancel,
+            rounds,
+        )
+        .await;
+    }
+
+    if let Some(rounds) = cli.evolve_skill_on_repofix {
+        return run_evolve_skill_on_repofix(
             Arc::clone(&ollama),
             Arc::clone(&registry),
             Arc::clone(&policy),
@@ -8147,6 +8166,150 @@ async fn propose_repofix_prompt(
     let text = text.trim().to_string();
     if text.len() < 40 {
         anyhow::bail!("proposed prompt too short ({} chars)", text.len());
+    }
+    Ok(text)
+}
+
+/// M4 item 1: point the empirical fitness gate at a SKILL (durable knowledge), not the
+/// ephemeral system prompt. Evolves `skills/conductor/px-fix-bug.md`: inject it over the
+/// default prompt, propose a failure-targeted improvement, measure pass@1, and PERSIST the
+/// skill file only if it measurably helps. Self-improvement of knowledge, empirically gated.
+async fn run_evolve_skill_on_repofix(
+    ollama: Arc<ollama::OllamaClient>,
+    registry: Arc<std::sync::RwLock<ToolRegistry>>,
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    cancel: CancellationToken,
+    rounds: u32,
+) -> Result<()> {
+    const K: usize = 2;
+    const MDE: f64 = 0.10;
+    let skill_path = std::path::PathBuf::from("skills/conductor/px-fix-bug.md");
+    let original_skill = std::fs::read_to_string(&skill_path)
+        .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", skill_path.display()))?;
+
+    let with_skill = |skill: &str| {
+        format!(
+            "{}\n\n## Active skill — apply it\n{}",
+            agentd::react::default_system_prompt(),
+            skill
+        )
+    };
+
+    let measure = |prompt: Option<String>| {
+        let (o, r, p, m, e, c) = (
+            Arc::clone(&ollama),
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            cancel.clone(),
+        );
+        async move {
+            let mut tp = 0usize;
+            let mut tr = 0usize;
+            let mut fails: std::collections::HashMap<String, (String, bool)> =
+                std::collections::HashMap::new();
+            for _ in 0..K {
+                let (pa, ra, fl) =
+                    repo_fix_measure(&o, &r, &p, &m, &e, &c, prompt.as_deref(), false).await?;
+                tp += pa;
+                tr += ra;
+                for (id, d, me) in fl {
+                    fails.insert(id, (d, me));
+                }
+            }
+            anyhow::Ok((if tr > 0 { tp as f64 / tr as f64 } else { 0.0 }, fails))
+        }
+    };
+
+    println!("=== M4: evolve-SKILL-on-repofix (px-fix-bug, empirical gate, K={K}, MDE={MDE}) ===");
+    let (baseline, baseline_fails) = measure(Some(with_skill(&original_skill))).await?;
+    println!("round 0 (current px-fix-bug skill): pass@1 = {baseline:.3}");
+    let failure_report = if baseline_fails.is_empty() {
+        "No failures at baseline.".to_string()
+    } else {
+        let mut l: Vec<String> = baseline_fails
+            .iter()
+            .map(|(id, (d, me))| {
+                let mode = if *me {
+                    "made a WRONG edit"
+                } else {
+                    "FINISHED WITHOUT MAKING ANY EDIT"
+                };
+                format!(
+                    "- {id}: {} -> agent {mode}",
+                    d.chars().take(80).collect::<String>()
+                )
+            })
+            .collect();
+        l.sort();
+        l.join("\n")
+    };
+    println!("baseline failure report:\n{failure_report}\n");
+
+    let mut best = baseline;
+    let mut best_skill = original_skill.clone();
+    let mut accepted = 0u32;
+    for round in 1..=rounds {
+        if cancel.is_cancelled() {
+            break;
+        }
+        let candidate = match propose_repofix_skill(&ollama, &best_skill, &failure_report).await {
+            Ok(c) => c,
+            Err(e) => {
+                warn!("M4 skill round {round}: proposal failed: {e}");
+                continue;
+            }
+        };
+        let (score, _) = measure(Some(with_skill(&candidate))).await?;
+        let accept = score >= best + MDE;
+        println!(
+            "round {round}: candidate skill pass@1 = {score:.3} (best {best:.3}) -> {}",
+            if accept { "ACCEPT" } else { "reject" }
+        );
+        if accept {
+            best = score;
+            best_skill = candidate;
+            accepted += 1;
+        }
+    }
+
+    if best_skill != original_skill {
+        std::fs::write(&skill_path, &best_skill)?;
+        println!("PERSISTED improved px-fix-bug skill to {}", skill_path.display());
+    } else {
+        println!("No skill change beat baseline — px-fix-bug left unchanged (gate working).");
+    }
+    println!(
+        "\n=== M4 SKILL CURVE === baseline {baseline:.3} -> best {best:.3} | {accepted}/{rounds} accepted"
+    );
+    info!("M4 skill done: baseline={baseline:.3} best={best:.3} accepted={accepted}/{rounds}");
+    Ok(())
+}
+
+/// Failure-aware SKILL proposer: improve the px-fix-bug skill markdown to fix observed failures.
+async fn propose_repofix_skill(
+    ollama: &Arc<ollama::OllamaClient>,
+    base_skill: &str,
+    failure_report: &str,
+) -> Result<String> {
+    let system = "You improve a SKILL (a markdown guide) used by a weak local coding agent that \
+        fixes bugs. You are shown its ACTUAL recent failures. Output ONLY the improved skill \
+        markdown — keep the '# px-fix-bug' heading and concise Purpose/Workflow/Anti-patterns/\
+        Output Contract sections. Directly target the observed failures.";
+    let prompt = format!(
+        "CURRENT SKILL:\n{base_skill}\n\nACTUAL RECENT FAILURES:\n{failure_report}\n\n\
+         Output the improved skill markdown only:"
+    );
+    let resp = ollama
+        .generate(&prompt, Some(system), Some(ollama::ModelOptions::for_reflection()))
+        .await?;
+    let (_, text) = resp.split_thinking();
+    let text = text.trim().to_string();
+    if text.len() < 60 {
+        anyhow::bail!("proposed skill too short ({} chars)", text.len());
     }
     Ok(text)
 }
