@@ -300,3 +300,28 @@ The agent is **stable at ~0.75 mean (0.7–0.9 range)** on the 10 trivial fixtur
 failures are stochastic, not one fixable bug. The two real wins (0.50→0.75 via temp-escalation
 + forgiving hash_edit) stand; further per-task hardening fights noise. ~0.75 is the honest M4
 baseline. (Kept the stronger nudge — principled, within noise, may help on harder tasks.)
+
+---
+
+## M4 — empirical fitness gate, demonstrated (run --evolve-on-repofix 2)
+
+The gate works. Curve:
+| round | pass@1 | decision |
+|---|---|---|
+| 0 baseline (default prompt) | 0.850 | — |
+| 1 candidate (LLM-proposed prompt) | 0.700 | REJECT |
+| 2 candidate (LLM-proposed prompt) | 0.650 | REJECT |
+| **final** | **0.850 → 0.850, 0/2 accepted** | |
+
+The 8B proposed two "improved" prompts that **hurt** (0.85→0.70, →0.65); the empirical gate
+measured and **rejected both**. Under the legacy ProfX loop OR ARIS's `/meta-optimize`
+(LLM-review + apply, no measurement), those harmful changes would likely have been accepted.
+A flat 0/2 curve here = the gate correctly refusing changes that don't measurably help — the
+whole contribution.
+
+**Honest caveats:** (1) a local 8B is a poor prompt-engineer — it proposed worse prompts, so a
+*rising* curve needs a stronger proposer or a different evolvable component (skills). The manual
+diagnose-from-trajectory loop (0.50→0.77) is far stronger than blind LLM prompt-proposal — that
+is where evolution should focus. (2) Ollama hiccuped mid-run; candidate scores may be slightly
+depressed by infra noise (doesn't change the reject decisions). Baseline 0.85 also confirms the
+M2 fixes compounded (temp-escalation + forgiving hash_edit).
