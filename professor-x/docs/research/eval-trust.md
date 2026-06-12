@@ -399,3 +399,33 @@ but a *marginal* one — full rigor wants 2-3 confirmation runs of the accepted 
 prompt is not persisted by the prompt-mode loop (only --evolve-skill persists) — a small gap.
 The result is real and honest: a stronger proposer makes the empirically-gated loop produce a
 rising curve, which is M4's milestone (round-N > round-0 above MDE, gate-accepted).
+
+---
+
+## M4 RISING CURVE — RETRACTED: confirmation did NOT reproduce it
+
+The honest correction. A confirmation run of the exact same experiment:
+
+| run | baseline | candidates | accepted |
+|---|---|---|---|
+| 1 | 0.643 | 0.750, 0.643 | 1/2 (the "rise") |
+| 2 (confirm) | 0.714 | 0.643, 0.571 | **0/2** |
+
+Across both runs the 14B proposer authored 4 candidates; only **1 of 4** beat baseline (0.750),
+and that gain (+0.107) merely grazed the MDE (0.10) on K=2 reps with ±0.1 variance, off a low
+baseline draw. Run 2 (normal baseline) saw the 14B propose *worse* prompts, correctly rejected.
+
+**Conclusion (honest):** the run-1 "rise" was a noise-tail event, not a reproducible improvement.
+**M4's rising curve is NOT robustly demonstrated.** A stronger (14B) proposer is only *weakly*
+better than the 8B (1/4 accepts vs 0/4), not enough to reliably lift the curve via prompt
+mutation. The real lever remains *code-level, trajectory-diagnosed* fixes (which moved 0.50→0.85),
+not prompt self-proposal — even with a bigger model.
+
+**What IS robustly demonstrated:** the empirical gate is SOUND in every run — it accepts only a
+measured gain above MDE and rejects everything else (it rejected 3 worse 14B prompts the legacy
+loop / ARIS would have accepted on LLM-approval). That gate — *never accept an unmeasured harness
+change* — is the real, reproducible contribution. The self-improving *curve* via prompt mutation
+is not there; it needs code-level proposals (the frontier engine in m4-frontier-self-improvement-engine.md).
+
+This correction is the verify-the-ruler discipline applied to our OWN result — a confirmation run
+caught what would have been the session's third recorded mirage.
