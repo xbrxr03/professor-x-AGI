@@ -1,6 +1,7 @@
 ---
 name: adversarial-self-review
-description: "Before committing a non-trivial change on Professor X, run a two-thread adversarial review of your OWN work: steelman it, then attack it hard. Use before any commit/PR, before recording a result, or before declaring a milestone done. Adapted from ARIS's kill-argument; the same pattern is now in Prof X's agent.critic."
+description: "Two-thread adversarial review of your OWN work before you commit it on Professor X: steelman it, then attack it. Use before any commit or PR, before recording a result in docs/memory, before declaring a milestone done, or when you're about to claim a 'win' or improvement. Adapted from ARIS's kill-argument; the same pattern lives in Prof X's agent.critic."
+allowed-tools: Bash(*), Read, Grep, Glob
 ---
 
 # Adversarial self-review (kill-argument, applied to your own work)

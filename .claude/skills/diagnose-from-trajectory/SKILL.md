@@ -1,6 +1,8 @@
 ---
 name: diagnose-from-trajectory
-description: "Before proposing a fix for an agent/harness failure on Professor X, READ the actual failing trajectory — never guess. Use whenever a HIRO/repo-fix task fails, pass@1 stalls, or you're about to 'improve' a prompt/tool. Guessed fixes (synthesis, self-verify prompt) failed; trajectory-diagnosed fixes (temp escalation, forgiving hash-edit) lifted repo-fix 0.50→0.77."
+description: "Read the actual failing trajectory before fixing an agent/harness failure on Professor X — never guess. Use when a HIRO or repo-fix task fails, pass@1 stalls or won't rise, the agent loops/thrashes, an edit doesn't land, or you're about to 'improve' a prompt or tool. Guessed fixes failed; trajectory-diagnosed fixes lifted repo-fix 0.50→0.77. Ships a Tier-3 helper: scripts/pull_trajectory.py."
+allowed-tools: Bash(*), Read, Grep, Glob
+argument-hint: [task-keyword]
 ---
 
 # Diagnose from the real trajectory, don't guess
@@ -9,7 +11,15 @@ The fixes that worked this session came from *reading what the agent actually di
 that failed (or hurt) came from guessing. This is the strongest evolution signal on the project
 — stronger than blind LLM prompt-proposal (which proposed *worse* prompts).
 
-## How to read a trajectory
+## Step 0 — quick path (use the bundled helper)
+
+```bash
+python3 .claude/skills/diagnose-from-trajectory/scripts/pull_trajectory.py "<task-keyword>" --failed
+```
+It prints the action sequence + a failure signature (GREEDY-LOOP / NO-EDIT / EDIT-TOOL-REJECT)
+and any malformed edit payloads. If the DB isn't found, set `PROFESSOR_X_DATA_DIR` or pass `--db`.
+
+## How to read a trajectory (manual)
 
 The agent's steps are in the SQLite DB (`$PROFESSOR_X_DATA_DIR/state.db`, default `~/.professor-x/`),
 queryable with Python's `sqlite3` (the CLI isn't installed):

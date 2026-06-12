@@ -1,6 +1,7 @@
 ---
 name: professor-x-ops
-description: "Operational interface for running and measuring Professor X: the benchmarks, the self-improvement loops, the model/data-dir conventions, and the git workflow. Use when running --repo-fix-bench / --hiro / --evolve-*, interpreting their output, or committing work on this project."
+description: "Operational interface for running and measuring Professor X. Use when running or interpreting --repo-fix-bench, --hiro-null, --hiro-smoke, --evolve-on-repofix, or --evolve-skill-on-repofix; when picking the model/data-dir; when a run needs Ollama; or when committing/PRing work on this project. Knows the K=2/MDE conventions, the trustworthy-vs-untrustworthy metrics, and the branch/PR policy."
+allowed-tools: Bash(*), Read, Grep, Glob
 ---
 
 # Professor X — operational cheatsheet

@@ -1,6 +1,7 @@
 ---
 name: verify-the-ruler
-description: "Before trusting ANY benchmark number or metric on this project, verify the measurement mechanism itself is sound. Use whenever a pass-rate / score / metric is about to be reported, recorded, or acted on — especially before celebrating a jump or writing a result to docs/memory. This project has shipped fabricated 'confirmed' metrics before; M0 exists to stop that."
+description: "Mechanism-check a metric before trusting it on Professor X. Use when about to report/record/act on a pass-rate, pass@1, pass@3, φ, or any score; when a number jumps or looks too good; before writing a result to docs/research or memory; before calling a milestone done; or when a metric reads a suspicious constant (0.000, always-same). This project has shipped fabricated 'confirmed' metrics — M0 exists to stop that."
+allowed-tools: Bash(*), Read, Grep, Glob
 ---
 
 # Verify the ruler before trusting the measurement
