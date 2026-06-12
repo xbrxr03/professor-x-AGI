@@ -292,3 +292,11 @@ Repeats with both fixes: **0.70, 0.70, 0.90** (mean 0.767, peak 9/10) vs baselin
 3×). The lift is real, not run-to-run noise. Same qwen3:8b — the ~27pt gain is entirely
 harness (greedy-loop temp escalation + forgiving hash-edit). "The harness is the intelligence"
 shown on an ungameable number. Remaining misses cluster on fix_004/005/009 (next to peel).
+
+### M2 hardening attempt — NEUTRAL (variance-bound)
+Stronger loop-break (aggressive temp 0.9→1.3 + forceful named-next-action nudge) gave
+0.70/0.80/0.70 (mean 0.73) vs prior 0.70/0.70/0.90 (mean 0.77) — statistically identical.
+The agent is **stable at ~0.75 mean (0.7–0.9 range)** on the 10 trivial fixtures; remaining
+failures are stochastic, not one fixable bug. The two real wins (0.50→0.75 via temp-escalation
++ forgiving hash_edit) stand; further per-task hardening fights noise. ~0.75 is the honest M4
+baseline. (Kept the stronger nudge — principled, within noise, may help on harder tasks.)
