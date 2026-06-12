@@ -99,6 +99,9 @@ pub struct ReactLoop {
     /// M1 repo-fix benchmark: override the agent's workspace root so it edits inside a
     /// per-task /tmp workdir instead of the repo. `None` keeps the default workspace.
     workspace_override: Option<std::path::PathBuf>,
+    /// M4 self-improvement: override the ReAct system prompt at runtime so the evolution
+    /// loop can A/B candidate prompts against the repo-fix benchmark without recompiling.
+    prompt_override: Option<String>,
     /// Stable identifier for this loop's affect session (one per ReactLoop instance).
     session_id: String,
     /// Running affect state (valence + arousal) updated after each task attempt.
@@ -160,6 +163,7 @@ impl ReactLoop {
             transcripts: None,
             memory_budget_override: None,
             workspace_override: None,
+            prompt_override: None,
             affect: std::sync::Mutex::new(AffectState::neutral(session_id.clone(), 0)),
             fed_samples: std::sync::Mutex::new(Vec::new()),
             canvas: std::sync::Mutex::new(MermaidCanvas::default()),
@@ -180,6 +184,12 @@ impl ReactLoop {
     /// for the repo-fix benchmark) instead of the default repo workspace.
     pub fn with_workspace_root(mut self, root: std::path::PathBuf) -> Self {
         self.workspace_override = Some(root);
+        self
+    }
+
+    /// M4: override the ReAct system prompt (for evolution-loop A/B against repo-fix).
+    pub fn with_prompt_override(mut self, prompt: String) -> Self {
+        self.prompt_override = Some(prompt);
         self
     }
 
@@ -1248,7 +1258,11 @@ impl ReactLoop {
             // Ask the model for the next Thought + Action
             let resp = self
                 .ollama
-                .generate(&prompt, Some(SYSTEM_PROMPT), Some(step_opts))
+                .generate(
+                    &prompt,
+                    Some(self.prompt_override.as_deref().unwrap_or(SYSTEM_PROMPT)),
+                    Some(step_opts),
+                )
                 .await?;
 
             let (_, answer) = resp.split_thinking();
@@ -2671,6 +2685,12 @@ fn arm_for_ctx(num_ctx: u32) -> crate::evolved::lcap::BudgetArm {
 }
 
 // ── Prompts ───────────────────────────────────────────────────────────────────
+
+/// M4: the default ReAct system prompt, exposed so the evolution loop can propose and
+/// A/B candidate variants against the repo-fix benchmark.
+pub fn default_system_prompt() -> &'static str {
+    SYSTEM_PROMPT
+}
 
 const SYSTEM_PROMPT: &str = "\
 You are Professor X — an autonomous AI research agent running on consumer hardware. \

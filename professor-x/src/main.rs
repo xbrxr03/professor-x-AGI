@@ -135,6 +135,7 @@ struct CliArgs {
     /// Validate HIRO task inventory and evaluator substrate and exit.
     hiro_smoke: bool,
     repo_fix_bench: bool,
+    evolve_on_repofix: Option<u32>,
     /// Run deterministic local coding-agent edit/verify smoke and exit.
     coding_smoke: bool,
     /// Run a first-class bounded local coding-agent session and exit.
@@ -323,6 +324,7 @@ where
         patch_apply_live_path: None,
         hiro_smoke: false,
         repo_fix_bench: false,
+        evolve_on_repofix: None,
         coding_smoke: false,
         coding_session: false,
         coding_session_live: false,
@@ -604,6 +606,10 @@ where
             "--repo-fix-bench" => {
                 cli.repo_fix_bench = true;
                 i += 1;
+            }
+            "--evolve-on-repofix" if i + 1 < args.len() => {
+                cli.evolve_on_repofix = args[i + 1].parse::<u32>().ok();
+                i += 2;
             }
             "--coding-smoke" => {
                 cli.coding_smoke = true;
@@ -1668,6 +1674,19 @@ async fn main() -> Result<()> {
             Arc::clone(&memory),
             Arc::clone(&events),
             cancel,
+        )
+        .await;
+    }
+
+    if let Some(rounds) = cli.evolve_on_repofix {
+        return run_evolve_on_repofix(
+            Arc::clone(&ollama),
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            cancel,
+            rounds,
         )
         .await;
     }
@@ -7836,14 +7855,19 @@ async fn run_single_task(
 /// M1: offline repo-fix benchmark. Each task is a self-contained mini-repo with a planted
 /// bug + a test. Deterministic, ungameable: pass iff the repo's own test goes red→green
 /// after the agent's edit (no LLM-judge — see docs/research/eval-trust.md for why).
-async fn run_repo_fix_bench(
-    ollama: Arc<ollama::OllamaClient>,
-    registry: Arc<std::sync::RwLock<ToolRegistry>>,
-    policy: Arc<PolicyEngine>,
-    memory: Arc<MemoryManager>,
-    events: Arc<EventStore>,
-    cancel: CancellationToken,
-) -> Result<()> {
+/// Measure repo-fix pass@1 once, optionally with a candidate system-prompt override.
+/// Returns (passed, ran). Shared by `--repo-fix-bench` and the M4 evolution loop.
+#[allow(clippy::too_many_arguments)]
+async fn repo_fix_measure(
+    ollama: &Arc<ollama::OllamaClient>,
+    registry: &Arc<std::sync::RwLock<ToolRegistry>>,
+    policy: &Arc<PolicyEngine>,
+    memory: &Arc<MemoryManager>,
+    events: &Arc<EventStore>,
+    cancel: &CancellationToken,
+    prompt_override: Option<&str>,
+    verbose: bool,
+) -> Result<(usize, usize)> {
     use std::process::Command;
 
     #[derive(serde::Deserialize)]
@@ -7865,7 +7889,6 @@ async fn run_repo_fix_bench(
     let json = std::fs::read_to_string(manifest)
         .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", manifest.display()))?;
     let file: RepoFixFile = serde_json::from_str(&json)?;
-    info!("repo-fix bench: {} tasks", file.tasks.len());
 
     let run_verify = |verify_cmd: &str, wd: &std::path::Path| -> i32 {
         let mut parts = verify_cmd.split_whitespace();
@@ -7882,29 +7905,22 @@ async fn run_repo_fix_bench(
     let mut passed = 0usize;
     let mut ran = 0usize;
     for task in &file.tasks {
-        // 1. copy fixture into a fresh /tmp workdir (never mutate the source fixtures).
-        let workdir =
-            std::env::temp_dir().join(format!("px-repofix-{}-{}", task.id, std::process::id()));
+        let workdir = std::env::temp_dir().join(format!(
+            "px-repofix-{}-{}-{}",
+            task.id,
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
         let _ = std::fs::remove_dir_all(&workdir);
         copy_dir_recursive(std::path::Path::new(&task.setup), &workdir)?;
 
-        // 2. confirm the task starts RED (guards against trivially-passing fixtures).
         let pre = run_verify(&task.verify_cmd, &workdir);
         if pre == task.expect_exit {
-            warn!(
-                "repo-fix {}: fixture already passes (exit={}), skipping",
-                task.id, pre
-            );
             let _ = std::fs::remove_dir_all(&workdir);
             continue;
         }
         ran += 1;
 
-        // 3. run the agent inside the workdir.
-        // Kept minimal on purpose: the verbose 4-step "edit→test→iterate" workflow dropped
-        // pass@1 0.50→0.30 on qwen3:8b — a small model's instruction-following is limited and
-        // a multi-step procedure overwhelms it. One short line of guidance wins. (See
-        // docs/research/eval-trust.md.)
         let desc = format!(
             "{}\n\nThe files are in {}. Read the buggy file, make a minimal edit to fix it, \
              then finish.",
@@ -7912,53 +7928,51 @@ async fn run_repo_fix_bench(
             workdir.display()
         );
         let mut node = TaskNode::new(desc, TaskType::UserRequest, 100);
-        let react = ReactLoop::new(
-            Arc::clone(&ollama),
-            Arc::clone(&registry),
-            Arc::clone(&policy),
-            Arc::clone(&memory),
+        let mut react = ReactLoop::new(
+            Arc::clone(ollama),
+            Arc::clone(registry),
+            Arc::clone(policy),
+            Arc::clone(memory),
             cancel.clone(),
         )
-        .with_events(Arc::clone(&events))
+        .with_events(Arc::clone(events))
         .with_workspace_root(workdir.clone());
+        if let Some(p) = prompt_override {
+            react = react.with_prompt_override(p.to_string());
+        }
         let _ = react.run(&mut node).await;
 
-        // 4. re-verify: pass iff the repo's own test now meets expect_exit.
         let post = run_verify(&task.verify_cmd, &workdir);
         let ok = post == task.expect_exit;
         if ok {
             passed += 1;
         }
-        println!(
-            "repo-fix {:8} pre={} post={} -> {}",
-            task.id,
-            pre,
-            post,
-            if ok { "PASS" } else { "fail" }
-        );
-        // On failure, capture what the agent actually did (diff vs the original fixture)
-        // so the miss is diagnosable — same lesson as M0.2b answer persistence.
-        if !ok {
-            let diff = Command::new("diff")
-                .args(["-ru", &task.setup])
-                .arg(&workdir)
-                .output()
-                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-                .unwrap_or_default();
-            let shown: String = diff.chars().take(1500).collect();
+        if verbose {
             println!(
-                "  └─ agent diff for {} (empty = no edit made):\n{}",
+                "repo-fix {:8} pre={} post={} -> {}",
                 task.id,
-                if shown.trim().is_empty() {
-                    "    <none>".to_string()
-                } else {
-                    shown
-                }
+                pre,
+                post,
+                if ok { "PASS" } else { "fail" }
             );
         }
         let _ = std::fs::remove_dir_all(&workdir);
     }
+    Ok((passed, ran))
+}
 
+async fn run_repo_fix_bench(
+    ollama: Arc<ollama::OllamaClient>,
+    registry: Arc<std::sync::RwLock<ToolRegistry>>,
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    cancel: CancellationToken,
+) -> Result<()> {
+    let (passed, ran) = repo_fix_measure(
+        &ollama, &registry, &policy, &memory, &events, &cancel, None, true,
+    )
+    .await?;
     let p1 = if ran > 0 {
         passed as f64 / ran as f64
     } else {
@@ -7967,6 +7981,125 @@ async fn run_repo_fix_bench(
     println!("\n=== REPO-FIX BENCH ===\npass@1 = {p1:.3}  ({passed}/{ran} tasks)");
     info!("repo-fix bench complete: pass@1={p1:.3} ({passed}/{ran})");
     Ok(())
+}
+
+/// M4: self-improvement loop with an EMPIRICAL fitness gate. Unlike the legacy evolution
+/// loop (which accepted prompt changes on a compile + LLM-approval, never measuring whether
+/// they helped), this measures repo-fix pass@1 before AND after each candidate and accepts
+/// ONLY a change that beats the current best beyond the noise floor.
+async fn run_evolve_on_repofix(
+    ollama: Arc<ollama::OllamaClient>,
+    registry: Arc<std::sync::RwLock<ToolRegistry>>,
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    cancel: CancellationToken,
+    rounds: u32,
+) -> Result<()> {
+    // Repeats per measurement to average out the ±0.1 single-run variance.
+    const K: usize = 2;
+    // Minimum detectable effect: only accept improvements clearly above noise.
+    const MDE: f64 = 0.10;
+
+    let measure = |prompt: Option<String>| {
+        let (o, r, p, m, e, c) = (
+            Arc::clone(&ollama),
+            Arc::clone(&registry),
+            Arc::clone(&policy),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            cancel.clone(),
+        );
+        async move {
+            let mut tot_p = 0usize;
+            let mut tot_r = 0usize;
+            for _ in 0..K {
+                let (pa, ra) =
+                    repo_fix_measure(&o, &r, &p, &m, &e, &c, prompt.as_deref(), false).await?;
+                tot_p += pa;
+                tot_r += ra;
+            }
+            anyhow::Ok(if tot_r > 0 {
+                tot_p as f64 / tot_r as f64
+            } else {
+                0.0
+            })
+        }
+    };
+
+    println!("=== M4: evolve-on-repofix (empirical fitness gate, K={K} reps, MDE={MDE}) ===");
+    let baseline = measure(None).await?;
+    println!("round 0 (baseline default prompt): pass@1 = {baseline:.3}");
+    info!("M4: baseline pass@1={baseline:.3}");
+
+    let mut best = baseline;
+    let mut best_prompt: Option<String> = None;
+    let mut accepted = 0u32;
+
+    for round in 1..=rounds {
+        if cancel.is_cancelled() {
+            break;
+        }
+        let base_prompt = best_prompt
+            .clone()
+            .unwrap_or_else(|| agentd::react::default_system_prompt().to_string());
+        let candidate = match propose_repofix_prompt(&ollama, &base_prompt).await {
+            Ok(c) => c,
+            Err(e) => {
+                warn!("M4 round {round}: proposal failed: {e}");
+                continue;
+            }
+        };
+        let score = measure(Some(candidate.clone())).await?;
+        let accept = score >= best + MDE;
+        println!(
+            "round {round}: candidate pass@1 = {score:.3} (best {best:.3}, +MDE {:.3}) -> {}",
+            best + MDE,
+            if accept { "ACCEPT" } else { "reject" }
+        );
+        info!(
+            "M4 round {round}: candidate={score:.3} best={best:.3} accept={accept}"
+        );
+        if accept {
+            best = score;
+            best_prompt = Some(candidate);
+            accepted += 1;
+        }
+    }
+
+    println!(
+        "\n=== M4 CURVE === baseline {baseline:.3} -> best {best:.3} | {accepted}/{rounds} accepted"
+    );
+    println!(
+        "(An empirically-gated loop that accepts NOTHING is correct behavior when no candidate \
+         truly beats noise — unlike the legacy loop, it never accepts an unmeasured change.)"
+    );
+    info!("M4 done: baseline={baseline:.3} best={best:.3} accepted={accepted}/{rounds}");
+    Ok(())
+}
+
+/// Ask the model to propose an improved ReAct system prompt for the bug-fix task.
+async fn propose_repofix_prompt(
+    ollama: &Arc<ollama::OllamaClient>,
+    base_prompt: &str,
+) -> Result<String> {
+    let system = "You improve the SYSTEM PROMPT of a coding agent that fixes bugs in small \
+        repos on a weak local model. Output ONLY the new system prompt text — no preamble, no \
+        explanation, no markdown fences. Keep it concise (weak models follow short prompts \
+        better). Emphasize: read the file before editing; make ONE minimal edit; do not repeat \
+        the same action; finish once the edit is made.";
+    let prompt = format!(
+        "CURRENT SYSTEM PROMPT:\n{base_prompt}\n\nWrite an improved version. Output only the prompt:"
+    );
+    let resp = ollama
+        .generate(&prompt, Some(system), Some(ollama::ModelOptions::for_reflection()))
+        .await?;
+    let (_, text) = resp.split_thinking();
+    let text = text.trim().to_string();
+    if text.len() < 40 {
+        anyhow::bail!("proposed prompt too short ({} chars)", text.len());
+    }
+    Ok(text)
 }
 
 fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
