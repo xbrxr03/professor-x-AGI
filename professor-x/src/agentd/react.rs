@@ -272,34 +272,66 @@ impl ReactLoop {
         } else {
             trajectory.chars().take(2000).collect::<String>()
         };
-        let prompt = format!(
-            "You are a CRITIC reviewing another agent's work on this task.\n\n\
-             TASK: {}\n\nITS STEPS SO FAR:\n{}\n\n\
-             In 3-5 sentences: is it on track? Name any loop, repeated mistake, wrong \
-             assumption, or result it already has but hasn't used. Then state the single \
-             most useful NEXT action. Be concrete and blunt.",
+        // ARIS-style two-thread adversarial review (the `kill-argument` pattern): a DEFENSE
+        // steelmans that the work is correct/complete, then a PROSECUTION attacks that case
+        // and finds the fatal flaw. Two opposed perspectives surface loops, wrong assumptions,
+        // and gathered-but-unreported results that a single bland review misses.
+        let opts = || ModelOptions {
+            temperature: Some(0.3),
+            num_ctx: Some(8192),
+            top_p: None,
+            stop: None,
+            think: Some(false),
+        };
+
+        // Thread A — DEFENSE: the strongest good-faith case that it is on track / done.
+        let defense_prompt = format!(
+            "TASK: {}\n\nAGENT STEPS:\n{}\n\nIn 2-3 sentences, make the STRONGEST good-faith case \
+             that the agent is on track and the task is (or is about to be) correctly completed. \
+             Cite specific evidence from the steps.",
             task.description, trajectory
+        );
+        let defense = match self
+            .ollama
+            .generate(
+                &defense_prompt,
+                Some("You argue, in good faith, that an agent's work is correct and complete."),
+                Some(opts()),
+            )
+            .await
+        {
+            Ok(r) => r.split_thinking().1.trim().to_string(),
+            Err(e) => return Observation::err(&format!("critic unavailable: {e}")),
+        };
+
+        // Thread B — PROSECUTION: attack the defense; find the fatal flaw + the next action.
+        let attack_prompt = format!(
+            "TASK: {}\n\nAGENT STEPS:\n{}\n\nA defender argues:\n\"{}\"\n\nNow ATTACK that case. \
+             Give the single strongest reason it is WRONG, incomplete, looping, built on a wrong \
+             assumption, or has a result it already gathered but never reported. Be blunt and \
+             specific. End with exactly: NEXT ACTION: <the one most useful concrete next step>.",
+            task.description,
+            trajectory,
+            defense.chars().take(800).collect::<String>()
         );
         match self
             .ollama
             .generate(
-                &prompt,
-                Some("You are a sharp, concise critic of agent trajectories."),
-                Some(ModelOptions {
-                    temperature: Some(0.3),
-                    num_ctx: Some(8192),
-                    top_p: None,
-                    stop: None,
-                    think: Some(false),
-                }),
+                &attack_prompt,
+                Some("You are a ruthless adversarial reviewer who finds the fatal flaw in an agent's work."),
+                Some(opts()),
             )
             .await
         {
             Ok(resp) => {
-                let (_, text) = resp.split_thinking();
+                let (_, attack) = resp.split_thinking();
                 Observation {
                     success: true,
-                    output: format!("MIRROR CRITIC:\n{}", text.trim()),
+                    output: format!(
+                        "MIRROR CRITIC (adversarial):\nDEFENSE: {}\n\nPROSECUTION: {}",
+                        defense.chars().take(400).collect::<String>(),
+                        attack.trim()
+                    ),
                     error: None,
                     tokens_used: 0,
                     execution_ms: 0,
