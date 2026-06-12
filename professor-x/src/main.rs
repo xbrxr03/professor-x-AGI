@@ -7867,7 +7867,7 @@ async fn repo_fix_measure(
     cancel: &CancellationToken,
     prompt_override: Option<&str>,
     verbose: bool,
-) -> Result<(usize, usize)> {
+) -> Result<(usize, usize, Vec<(String, String, bool)>)> {
     use std::process::Command;
 
     #[derive(serde::Deserialize)]
@@ -7904,6 +7904,8 @@ async fn repo_fix_measure(
 
     let mut passed = 0usize;
     let mut ran = 0usize;
+    // Failure-aware evolution: (task_id, description, made_edit) for each failed task.
+    let mut failures: Vec<(String, String, bool)> = Vec::new();
     for task in &file.tasks {
         let workdir = std::env::temp_dir().join(format!(
             "px-repofix-{}-{}-{}",
@@ -7946,6 +7948,16 @@ async fn repo_fix_measure(
         let ok = post == task.expect_exit;
         if ok {
             passed += 1;
+        } else {
+            // Record HOW it failed so the proposer targets the real pattern (item 3).
+            // made_edit=false => "finished without editing" (the dominant measured failure).
+            let made_edit = std::process::Command::new("diff")
+                .args(["-rq", &task.setup])
+                .arg(&workdir)
+                .output()
+                .map(|o| !o.stdout.is_empty())
+                .unwrap_or(false);
+            failures.push((task.id.clone(), task.description.clone(), made_edit));
         }
         if verbose {
             println!(
@@ -7958,7 +7970,7 @@ async fn repo_fix_measure(
         }
         let _ = std::fs::remove_dir_all(&workdir);
     }
-    Ok((passed, ran))
+    Ok((passed, ran, failures))
 }
 
 async fn run_repo_fix_bench(
@@ -7969,7 +7981,7 @@ async fn run_repo_fix_bench(
     events: Arc<EventStore>,
     cancel: CancellationToken,
 ) -> Result<()> {
-    let (passed, ran) = repo_fix_measure(
+    let (passed, ran, _failures) = repo_fix_measure(
         &ollama, &registry, &policy, &memory, &events, &cancel, None, true,
     )
     .await?;
@@ -8013,24 +8025,54 @@ async fn run_evolve_on_repofix(
         async move {
             let mut tot_p = 0usize;
             let mut tot_r = 0usize;
+            let mut fails: std::collections::HashMap<String, (String, bool)> =
+                std::collections::HashMap::new();
             for _ in 0..K {
-                let (pa, ra) =
+                let (pa, ra, fl) =
                     repo_fix_measure(&o, &r, &p, &m, &e, &c, prompt.as_deref(), false).await?;
                 tot_p += pa;
                 tot_r += ra;
+                for (id, desc, made_edit) in fl {
+                    fails.insert(id, (desc, made_edit));
+                }
             }
-            anyhow::Ok(if tot_r > 0 {
+            let score = if tot_r > 0 {
                 tot_p as f64 / tot_r as f64
             } else {
                 0.0
-            })
+            };
+            anyhow::Ok((score, fails))
         }
     };
 
     println!("=== M4: evolve-on-repofix (empirical fitness gate, K={K} reps, MDE={MDE}) ===");
-    let baseline = measure(None).await?;
+    let (baseline, baseline_fails) = measure(None).await?;
     println!("round 0 (baseline default prompt): pass@1 = {baseline:.3}");
     info!("M4: baseline pass@1={baseline:.3}");
+
+    // Item 3 — automate the diagnose-loop: turn the actual baseline failures into a report
+    // the proposer must address, instead of blindly "improve the prompt".
+    let failure_report = if baseline_fails.is_empty() {
+        "No failures at baseline — propose a small robustness refinement.".to_string()
+    } else {
+        let mut lines: Vec<String> = baseline_fails
+            .iter()
+            .map(|(id, (desc, made_edit))| {
+                let mode = if *made_edit {
+                    "made a WRONG edit (file changed but test still red)"
+                } else {
+                    "FINISHED WITHOUT MAKING ANY EDIT"
+                };
+                format!(
+                    "- {id}: {} -> agent {mode}",
+                    desc.chars().take(80).collect::<String>()
+                )
+            })
+            .collect();
+        lines.sort();
+        lines.join("\n")
+    };
+    println!("baseline failure report:\n{failure_report}\n");
 
     let mut best = baseline;
     let mut best_prompt: Option<String> = None;
@@ -8043,14 +8085,15 @@ async fn run_evolve_on_repofix(
         let base_prompt = best_prompt
             .clone()
             .unwrap_or_else(|| agentd::react::default_system_prompt().to_string());
-        let candidate = match propose_repofix_prompt(&ollama, &base_prompt).await {
+        let candidate = match propose_repofix_prompt(&ollama, &base_prompt, &failure_report).await
+        {
             Ok(c) => c,
             Err(e) => {
                 warn!("M4 round {round}: proposal failed: {e}");
                 continue;
             }
         };
-        let score = measure(Some(candidate.clone())).await?;
+        let (score, _) = measure(Some(candidate.clone())).await?;
         let accept = score >= best + MDE;
         println!(
             "round {round}: candidate pass@1 = {score:.3} (best {best:.3}, +MDE {:.3}) -> {}",
@@ -8078,18 +8121,24 @@ async fn run_evolve_on_repofix(
     Ok(())
 }
 
-/// Ask the model to propose an improved ReAct system prompt for the bug-fix task.
+/// M4 item 3: failure-AWARE proposer. Shown the agent's ACTUAL failures (not asked to guess),
+/// it proposes a system prompt that targets those specific failure modes — automating the
+/// diagnose-from-trajectory loop that worked far better by hand than blind prompt mutation.
 async fn propose_repofix_prompt(
     ollama: &Arc<ollama::OllamaClient>,
     base_prompt: &str,
+    failure_report: &str,
 ) -> Result<String> {
     let system = "You improve the SYSTEM PROMPT of a coding agent that fixes bugs in small \
-        repos on a weak local model. Output ONLY the new system prompt text — no preamble, no \
-        explanation, no markdown fences. Keep it concise (weak models follow short prompts \
-        better). Emphasize: read the file before editing; make ONE minimal edit; do not repeat \
-        the same action; finish once the edit is made.";
+        repos on a weak local model. You are shown the agent's ACTUAL recent failures. Output \
+        ONLY the new system prompt text — no preamble, no markdown fences. Keep it concise \
+        (weak models follow short prompts better). Directly target the observed failure modes — \
+        e.g. if the agent finishes WITHOUT editing, the prompt must insist it applies an edit \
+        before finishing; if it loops on a repeated action, forbid repeating an action.";
     let prompt = format!(
-        "CURRENT SYSTEM PROMPT:\n{base_prompt}\n\nWrite an improved version. Output only the prompt:"
+        "CURRENT SYSTEM PROMPT:\n{base_prompt}\n\nTHE AGENT'S ACTUAL RECENT FAILURES:\n\
+         {failure_report}\n\nWrite an improved system prompt that fixes THESE specific failures. \
+         Output only the prompt:"
     );
     let resp = ollama
         .generate(&prompt, Some(system), Some(ollama::ModelOptions::for_reflection()))
