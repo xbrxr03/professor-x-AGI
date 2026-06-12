@@ -143,6 +143,9 @@ pub struct HiroAttemptResult {
     pub passed: bool,
     pub failure_reason: Option<String>,
     pub output_hash: String,
+    /// M0.2b: the agent's final answer text (truncated) on the final attempt, so the
+    /// judge's verdict can be independently audited. Empty for non-final attempts.
+    pub answer: String,
     pub duration_ms: u64,
 }
 
@@ -168,6 +171,8 @@ struct HiroAttemptArtifact {
     passed: bool,
     failure_reason: Option<String>,
     output_hash: String,
+    #[serde(default)]
+    answer: String,
     duration_ms: u64,
     harness_commit: String,
     recorded_at: DateTime<Utc>,
@@ -409,6 +414,7 @@ impl HiroRunner {
                         passed: false,
                         failure_reason: Some(e.to_string()),
                         output_hash: hash_output(&e.to_string()),
+                        answer: String::new(),
                         duration_ms: 0,
                     };
                     if let Err(record_err) =
@@ -770,12 +776,18 @@ impl HiroRunner {
                 failure_reason: Some("empty final answer (nothing to judge)".to_string()),
             };
         }
-        let system = "You are a strict grader for an AI agent benchmark. Given a TASK, \
-            its SUCCESS CRITERIA, and the agent's FINAL ANSWER, decide if the final answer \
-            satisfies the criteria. Respond with exactly one word on the first line: PASS or \
-            FAIL. Be strict: if the answer is missing required facts or is wrong, answer FAIL.";
+        // Calibrated 2026-06-11: the previous "be strict" prompt produced false
+        // negatives (failing answers that clearly met the criteria), dropping
+        // judge-vs-human agreement to 80%. Judge presence-of-facts, not phrasing.
+        let system = "You are grading an AI agent's FINAL ANSWER against SUCCESS CRITERIA. \
+            Judge ONLY whether the answer contains the facts the criteria require. PASS if \
+            those facts are present and consistent with the criteria — extra detail, \
+            different wording, or added explanation are all fine. FAIL only if a required \
+            fact is missing or clearly wrong, or the agent declined, hallucinated, or did \
+            not actually perform the task. If the required facts are present, you MUST \
+            answer PASS. Respond with exactly one word on the first line: PASS or FAIL.";
         let prompt = format!(
-            "TASK:\n{}\n\nSUCCESS CRITERIA:\n{}\n\nAGENT FINAL ANSWER:\n{}\n\nVerdict (PASS or FAIL):",
+            "TASK:\n{}\n\nSUCCESS CRITERIA:\n{}\n\nAGENT FINAL ANSWER:\n{}\n\nDoes the answer contain the required facts? Verdict (PASS or FAIL):",
             hiro_task.description, criteria, answer
         );
         match self.ollama.generate(&prompt, Some(system), None).await {
@@ -869,6 +881,7 @@ impl HiroRunner {
             passed: attempt.passed,
             failure_reason: attempt.failure_reason.clone(),
             output_hash: attempt.output_hash.clone(),
+            answer: attempt.answer.clone(),
             duration_ms: attempt.duration_ms,
             harness_commit: harness_commit.to_string(),
             recorded_at: Utc::now(),
@@ -1050,6 +1063,12 @@ fn summarize_attempts(
                 passed,
                 failure_reason,
                 output_hash: hash_output(&output),
+                // Persist the agent's final answer on the final attempt for judge audit.
+                answer: if attempt == attempts {
+                    final_answer(task).chars().take(4000).collect()
+                } else {
+                    String::new()
+                },
                 duration_ms: per_attempt_ms,
             }
         })

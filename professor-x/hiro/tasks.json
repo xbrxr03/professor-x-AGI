@@ -7,7 +7,13 @@
       "category": "tool_use",
       "description": "Read /etc/os-release AND run 'uname -r' via shell.restricted. Extract the VERSION_ID from os-release and the kernel version from uname. Determine: are they from the same Ubuntu release? Explain any mismatch.",
       "difficulty": "medium",
-      "success_criteria": "States the VERSION_ID from /etc/os-release AND the kernel version from `uname -r`, and concludes whether they are from the same Ubuntu release (or explains the mismatch)."
+      "success_criteria": "States the VERSION_ID from /etc/os-release AND the kernel version from `uname -r`, and concludes whether they are from the same Ubuntu release (or explains the mismatch).",
+      "expected": {
+        "contains_all": [
+          "24.04",
+          "6.17.0-29"
+        ]
+      }
     },
     {
       "id": "tu_002",
@@ -35,7 +41,17 @@
       "category": "tool_use",
       "description": "Run 'uname -a' and 'cat /proc/version' via shell.restricted. Extract the kernel version string from both outputs. Verify they match exactly. If they differ, explain why (e.g., build info vs release version). Report the exact version string from each source.",
       "difficulty": "medium",
-      "success_criteria": "Reports the kernel version string from both `uname -a` and /proc/version and states whether they match, explaining any build-info vs release difference."
+      "success_criteria": "Reports the kernel version string from both `uname -a` and /proc/version and states whether they match, explaining any build-info vs release difference.",
+      "expected": {
+        "contains_all": [
+          "6.17.0-29-generic"
+        ],
+        "contains_any": [
+          "match",
+          "same",
+          "identical"
+        ]
+      }
     },
     {
       "id": "tu_006",

@@ -59,7 +59,17 @@ metrics before. No new features until the scoreboard is honest.*
   **Done-when:** compiles + unit tests (stratified balance 3/3/3 not 9/0/0; ExpectedSpec
   pass/fail). **Result:** 267 tests pass; `--hiro-smoke` validates the 60-task file. **Hybrid
   judge design chosen by Abrar.**
-- [◐] **M0.2b Author ground truth + calibrate.** Authored a balanced calibration set —
+- [◐] **M0.2b STILL OPEN — LLM-judge deemed untrustworthy; pivoting to deterministic.**
+  Two calibration runs proved a qwen3:8b LLM-judge is unstable in BOTH directions: harsh
+  prompt → false negatives (80% agreement), lenient prompt → false positives crediting
+  wrong/hallucinated answers (60% agreement, inflated pass@3 to a *mirage* 0.733). See
+  `docs/research/eval-trust.md`. **Decision:** the trustworthy scoreboard becomes the
+  **M1 repo-fix benchmark (deterministic test pass/fail)**, which a lenient judge can't
+  inflate; HIRO LLM-judged tasks become a non-gating diagnostic. Tighten deterministic
+  specs (sc_002/tu_005 were brittle). **M2.1 didn't fire** (synthesizes only from
+  successful obs; thrash tasks have none) — real wall is failed-action recovery, not
+  post-hoc synthesis.
+- [◐] **M0.2b (original) Author ground truth + calibrate.** Authored a balanced calibration set —
   5 tool_use + 5 planning + 5 self_correction (15 tasks) in `hiro/tasks.json` (deterministic
   `expected` for the crisp self-correction fallbacks, `success_criteria` for env-dependent ones).
   **REMAINING:** run a balanced HIRO round (needs the local model, ~30–60 min), hand-label
@@ -68,18 +78,28 @@ metrics before. No new features until the scoreboard is honest.*
   **Blocked by:** M0.2a (done).
 
 ## M1 — Wire a real benchmark
-- [ ] **M1.1 Adopt a small REAL coding benchmark** runnable offline on the 3060: a curated
-  mini-SWE-bench / SWE-bench-Verified-Lite subset, or a handful of real GitHub-issue tasks
-  on a sample repo. Reference: `_refs/harnesses/SWE-agent`, augment-swebench-agent.
-  **Done-when:** an honest `pass@1` baseline is recorded (even if near-zero).
-  **Blocked by:** M0.2.
+- [x] **M1.1 Adopt a small REAL coding benchmark** runnable offline on the 3060.
+  **DONE:** `--repo-fix-bench` — deterministic, test-exit-code judged (ungameable), offline.
+  4 stdlib `check.py` fixtures (red→edit→green). `ReactLoop::with_workspace_root` scopes the
+  agent to a per-task /tmp workdir. **Baseline: `pass@1 = 0.75 (3/4)`** — a *trustworthy*
+  number (see eval-trust.md). This also resolves M0 in practice: deterministic grading is the
+  trustworthy scoreboard the LLM-judge could not be. Caught + fixed a pytest-missing benchmark
+  artifact first (the eval-trust discipline).
+  **Next for a fuller M1:** expand to ~10 fixtures + harder/multi-file bugs + Rust (`cargo test`).
 
 ## M2 — Make the core loop actually finish (the capability grind)
-- [ ] **M2.1 Drive reliability** using the built edit stack + failure taxonomy + remaining
+- [◐] **M2.1 Drive reliability** using the built edit stack + failure taxonomy + remaining
   loop fixes (thrash/forfeit, tool/backend stability). Relentless re-measure.
   **Done-when:** toy HIRO-null `pass@3 ≥ 0.8` with a *meaningful* `p_correct`; real
   benchmark first non-zero then climbing run-over-run.
   **Blocked by:** M1.1.
+  **Progress:** the calibration taxonomy showed the dominant failure (9/15) is
+  **action-loop thrash** ("duplicate action blocked" → forfeit), NOT bad edits. The old
+  forced-synthesis just *nudged* a stuck model and forfeited. Implemented (pending
+  measurement): `synthesize_final_answer` — at the synthesis checkpoint OR after 3
+  duplicate-blocks, directly call the model to produce the final answer from gathered
+  observations and `finish`, instead of nudging. Builds + 267 tests pass; needs an
+  A/B HIRO run to confirm it lifts pass@3.
 - [ ] **M2.2 Stranger task end-to-end.** A "fix this bug in this small repo" task completes,
   verified by its own tests, fully offline. **Done-when:** green tests, no network.
   **Blocked by:** M2.1.

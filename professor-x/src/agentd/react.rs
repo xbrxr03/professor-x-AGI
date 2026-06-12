@@ -96,6 +96,12 @@ pub struct ReactLoop {
     /// clamps the ceiling to N tokens per task. Lets `--memory-budget N`
     /// sweep T* without touching LCAP arm state.
     memory_budget_override: Option<u32>,
+    /// M1 repo-fix benchmark: override the agent's workspace root so it edits inside a
+    /// per-task /tmp workdir instead of the repo. `None` keeps the default workspace.
+    workspace_override: Option<std::path::PathBuf>,
+    /// M4 self-improvement: override the ReAct system prompt at runtime so the evolution
+    /// loop can A/B candidate prompts against the repo-fix benchmark without recompiling.
+    prompt_override: Option<String>,
     /// Stable identifier for this loop's affect session (one per ReactLoop instance).
     session_id: String,
     /// Running affect state (valence + arousal) updated after each task attempt.
@@ -156,6 +162,8 @@ impl ReactLoop {
             events: None,
             transcripts: None,
             memory_budget_override: None,
+            workspace_override: None,
+            prompt_override: None,
             affect: std::sync::Mutex::new(AffectState::neutral(session_id.clone(), 0)),
             fed_samples: std::sync::Mutex::new(Vec::new()),
             canvas: std::sync::Mutex::new(MermaidCanvas::default()),
@@ -170,6 +178,19 @@ impl ReactLoop {
                 .map(|v| v.to_lowercase() != "off")
                 .unwrap_or(true),
         }
+    }
+
+    /// M1: point the agent at a specific workspace root (e.g. a per-task /tmp workdir
+    /// for the repo-fix benchmark) instead of the default repo workspace.
+    pub fn with_workspace_root(mut self, root: std::path::PathBuf) -> Self {
+        self.workspace_override = Some(root);
+        self
+    }
+
+    /// M4: override the ReAct system prompt (for evolution-loop A/B against repo-fix).
+    pub fn with_prompt_override(mut self, prompt: String) -> Self {
+        self.prompt_override = Some(prompt);
+        self
     }
 
     /// Internal: build a sub-agent loop sharing this loop's resources, one level
@@ -251,34 +272,66 @@ impl ReactLoop {
         } else {
             trajectory.chars().take(2000).collect::<String>()
         };
-        let prompt = format!(
-            "You are a CRITIC reviewing another agent's work on this task.\n\n\
-             TASK: {}\n\nITS STEPS SO FAR:\n{}\n\n\
-             In 3-5 sentences: is it on track? Name any loop, repeated mistake, wrong \
-             assumption, or result it already has but hasn't used. Then state the single \
-             most useful NEXT action. Be concrete and blunt.",
+        // ARIS-style two-thread adversarial review (the `kill-argument` pattern): a DEFENSE
+        // steelmans that the work is correct/complete, then a PROSECUTION attacks that case
+        // and finds the fatal flaw. Two opposed perspectives surface loops, wrong assumptions,
+        // and gathered-but-unreported results that a single bland review misses.
+        let opts = || ModelOptions {
+            temperature: Some(0.3),
+            num_ctx: Some(8192),
+            top_p: None,
+            stop: None,
+            think: Some(false),
+        };
+
+        // Thread A — DEFENSE: the strongest good-faith case that it is on track / done.
+        let defense_prompt = format!(
+            "TASK: {}\n\nAGENT STEPS:\n{}\n\nIn 2-3 sentences, make the STRONGEST good-faith case \
+             that the agent is on track and the task is (or is about to be) correctly completed. \
+             Cite specific evidence from the steps.",
             task.description, trajectory
+        );
+        let defense = match self
+            .ollama
+            .generate(
+                &defense_prompt,
+                Some("You argue, in good faith, that an agent's work is correct and complete."),
+                Some(opts()),
+            )
+            .await
+        {
+            Ok(r) => r.split_thinking().1.trim().to_string(),
+            Err(e) => return Observation::err(&format!("critic unavailable: {e}")),
+        };
+
+        // Thread B — PROSECUTION: attack the defense; find the fatal flaw + the next action.
+        let attack_prompt = format!(
+            "TASK: {}\n\nAGENT STEPS:\n{}\n\nA defender argues:\n\"{}\"\n\nNow ATTACK that case. \
+             Give the single strongest reason it is WRONG, incomplete, looping, built on a wrong \
+             assumption, or has a result it already gathered but never reported. Be blunt and \
+             specific. End with exactly: NEXT ACTION: <the one most useful concrete next step>.",
+            task.description,
+            trajectory,
+            defense.chars().take(800).collect::<String>()
         );
         match self
             .ollama
             .generate(
-                &prompt,
-                Some("You are a sharp, concise critic of agent trajectories."),
-                Some(ModelOptions {
-                    temperature: Some(0.3),
-                    num_ctx: Some(8192),
-                    top_p: None,
-                    stop: None,
-                    think: Some(false),
-                }),
+                &attack_prompt,
+                Some("You are a ruthless adversarial reviewer who finds the fatal flaw in an agent's work."),
+                Some(opts()),
             )
             .await
         {
             Ok(resp) => {
-                let (_, text) = resp.split_thinking();
+                let (_, attack) = resp.split_thinking();
                 Observation {
                     success: true,
-                    output: format!("MIRROR CRITIC:\n{}", text.trim()),
+                    output: format!(
+                        "MIRROR CRITIC (adversarial):\nDEFENSE: {}\n\nPROSECUTION: {}",
+                        defense.chars().take(400).collect::<String>(),
+                        attack.trim()
+                    ),
                     error: None,
                     tokens_used: 0,
                     execution_ms: 0,
@@ -1050,6 +1103,46 @@ impl ReactLoop {
         }
     }
 
+    /// M2: force a final answer out of the observations already gathered, instead of
+    /// nudging a stuck model (which tends to keep thrashing until forfeit). Returns the
+    /// synthesized answer, or None if there's nothing to synthesize or the model judges
+    /// the evidence insufficient.
+    async fn synthesize_final_answer(
+        &self,
+        task: &TaskNode,
+        opts: &ModelOptions,
+    ) -> Option<String> {
+        let summary = successful_observation_summary(task, 8, 1400);
+        if summary.trim().is_empty() {
+            return None;
+        }
+        let system = "You are finishing a task. Using ONLY the observations already \
+            gathered below, write the final answer: concise, directly stating the facts \
+            the task asked for. Do not propose any more tool calls. If the observations \
+            are genuinely insufficient to answer, reply with exactly the single word \
+            INSUFFICIENT.";
+        let prompt = format!(
+            "TASK:\n{}\n\nOBSERVATIONS GATHERED:\n{}\n\nFINAL ANSWER:",
+            task.description, summary
+        );
+        match self
+            .ollama
+            .generate(&prompt, Some(system), Some(opts.clone()))
+            .await
+        {
+            Ok(resp) => {
+                let (_, ans) = resp.split_thinking();
+                let ans = ans.trim();
+                if ans.is_empty() || ans.to_uppercase().contains("INSUFFICIENT") {
+                    None
+                } else {
+                    Some(ans.chars().take(4000).collect())
+                }
+            }
+            Err(_) => None,
+        }
+    }
+
     /// Run one attempt. Returns Ok(true) on success, Ok(false) on failure.
     async fn run_attempt(
         &self,
@@ -1061,7 +1154,12 @@ impl ReactLoop {
         const MAX_STEPS: usize = 20;
         const SYNTHESIS_CHECKPOINT_STEP: usize = 14;
         const FORFEIT_AFTER_SYNTHESIS_STEP: usize = 18;
-        let scope = PermissionScope::default_autonomous();
+        let scope = match &self.workspace_override {
+            Some(root) => {
+                PermissionScope::default_autonomous().with_workspace_root(root.clone())
+            }
+            None => PermissionScope::default_autonomous(),
+        };
         let executor = ToolExecutor::new(Arc::clone(&self.registry))
             .with_workspace_root(scope.workspace_root.clone())
             .with_memory(Arc::clone(&self.memory))
@@ -1081,6 +1179,12 @@ impl ReactLoop {
         let mut escalated = false;
         let auto_repair_on = auto_repair_enabled_from_env();
         let mut synthesis_forced = false;
+        // M2: count exact-duplicate-action blocks; thrashing on duplicates triggers an
+        // early forced synthesis instead of burning steps until the forfeit guard fires.
+        let mut duplicate_blocks: u32 = 0;
+        // Consecutive duplicates (reset on any real progress) drive the temperature
+        // escalation that breaks the greedy regenerate-the-same-stuck-action loop.
+        let mut consecutive_duplicates: u32 = 0;
 
         // LCAP: apply context budget
         let mut react_opts = ModelOptions::for_react();
@@ -1106,8 +1210,43 @@ impl ReactLoop {
                 return Ok(false);
             }
 
-            if should_force_synthesis(step_idx, synthesis_forced, SYNTHESIS_CHECKPOINT_STEP) {
+            if should_force_synthesis(step_idx, synthesis_forced, SYNTHESIS_CHECKPOINT_STEP)
+                || (!synthesis_forced && duplicate_blocks >= 3)
+            {
                 synthesis_forced = true;
+                // M2: directly synthesize the final answer from the gathered observations
+                // and finish, rather than nudging a stuck model into more thrash → forfeit.
+                if let Some(answer) = self.synthesize_final_answer(task, &react_opts).await {
+                    task.steps.push(ExecutionStep {
+                        index: (task.steps.len() + 1) as u32,
+                        thought: "loop guard: synthesizing final answer from gathered observations"
+                            .to_string(),
+                        action: Action {
+                            tool_name: "finish".to_string(),
+                            params: json!({ "answer": answer }),
+                            risk_score: 0,
+                        },
+                        observation: Observation {
+                            success: true,
+                            output: answer,
+                            error: None,
+                            tokens_used: 0,
+                            execution_ms: 0,
+                            artifacts: Vec::new(),
+                        },
+                        timestamp: Utc::now(),
+                    });
+                    let _ = TaskRunStore::new(Arc::clone(&self.memory.db)).step_recorded(task);
+                    self.emit_event(
+                        Some(session_id),
+                        Some(task.id),
+                        "react.synthesis_finish",
+                        "forced synthesis produced a final answer",
+                        json!({"step": step_idx + 1, "trigger": if duplicate_blocks >= 3 { "duplicates" } else { "checkpoint" }}),
+                    );
+                    return Ok(true);
+                }
+                // Fallback: nudge (old behavior) if nothing could be synthesized yet.
                 let guidance = synthesis_guidance(task);
                 self.emit_event(
                     Some(session_id),
@@ -1135,10 +1274,27 @@ impl ReactLoop {
             // Build the full prompt for this step
             let prompt = self.build_step_prompt(task, ice_examples, cognition_context);
 
+            // M2: a duplicate-blocked action means the model is stuck regenerating the same
+            // step at low temperature (greedy loop) — the real repo-fix failure mode (it
+            // re-runs fs.list forever and never reaches read→edit). Escalate temperature on
+            // the retry to break determinism so it tries a genuinely different action.
+            let mut step_opts = react_opts.clone();
+            if consecutive_duplicates > 0 {
+                // Aggressive: jump to high temperature immediately so the greedy loop breaks
+                // on the very next step rather than grinding through several duplicates.
+                let t = (0.9 + 0.2 * consecutive_duplicates as f32).min(1.3);
+                step_opts.temperature = Some(t);
+                step_opts.top_p = Some(0.98);
+            }
+
             // Ask the model for the next Thought + Action
             let resp = self
                 .ollama
-                .generate(&prompt, Some(SYSTEM_PROMPT), Some(react_opts.clone()))
+                .generate(
+                    &prompt,
+                    Some(self.prompt_override.as_deref().unwrap_or(SYSTEM_PROMPT)),
+                    Some(step_opts),
+                )
                 .await?;
 
             let (_, answer) = resp.split_thinking();
@@ -1367,12 +1523,29 @@ impl ReactLoop {
                         } else {
                             format!("(it failed: {})", prior.observation.error.as_deref().unwrap_or("unknown"))
                         };
-                        let nudge = format!(
-                            "DUPLICATE ACTION — you already ran `{}` with these exact inputs. \
-                             Its result was:\n{}\n\nDo NOT run it again. Use this result to make \
-                             progress, or take a DIFFERENT action. If the task is complete, call finish.",
-                            parsed.tool_name, prior_out
-                        );
+                        // Escalate the nudge once the model is visibly stuck (2nd+ consecutive
+                        // duplicate): name the concrete next action instead of a soft "do
+                        // something different" that weak models ignore.
+                        let nudge = if consecutive_duplicates >= 1 {
+                            format!(
+                                "STOP — you have now repeated `{}` {} times and it is BLOCKED. You \
+                                 ALREADY have its result:\n{}\n\nYou are stuck in a loop. Your next \
+                                 action MUST be different: if you have not yet read the target file, \
+                                 use `fs.read` or `fs.window_open` on it; once you have read it, make \
+                                 the fix with `fs.hash_edit` or `fs.write`. Do NOT call `{}` again.",
+                                parsed.tool_name,
+                                consecutive_duplicates + 1,
+                                prior_out,
+                                parsed.tool_name
+                            )
+                        } else {
+                            format!(
+                                "DUPLICATE ACTION — you already ran `{}` with these exact inputs. \
+                                 Its result was:\n{}\n\nDo NOT run it again. Use this result to make \
+                                 progress, or take a DIFFERENT action. If the task is complete, call finish.",
+                                parsed.tool_name, prior_out
+                            )
+                        };
                         self.emit_event(
                             Some(session_id),
                             Some(task.id),
@@ -1399,6 +1572,8 @@ impl ReactLoop {
                             timestamp: Utc::now(),
                         };
                         task.steps.push(step);
+                        duplicate_blocks += 1;
+                        consecutive_duplicates += 1;
                         continue;
                     }
 
@@ -1478,6 +1653,8 @@ impl ReactLoop {
                                 }),
                             );
                             let obs = executor.execute(&action).await;
+                            // A real (non-duplicate) tool ran — the greedy-loop streak is broken.
+                            consecutive_duplicates = 0;
                             let exec_reason = if obs.success {
                                 consecutive_failures = 0;
                                 "executed"
@@ -2540,6 +2717,12 @@ fn arm_for_ctx(num_ctx: u32) -> crate::evolved::lcap::BudgetArm {
 }
 
 // ── Prompts ───────────────────────────────────────────────────────────────────
+
+/// M4: the default ReAct system prompt, exposed so the evolution loop can propose and
+/// A/B candidate variants against the repo-fix benchmark.
+pub fn default_system_prompt() -> &'static str {
+    SYSTEM_PROMPT
+}
 
 const SYSTEM_PROMPT: &str = "\
 You are Professor X — an autonomous AI research agent running on consumer hardware. \
