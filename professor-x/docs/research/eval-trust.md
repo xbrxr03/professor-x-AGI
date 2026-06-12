@@ -349,3 +349,14 @@ CODE-level* fixes (temp escalation, forgiving hash-edit) — which the autonomou
 project is **automating trajectory-diagnosis to drive CODE proposals**, with a stronger proposer
 than an 8B, behind the same empirical gate. The `--evolve-skill-on-repofix` path is built and
 gated identically; it would show the same proposer ceiling, so it was not separately burned in.
+
+---
+
+## M2 depth — harder 14-task benchmark: pass@1 = 0.714 (10/14)
+
+Added 4 harder fixtures (multi-file, edge-cases, find-the-bug), all validated red→green and
+confirmed working in the real runner. Result: **0.714 (10/14)** — the ~0.7–0.85 range holds as
+the benchmark got harder (not trivial-task overfitting). New fixtures: fix_011 multi-file ✅,
+fix_013 empty-input edge case ✅, fix_012 all-negative init ✗, fix_014 find-the-bug-among-four ✗.
+Persistent misses (fix_002 off-by-one, fix_009 multi-file slugify) are the same stochastic /
+malformed-edit cases. The benchmark is now a more representative, harder-to-game scoreboard.

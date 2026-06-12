@@ -41,8 +41,11 @@ repo-fix fix_007  pre=1 post=0 -> PASS     # wrong recursion base case
 repo-fix fix_008  pre=1 post=0 -> PASS     # and/or boolean bug
 repo-fix fix_010  pre=1 post=0 -> PASS     # accumulator overwrote instead of +=
 ...
-pass@1 = 0.700  (7/10 tasks)               # ranges 0.7–0.9 run-to-run; ~0.85 mean
+pass@1 = 0.714  (10/14 tasks)              # 14 tasks incl. harder multi-file/edge-case/find-the-bug
 ```
+On the easier 10-task subset the agent runs ~0.7–0.9 (≈0.85 mean); on the full 14-task set
+(with the harder fixtures) ~0.71. The range holds as the benchmark gets harder — it's not
+trivial-task overfitting.
 
 **Self-improvement with an empirical gate.** Professor X can try to improve its own harness and
 keep a change *only if it measurably beats baseline beyond noise* — unlike tools that accept
