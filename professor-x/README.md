@@ -30,6 +30,20 @@ PROFESSOR_X_DATA_DIR=$HOME/.professor-x ./target/release/professor-x \
     --repo-fix-bench --model qwen3:8b-q4_K_M
 ```
 
+What you'll see (actual run, qwen3:8b) — each task starts **red** (`pre=1`) and the agent must
+make it **green** (`post=0`):
+```text
+repo-fix fix_001  pre=1 post=0 -> PASS     # returned a-b instead of a+b
+repo-fix fix_002  pre=1 post=0 -> PASS     # off-by-one xs[len(xs)]
+repo-fix fix_003  pre=1 post=0 -> PASS     # missing return
+repo-fix fix_006  pre=1 post=0 -> PASS     # filtered odds instead of evens
+repo-fix fix_007  pre=1 post=0 -> PASS     # wrong recursion base case
+repo-fix fix_008  pre=1 post=0 -> PASS     # and/or boolean bug
+repo-fix fix_010  pre=1 post=0 -> PASS     # accumulator overwrote instead of +=
+...
+pass@1 = 0.700  (7/10 tasks)               # ranges 0.7–0.9 run-to-run; ~0.85 mean
+```
+
 **Self-improvement with an empirical gate.** Professor X can try to improve its own harness and
 keep a change *only if it measurably beats baseline beyond noise* — unlike tools that accept
 changes on an LLM's say-so and drift:
