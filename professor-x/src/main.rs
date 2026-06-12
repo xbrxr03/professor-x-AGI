@@ -217,6 +217,7 @@ struct CliArgs {
     /// Override the local generation model (any Ollama model). Default: the
     /// largest model you have installed (VRAM-aware by proxy), else qwen3:8b.
     model: Option<String>,
+    proposer_model: Option<String>,
     /// Launch the interactive full-screen TUI cockpit.
     tui: bool,
     /// Launch the local web UI server (http://127.0.0.1:8787).
@@ -365,6 +366,7 @@ where
         run_self_tests: None,
         generate_curriculum: None,
         model: None,
+        proposer_model: None,
         tui: false,
         serve: false,
         validate_artifacts: false,
@@ -387,6 +389,10 @@ where
             "--run-now" => {
                 cli.run_now = true;
                 i += 1;
+            }
+            "--proposer-model" if i + 1 < args.len() => {
+                cli.proposer_model = Some(args[i + 1].clone());
+                i += 2;
             }
             "--model" if i + 1 < args.len() => {
                 cli.model = Some(args[i + 1].clone());
@@ -1684,30 +1690,43 @@ async fn main() -> Result<()> {
         .await;
     }
 
-    if let Some(rounds) = cli.evolve_on_repofix {
-        return run_evolve_on_repofix(
-            Arc::clone(&ollama),
-            Arc::clone(&registry),
-            Arc::clone(&policy),
-            Arc::clone(&memory),
-            Arc::clone(&events),
-            cancel,
-            rounds,
-        )
-        .await;
-    }
-
-    if let Some(rounds) = cli.evolve_skill_on_repofix {
-        return run_evolve_skill_on_repofix(
-            Arc::clone(&ollama),
-            Arc::clone(&registry),
-            Arc::clone(&policy),
-            Arc::clone(&memory),
-            Arc::clone(&events),
-            cancel,
-            rounds,
-        )
-        .await;
+    if cli.evolve_on_repofix.is_some() || cli.evolve_skill_on_repofix.is_some() {
+        // M4 frontier: the PROPOSER may be a stronger (local) model than the agent's, so a
+        // capable model authors candidate changes while the small model runs the tasks.
+        // Defaults to the agent's own model when --proposer-model is not given.
+        let proposer: Arc<ollama::OllamaClient> = match cli.proposer_model.clone() {
+            Some(m) => {
+                info!("M4: using stronger proposer model '{m}'");
+                Arc::new(ollama::OllamaClient::new("http://localhost:11434").with_model(m))
+            }
+            None => Arc::clone(&ollama),
+        };
+        if let Some(rounds) = cli.evolve_on_repofix {
+            return run_evolve_on_repofix(
+                Arc::clone(&ollama),
+                Arc::clone(&registry),
+                Arc::clone(&policy),
+                Arc::clone(&memory),
+                Arc::clone(&events),
+                cancel,
+                rounds,
+                proposer,
+            )
+            .await;
+        }
+        if let Some(rounds) = cli.evolve_skill_on_repofix {
+            return run_evolve_skill_on_repofix(
+                Arc::clone(&ollama),
+                Arc::clone(&registry),
+                Arc::clone(&policy),
+                Arc::clone(&memory),
+                Arc::clone(&events),
+                cancel,
+                rounds,
+                proposer,
+            )
+            .await;
+        }
     }
 
     if cli.lab {
@@ -8018,6 +8037,7 @@ async fn run_repo_fix_bench(
 /// loop (which accepted prompt changes on a compile + LLM-approval, never measuring whether
 /// they helped), this measures repo-fix pass@1 before AND after each candidate and accepts
 /// ONLY a change that beats the current best beyond the noise floor.
+#[allow(clippy::too_many_arguments)]
 async fn run_evolve_on_repofix(
     ollama: Arc<ollama::OllamaClient>,
     registry: Arc<std::sync::RwLock<ToolRegistry>>,
@@ -8026,6 +8046,7 @@ async fn run_evolve_on_repofix(
     events: Arc<EventStore>,
     cancel: CancellationToken,
     rounds: u32,
+    proposer: Arc<ollama::OllamaClient>,
 ) -> Result<()> {
     // Repeats per measurement to average out the ±0.1 single-run variance.
     const K: usize = 2;
@@ -8104,7 +8125,7 @@ async fn run_evolve_on_repofix(
         let base_prompt = best_prompt
             .clone()
             .unwrap_or_else(|| agentd::react::default_system_prompt().to_string());
-        let candidate = match propose_repofix_prompt(&ollama, &base_prompt, &failure_report).await
+        let candidate = match propose_repofix_prompt(&proposer, &base_prompt, &failure_report).await
         {
             Ok(c) => c,
             Err(e) => {
@@ -8174,6 +8195,7 @@ async fn propose_repofix_prompt(
 /// ephemeral system prompt. Evolves `skills/conductor/px-fix-bug.md`: inject it over the
 /// default prompt, propose a failure-targeted improvement, measure pass@1, and PERSIST the
 /// skill file only if it measurably helps. Self-improvement of knowledge, empirically gated.
+#[allow(clippy::too_many_arguments)]
 async fn run_evolve_skill_on_repofix(
     ollama: Arc<ollama::OllamaClient>,
     registry: Arc<std::sync::RwLock<ToolRegistry>>,
@@ -8182,6 +8204,7 @@ async fn run_evolve_skill_on_repofix(
     events: Arc<EventStore>,
     cancel: CancellationToken,
     rounds: u32,
+    proposer: Arc<ollama::OllamaClient>,
 ) -> Result<()> {
     const K: usize = 2;
     const MDE: f64 = 0.10;
@@ -8256,7 +8279,7 @@ async fn run_evolve_skill_on_repofix(
         if cancel.is_cancelled() {
             break;
         }
-        let candidate = match propose_repofix_skill(&ollama, &best_skill, &failure_report).await {
+        let candidate = match propose_repofix_skill(&proposer, &best_skill, &failure_report).await {
             Ok(c) => c,
             Err(e) => {
                 warn!("M4 skill round {round}: proposal failed: {e}");
