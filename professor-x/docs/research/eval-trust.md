@@ -325,3 +325,27 @@ diagnose-from-trajectory loop (0.50→0.77) is far stronger than blind LLM promp
 is where evolution should focus. (2) Ollama hiccuped mid-run; candidate scores may be slightly
 depressed by infra noise (doesn't change the reject decisions). Baseline 0.85 also confirms the
 M2 fixes compounded (temp-escalation + forgiving hash_edit).
+
+---
+
+## M4 finding (3 runs): the gate works; the local-8B PROPOSER is the ceiling
+
+| run | proposer | candidates | accepted |
+|---|---|---|---|
+| blind prompt | "improve this prompt" | 0.70, 0.65 | 0/2 |
+| failure-aware prompt | shown the real failures | 0.70, 0.75 | 0/2 |
+
+Failure-awareness (item 3) demonstrably works — it captured the real failures (e.g. "agent made
+a WRONG edit, file changed but test still red") and fed them to the proposer, which produced
+LESS-bad proposals (0.75 vs blind's 0.65). But none beat the ~0.80 baseline, so the empirical
+gate correctly rejected all of them.
+
+**Honest conclusion.** The empirical fitness gate is sound (it never accepts a non-improvement —
+strictly better than the legacy loop / ARIS meta-optimize, which accept on LLM-approval). But a
+weak local 8B cannot be its own effective harness-improver via prompt/skill mutation, even shown
+exactly what's failing. The lever that actually moved 0.50→0.85 was *trajectory-diagnosed,
+CODE-level* fixes (temp escalation, forgiving hash-edit) — which the autonomous loop can't apply
+(code = human-approval) and a weak 8B can't author. So the real self-improvement engine for this
+project is **automating trajectory-diagnosis to drive CODE proposals**, with a stronger proposer
+than an 8B, behind the same empirical gate. The `--evolve-skill-on-repofix` path is built and
+gated identically; it would show the same proposer ceiling, so it was not separately burned in.
