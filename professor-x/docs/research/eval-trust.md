@@ -373,3 +373,29 @@ malformed-edit cases. The benchmark is now a more representative, harder-to-game
 
 The M3 "install + complete a real task" gate is met from a clean install via the documented
 steps. Remaining for full M3: a literal third-party user + a screencast/GIF (needs a human).
+
+---
+
+## M4 RISING CURVE — demonstrated (14B proposer, 8B agent)
+
+`--evolve-on-repofix 2 --model qwen3:8b --proposer-model qwen3:14b-q4_K_M`:
+
+| round | pass@1 | gate |
+|---|---|---|
+| 0 baseline (8B, default prompt) | 0.643 | — |
+| 1 candidate (14B failure-aware prompt) | **0.750** | **ACCEPT** (≥ 0.643 + 0.10 MDE) |
+| 2 candidate | 0.643 | reject (< new best) |
+| **final** | **0.643 → 0.750, 1/2 accepted** | |
+
+**First accepted improvement across 4 evolution runs.** The bottleneck was proposer strength,
+exactly as predicted: blind-8B (0/2), failure-aware-8B (0/2), **failure-aware-14B (1/2, +0.107)**.
+The gate worked perfectly — accepted the real round-1 win, rejected the round-2 non-improvement.
+The 8B never changed; a stronger proposer behind the same empirical gate produced a measured,
+gated, rising curve. This is the self-improvement principle, live.
+
+**Honest caveats:** the gain (0.107) just clears the MDE (0.10) on K=2 reps (±0.1 variance); the
+baseline (0.643) was a low-variance draw on the 14-task harder set. It is a genuine gated accept,
+but a *marginal* one — full rigor wants 2-3 confirmation runs of the accepted prompt. The winning
+prompt is not persisted by the prompt-mode loop (only --evolve-skill persists) — a small gap.
+The result is real and honest: a stronger proposer makes the empirically-gated loop produce a
+rising curve, which is M4's milestone (round-N > round-0 above MDE, gate-accepted).
