@@ -137,6 +137,8 @@ struct CliArgs {
     repo_fix_bench: bool,
     evolve_on_repofix: Option<u32>,
     evolve_skill_on_repofix: Option<u32>,
+    evolve_code_on_repofix: Option<u32>,
+    evolve_code_target: Option<String>,
     /// Run deterministic local coding-agent edit/verify smoke and exit.
     coding_smoke: bool,
     /// Run a first-class bounded local coding-agent session and exit.
@@ -328,6 +330,8 @@ where
         repo_fix_bench: false,
         evolve_on_repofix: None,
         evolve_skill_on_repofix: None,
+        evolve_code_on_repofix: None,
+        evolve_code_target: None,
         coding_smoke: false,
         coding_session: false,
         coding_session_live: false,
@@ -621,6 +625,14 @@ where
             }
             "--evolve-skill-on-repofix" if i + 1 < args.len() => {
                 cli.evolve_skill_on_repofix = args[i + 1].parse::<u32>().ok();
+                i += 2;
+            }
+            "--evolve-code-on-repofix" if i + 1 < args.len() => {
+                cli.evolve_code_on_repofix = args[i + 1].parse::<u32>().ok();
+                i += 2;
+            }
+            "--evolve-code-target" if i + 1 < args.len() => {
+                cli.evolve_code_target = Some(args[i + 1].clone());
                 i += 2;
             }
             "--coding-smoke" => {
@@ -1690,7 +1702,10 @@ async fn main() -> Result<()> {
         .await;
     }
 
-    if cli.evolve_on_repofix.is_some() || cli.evolve_skill_on_repofix.is_some() {
+    if cli.evolve_on_repofix.is_some()
+        || cli.evolve_skill_on_repofix.is_some()
+        || cli.evolve_code_on_repofix.is_some()
+    {
         // M4 frontier: the PROPOSER may be a stronger (local) model than the agent's, so a
         // capable model authors candidate changes while the small model runs the tasks.
         // Defaults to the agent's own model when --proposer-model is not given.
@@ -1724,6 +1739,24 @@ async fn main() -> Result<()> {
                 cancel,
                 rounds,
                 proposer,
+            )
+            .await;
+        }
+        if let Some(rounds) = cli.evolve_code_on_repofix {
+            let target = cli
+                .evolve_code_target
+                .clone()
+                .unwrap_or_else(|| "src/toolbridge/hashedit.rs".to_string());
+            return run_evolve_code_on_repofix(
+                Arc::clone(&ollama),
+                Arc::clone(&registry),
+                Arc::clone(&policy),
+                Arc::clone(&memory),
+                Arc::clone(&events),
+                cancel,
+                rounds,
+                proposer,
+                target,
             )
             .await;
         }
@@ -8310,6 +8343,201 @@ async fn run_evolve_skill_on_repofix(
     );
     info!("M4 skill done: baseline={baseline:.3} best={best:.3} accepted={accepted}/{rounds}");
     Ok(())
+}
+
+/// M4 code-proposer frontier: AUTONOMOUS code self-improvement (no human in the loop, per Abrar).
+/// A code-specialized local model authors a diff scoped to ONE component file; the
+/// default-deny safety guard + a worktree gate (build + full test + measured repo-fix delta)
+/// decide acceptance; an accepted change auto-commits. See docs/research/m4-code-proposer-scoping.md.
+#[allow(clippy::too_many_arguments)]
+async fn run_evolve_code_on_repofix(
+    ollama: Arc<ollama::OllamaClient>,
+    registry: Arc<std::sync::RwLock<ToolRegistry>>,
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    cancel: CancellationToken,
+    rounds: u32,
+    proposer: Arc<ollama::OllamaClient>,
+    target: String,
+) -> Result<()> {
+    use evolved::code_safety::check_diff_safety;
+    const K: usize = 1; // gate reps (>=2 for rigor; 1 keeps the first run feasible ~per-candidate)
+
+    let repo_root = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| std::path::PathBuf::from(s.trim()))
+        .ok_or_else(|| anyhow::anyhow!("not in a git repo"))?;
+    let crate_dir = repo_root.join("professor-x");
+    let target_abs = crate_dir.join(&target);
+    let original = std::fs::read_to_string(&target_abs)
+        .map_err(|e| anyhow::anyhow!("cannot read target {}: {e}", target_abs.display()))?;
+    let allowed: Vec<String> = vec![format!("professor-x/{target}")];
+
+    println!("=== M4: evolve-CODE-on-repofix (AUTONOMOUS, target={target}, proposer={}) ===",
+             proposer.model());
+
+    // Baseline with the CURRENT (already-built) binary.
+    let (bp, br, fails) =
+        repo_fix_measure(&ollama, &registry, &policy, &memory, &events, &cancel, None, false).await?;
+    let baseline = if br > 0 { bp as f64 / br as f64 } else { 0.0 };
+    println!("round 0 baseline pass@1 = {baseline:.3}");
+    let failure_report = if fails.is_empty() {
+        "No failures.".to_string()
+    } else {
+        fails.iter().map(|(id, d, me)| {
+            format!("- {id}: {} -> {}", d.chars().take(70).collect::<String>(),
+                    if *me {"WRONG edit"} else {"NO edit"})
+        }).collect::<Vec<_>>().join("\n")
+    };
+
+    let mut best = baseline;
+    let mut accepted = 0u32;
+    for round in 1..=rounds {
+        if cancel.is_cancelled() { break; }
+        println!("\n--- round {round}: proposing a code diff for {target} ---");
+        let diff = match propose_code_diff(&proposer, &target, &original, &failure_report).await {
+            Ok(d) => d,
+            Err(e) => { warn!("propose failed: {e}"); continue; }
+        };
+        // STRUCTURAL SAFETY (no human approval — this is the gate)
+        if let Err(reason) = check_diff_safety(&diff, &allowed.iter().map(|s| s.as_str()).collect::<Vec<_>>()) {
+            println!("  SAFETY REJECT: {reason}");
+            continue;
+        }
+        println!("  safety OK; verifying in sandbox worktree (build + full test + bench)…");
+        match gate_code_candidate(&repo_root, &diff, K, &ollama, &registry, &policy, &memory, &events, &cancel).await {
+            Ok(Some(score)) => {
+                let accept = score >= best + 0.10;
+                println!("  candidate pass@1 = {score:.3} (best {best:.3}) -> {}",
+                         if accept {"ACCEPT"} else {"reject"});
+                if accept {
+                    // AUTONOMOUS apply to the working tree + commit.
+                    let tmp = std::env::temp_dir().join(format!("px-codeevolve-{}.diff", uuid::Uuid::new_v4()));
+                    std::fs::write(&tmp, &diff)?;
+                    let ap = std::process::Command::new("git").args(["apply"]).arg(&tmp)
+                        .current_dir(&repo_root).status();
+                    let _ = std::fs::remove_file(&tmp);
+                    if ap.map(|s| s.success()).unwrap_or(false) {
+                        let _ = std::process::Command::new("git")
+                            .args(["commit", "-am", &format!("M4 autonomous: code-proposer lifted repo-fix {best:.3}->{score:.3} ({target})")])
+                            .current_dir(&repo_root).status();
+                        println!("  APPLIED + committed autonomously.");
+                        best = score; accepted += 1;
+                    } else {
+                        println!("  (apply to working tree failed — left unchanged)");
+                    }
+                }
+            }
+            Ok(None) => println!("  candidate REJECTED by gate (build/test failed)"),
+            Err(e) => warn!("gate error: {e}"),
+        }
+    }
+    println!("\n=== M4 CODE CURVE === baseline {baseline:.3} -> best {best:.3} | {accepted}/{rounds} accepted");
+    Ok(())
+}
+
+/// Apply a diff in an isolated git worktree, build + run the FULL test suite, then measure
+/// repo-fix pass@1 with the candidate binary. Returns Some(pass@1) if it builds+tests; None if not.
+#[allow(clippy::too_many_arguments)]
+async fn gate_code_candidate(
+    repo_root: &std::path::Path,
+    diff: &str,
+    k: usize,
+    ollama: &Arc<ollama::OllamaClient>,
+    registry: &Arc<std::sync::RwLock<ToolRegistry>>,
+    policy: &Arc<PolicyEngine>,
+    memory: &Arc<MemoryManager>,
+    events: &Arc<EventStore>,
+    cancel: &CancellationToken,
+) -> Result<Option<f64>> {
+    use std::process::Command;
+    let wt = std::env::temp_dir().join(format!("px-codeevolve-wt-{}", uuid::Uuid::new_v4()));
+    let run = || -> Result<Option<f64>> {
+        // worktree at HEAD
+        if !Command::new("git").args(["worktree", "add", "--detach"]).arg(&wt).arg("HEAD")
+            .current_dir(repo_root).status()?.success() {
+            anyhow::bail!("worktree add failed");
+        }
+        // apply diff
+        let tmp = wt.join("..").join(format!("px-cand-{}.diff", uuid::Uuid::new_v4()));
+        std::fs::write(&tmp, diff)?;
+        let applied = Command::new("git").args(["apply"]).arg(&tmp).current_dir(&wt).status()?.success();
+        let _ = std::fs::remove_file(&tmp);
+        if !applied { println!("    (diff did not apply cleanly)"); return Ok(None); }
+        let cdir = wt.join("professor-x");
+        // build
+        if !Command::new("cargo").args(["build", "--bins", "--quiet"]).current_dir(&cdir).status()?.success() {
+            println!("    (cargo build failed)"); return Ok(None);
+        }
+        // FULL test suite must pass
+        if !Command::new("cargo").args(["test", "--bins", "--quiet"]).current_dir(&cdir).status()?.success() {
+            println!("    (cargo test failed)"); return Ok(None);
+        }
+        Ok(Some(0.0)) // placeholder; real measurement below (needs async)
+    };
+    // run the blocking build/test, then measure async with the candidate binary
+    let built = run();
+    let candidate_bin = wt.join("professor-x/target/debug/professor-x");
+    let score = match built {
+        Ok(Some(_)) if candidate_bin.exists() => {
+            // measure repo-fix with the candidate binary (subprocess), k reps
+            let mut tot = 0.0; let mut n = 0;
+            for _ in 0..k {
+                if cancel.is_cancelled() { break; }
+                let out = tokio::process::Command::new(&candidate_bin)
+                    .args(["--repo-fix-bench", "--model", "qwen3:8b-q4_K_M"])
+                    .current_dir(wt.join("professor-x"))
+                    .env("PROFESSOR_X_DATA_DIR", std::env::var("PROFESSOR_X_DATA_DIR").unwrap_or_default())
+                    .output().await;
+                if let Ok(o) = out {
+                    let s = String::from_utf8_lossy(&o.stdout);
+                    if let Some(p) = s.lines().rev().find_map(|l| l.strip_prefix("pass@1 = ").and_then(|x| x.split_whitespace().next()).and_then(|x| x.parse::<f64>().ok())) {
+                        tot += p; n += 1;
+                    }
+                }
+            }
+            if n > 0 { Ok(Some(tot / n as f64)) } else { Ok(None) }
+        }
+        Ok(_) => Ok(None),
+        Err(e) => Err(e),
+    };
+    let _ = Command::new("git").args(["worktree", "remove", "--force"]).arg(&wt).current_dir(repo_root).status();
+    let _ = (ollama, registry, policy, memory, events); // measurement uses a subprocess binary, not these
+    score
+}
+
+/// Ask the code-specialized model for a unified diff that fixes the observed failures, scoped to
+/// ONE file. Strict diff format so it applies; the safety guard rejects anything out of scope.
+async fn propose_code_diff(
+    coder: &Arc<ollama::OllamaClient>,
+    target: &str,
+    file_content: &str,
+    failure_report: &str,
+) -> Result<String> {
+    let system = "You are a Rust expert improving a coding agent's harness. You are given ONE \
+        source file and the agent's recent benchmark failures. Output ONLY a valid unified diff \
+        (git apply format) that edits THAT FILE to fix the failures — no prose, no fences. The \
+        diff must use 'a/professor-x/<path>' and 'b/professor-x/<path>' headers, correct @@ hunk \
+        lines, and minimal context. Do NOT touch tests, the benchmark, or the evaluator. If no \
+        safe improvement is clear, output exactly: NO-DIFF.";
+    let prompt = format!(
+        "FILE: professor-x/{target}\n```rust\n{}\n```\n\nRECENT BENCHMARK FAILURES:\n{failure_report}\n\n\
+         Output a unified diff for professor-x/{target} only:",
+        file_content.chars().take(24000).collect::<String>()
+    );
+    let resp = coder.generate(&prompt, Some(system), Some(ollama::ModelOptions::for_reflection())).await?;
+    let (_, text) = resp.split_thinking();
+    let text = text.trim();
+    if text.contains("NO-DIFF") || text.len() < 30 {
+        anyhow::bail!("proposer returned no diff");
+    }
+    // strip accidental ``` fences
+    let cleaned = text.lines().filter(|l| !l.trim_start().starts_with("```")).collect::<Vec<_>>().join("\n");
+    Ok(cleaned)
 }
 
 /// Failure-aware SKILL proposer: improve the px-fix-bug skill markdown to fix observed failures.

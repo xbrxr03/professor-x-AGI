@@ -270,6 +270,10 @@ impl OllamaClient {
         }
     }
 
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
         self.model = model.into();
         self
