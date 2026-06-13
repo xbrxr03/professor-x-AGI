@@ -77,3 +77,31 @@ serious (a self-editing, benchmark-rewarded loop is the misevolution risk the sa
 for). The deny-list + pinned eval + full-test-suite + human approval are not optional. Done right,
 this is the standard-setting result: *autonomous-up-to-approval harness improvement, every accepted
 change empirically proven on an ungameable, un-gameable-by-construction benchmark.*
+
+---
+
+## First runs (2026-06-13) — engine works mechanically; the honest blockers
+
+Built `--evolve-code-on-repofix` (autonomous: diagnose→propose→safety→worktree gate→auto-commit)
+and ran it end-to-end. Findings:
+
+1. **The pipeline works.** Baseline measured (0.643), proposer called, safety guard + worktree
+   gate + auto-commit all wired and reached the proposer step. Two bugs found+fixed: the coder
+   model rejects `think=true` (400); needs a big ctx for a full file.
+2. **The coder returned NO-DIFF for `hashedit.rs`** — and that is *reasonable*: the baseline
+   failures were WRONG edits on specific tasks (a model-reasoning issue), not a hashedit bug, and
+   hashedit already has the forgiving line-fallback. The coder correctly found nothing to fix.
+3. **The deeper, honest insight:** the big *harness* gaps were ALREADY harvested manually this
+   session (greedy-loop temp escalation, forgiving hash-edit → 0.50→0.85). So the autonomous
+   code-proposer has **little low-hanging harness fruit left** — the residual repo-fix failures
+   (off-by-one, multi-file, wrong-edits) are largely **model-capability** limits, which need a
+   better *model* (the distillation flywheel / Lever 1), not harness code.
+4. **The 32B-coder is slow** (offloaded on the 3060's 12 GB; a direct 12K-prompt query timed out
+   at 180s). A code-specialized 14B that fits VRAM would be faster, if weaker.
+
+### Honest next steps (multi-session)
+- **Failure-driven targeting:** point the proposer at the component `diagnose.py` implicates, not a
+  fixed default. (But the current failures don't cleanly implicate harness code — see #3.)
+- **Give the coder a code SECTION, not the whole file** (large files botch diff hunk lines).
+- **The real remaining lever is the MODEL** (Lever 1 distillation), now that the harness fixes are
+  harvested. The autonomous code-proposer is built and ready for when new harness gaps appear.
