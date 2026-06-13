@@ -8529,7 +8529,16 @@ async fn propose_code_diff(
          Output a unified diff for professor-x/{target} only:",
         file_content.chars().take(24000).collect::<String>()
     );
-    let resp = coder.generate(&prompt, Some(system), Some(ollama::ModelOptions::for_reflection())).await?;
+    // qwen2.5-coder does NOT support thinking mode (400 if think=true), and needs a big ctx for
+    // a full source file. Explicit options, no thinking.
+    let opts = ollama::ModelOptions {
+        temperature: Some(0.2),
+        num_ctx: Some(32768),
+        top_p: Some(0.9),
+        stop: None,
+        think: Some(false),
+    };
+    let resp = coder.generate(&prompt, Some(system), Some(opts)).await?;
     let (_, text) = resp.split_thinking();
     let text = text.trim();
     if text.contains("NO-DIFF") || text.len() < 30 {
