@@ -97,6 +97,57 @@ def templates():
               "def average(xs):\n    return sum(xs) / len(xs) if xs else 0\n",
               [("[2,4,6]", 4), ("[]", 0)], "AssertionError, ZeroDivisionError",
               "In m.py, average(xs) crashes on an empty list. Return 0 for empty input."))
+    # 12. integer division vs float
+    T.append(("intdiv", "m", "halve", "def halve(n):\n    return n / 2\n",
+              "def halve(n):\n    return n // 2\n", [("8", 4), ("7", 3)], "AssertionError",
+              "In m.py, halve(n) uses float division but should floor-divide. Fix it."))
+    # 13. modulo
+    T.append(("mod_even", "m", "is_even", "def is_even(n):\n    return n % 2 == 1\n",
+              "def is_even(n):\n    return n % 2 == 0\n", [("4", True), ("3", False)], "AssertionError",
+              "In m.py, is_even checks the wrong remainder. Fix it."))
+    # 14. string strip/split
+    T.append(("strip", "m", "clean", "def clean(s):\n    return s\n",
+              "def clean(s):\n    return s.strip()\n", [("'  hi  '", 'hi'), ("'x'", 'x')], "AssertionError",
+              "In m.py, clean(s) does not strip surrounding whitespace. Fix it."))
+    T.append(("wordcount", "m", "word_count", "def word_count(s):\n    return len(s)\n",
+              "def word_count(s):\n    return len(s.split())\n", [("'a b c'", 3), ("'one'", 1)], "AssertionError",
+              "In m.py, word_count returns characters, not words. Count words instead."))
+    # 15. list build: append vs extend / wrong accumulate
+    T.append(("sum_list", "m", "total", "def total(xs):\n    s = 0\n    for x in xs:\n        s = x\n    return s\n",
+              "def total(xs):\n    s = 0\n    for x in xs:\n        s += x\n    return s\n",
+              [("[1,2,3]", 6), ("[]", 0)], "AssertionError",
+              "In m.py, total(xs) overwrites the sum instead of accumulating. Fix it."))
+    # 16. min/max default
+    T.append(("clamp", "m", "clamp", "def clamp(x, lo, hi):\n    return max(lo, x)\n",
+              "def clamp(x, lo, hi):\n    return max(lo, min(x, hi))\n",
+              [("5,0,10", 5), ("15,0,10", 10), ("-2,0,10", 0)], "AssertionError",
+              "In m.py, clamp ignores the upper bound. Clamp x to [lo, hi]."))
+    # 17. swap
+    T.append(("swap", "m", "swap", "def swap(p):\n    return (p[0], p[1])\n",
+              "def swap(p):\n    return (p[1], p[0])\n", [("(1,2)", (2, 1)), ("('a','b')", ('b', 'a'))], "AssertionError",
+              "In m.py, swap((a,b)) does not swap the pair. Fix it."))
+    # 18. count occurrences
+    T.append(("count", "m", "count_x", "def count_x(xs, t):\n    return len(xs)\n",
+              "def count_x(xs, t):\n    return xs.count(t)\n", [("[1,2,2,3],2", 2), ("[1],9", 0)], "AssertionError",
+              "In m.py, count_x returns the list length, not occurrences of t. Fix it."))
+    # 19. boolean not
+    T.append(("not_empty", "m", "is_empty", "def is_empty(xs):\n    return len(xs) > 0\n",
+              "def is_empty(xs):\n    return len(xs) == 0\n", [("[]", True), ("[1]", False)], "AssertionError",
+              "In m.py, is_empty has inverted logic. Fix it."))
+    # 20. fibonacci off-by-one
+    T.append(("fib", "m", "fib", "def fib(n):\n    a, b = 0, 1\n    for _ in range(n - 1):\n        a, b = b, a + b\n    return a\n",
+              "def fib(n):\n    a, b = 0, 1\n    for _ in range(n):\n        a, b = b, a + b\n    return a\n",
+              [("0", 0), ("1", 1), ("7", 13)], "AssertionError",
+              "In m.py, fib(n) is off by one in its loop range. Fix it."))
+    # 21. palindrome
+    T.append(("palindrome", "m", "is_pal", "def is_pal(s):\n    return s == s\n",
+              "def is_pal(s):\n    return s == s[::-1]\n", [("'aba'", True), ("'ab'", False)], "AssertionError",
+              "In m.py, is_pal always returns True. Check the string against its reverse."))
+    # 22. default mutable arg style (return wrong)
+    T.append(("dedupe", "m", "dedupe", "def dedupe(xs):\n    return xs\n",
+              "def dedupe(xs):\n    out = []\n    for x in xs:\n        if x not in out:\n            out.append(x)\n    return out\n",
+              [("[1,1,2,3,3]", [1, 2, 3]), ("[]", [])], "AssertionError",
+              "In m.py, dedupe(xs) does not remove duplicates. Fix it (preserve order)."))
     return T
 
 

@@ -255,6 +255,102 @@
       "description": "In m.py, average(xs) crashes on an empty list. Return 0 for empty input.",
       "verify_cmd": "python3 check.py",
       "expect_exit": 0
+    },
+    {
+      "id": "gen_intdiv",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/gen/gen_intdiv",
+      "description": "In m.py, halve(n) uses float division but should floor-divide. Fix it.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "gen_mod_even",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/gen/gen_mod_even",
+      "description": "In m.py, is_even checks the wrong remainder. Fix it.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "gen_strip",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/gen/gen_strip",
+      "description": "In m.py, clean(s) does not strip surrounding whitespace. Fix it.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "gen_wordcount",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/gen/gen_wordcount",
+      "description": "In m.py, word_count returns characters, not words. Count words instead.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "gen_sum_list",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/gen/gen_sum_list",
+      "description": "In m.py, total(xs) overwrites the sum instead of accumulating. Fix it.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "gen_clamp",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/gen/gen_clamp",
+      "description": "In m.py, clamp ignores the upper bound. Clamp x to [lo, hi].",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "gen_swap",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/gen/gen_swap",
+      "description": "In m.py, swap((a,b)) does not swap the pair. Fix it.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "gen_count",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/gen/gen_count",
+      "description": "In m.py, count_x returns the list length, not occurrences of t. Fix it.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "gen_not_empty",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/gen/gen_not_empty",
+      "description": "In m.py, is_empty has inverted logic. Fix it.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "gen_fib",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/gen/gen_fib",
+      "description": "In m.py, fib(n) is off by one in its loop range. Fix it.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "gen_palindrome",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/gen/gen_palindrome",
+      "description": "In m.py, is_pal always returns True. Check the string against its reverse.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "gen_dedupe",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/gen/gen_dedupe",
+      "description": "In m.py, dedupe(xs) does not remove duplicates. Fix it (preserve order).",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
     }
   ]
 }
