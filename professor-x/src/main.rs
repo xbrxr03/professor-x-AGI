@@ -8019,6 +8019,13 @@ async fn repo_fix_measure(
         let ok = post == task.expect_exit;
         if ok {
             passed += 1;
+            // Lever 1 (distillation): collect the TEST-VERIFIED solving trajectory into the SFT
+            // corpus. A green test is the gold-standard, ungameable verification — far better SFT
+            // data than HIRO "agent-finished" trajectories. Only on the dedicated bench run
+            // (verbose) to avoid polluting the corpus during evolution's internal measurements.
+            if verbose {
+                ReactLoop::collect_trajectory(&node);
+            }
         } else {
             // Record HOW it failed so the proposer targets the real pattern (item 3).
             // made_edit=false => "finished without editing" (the dominant measured failure).
