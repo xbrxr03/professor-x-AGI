@@ -8418,7 +8418,7 @@ async fn run_evolve_code_on_repofix(
                     // AUTONOMOUS apply to the working tree + commit.
                     let tmp = std::env::temp_dir().join(format!("px-codeevolve-{}.diff", uuid::Uuid::new_v4()));
                     std::fs::write(&tmp, &diff)?;
-                    let ap = std::process::Command::new("git").args(["apply"]).arg(&tmp)
+                    let ap = std::process::Command::new("git").args(["apply", "--recount", "-C1"]).arg(&tmp)
                         .current_dir(&repo_root).status();
                     let _ = std::fs::remove_file(&tmp);
                     if ap.map(|s| s.success()).unwrap_or(false) {
@@ -8465,7 +8465,7 @@ async fn gate_code_candidate(
         // apply diff
         let tmp = wt.join("..").join(format!("px-cand-{}.diff", uuid::Uuid::new_v4()));
         std::fs::write(&tmp, diff)?;
-        let applied = Command::new("git").args(["apply"]).arg(&tmp).current_dir(&wt).status()?.success();
+        let applied = Command::new("git").args(["apply", "--recount", "-C1"]).arg(&tmp).current_dir(&wt).status()?.success();
         let _ = std::fs::remove_file(&tmp);
         if !applied { println!("    (diff did not apply cleanly)"); return Ok(None); }
         let cdir = wt.join("professor-x");
@@ -8527,7 +8527,7 @@ async fn propose_code_diff(
     let prompt = format!(
         "FILE: professor-x/{target}\n```rust\n{}\n```\n\nRECENT BENCHMARK FAILURES:\n{failure_report}\n\n\
          Output a unified diff for professor-x/{target} only:",
-        file_content.chars().take(24000).collect::<String>()
+        file_content.chars().take(45000).collect::<String>()
     );
     // qwen2.5-coder does NOT support thinking mode (400 if think=true), and needs a big ctx for
     // a full source file. Explicit options, no thinking.
