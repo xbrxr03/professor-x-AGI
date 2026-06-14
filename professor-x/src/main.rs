@@ -7956,7 +7956,11 @@ async fn repo_fix_measure(
         tasks: Vec<RepoFixTask>,
     }
 
-    let manifest = std::path::Path::new("scripts/benchmarks/repo_fix/tasks.json");
+    // REPO_FIX_TASKS overrides the manifest (e.g. tasks_corpus.json = curated + generated, for
+    // distillation corpus collection). Default = the trustworthy 14-task headline benchmark.
+    let manifest_path = std::env::var("REPO_FIX_TASKS")
+        .unwrap_or_else(|_| "scripts/benchmarks/repo_fix/tasks.json".to_string());
+    let manifest = std::path::Path::new(&manifest_path);
     let json = std::fs::read_to_string(manifest)
         .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", manifest.display()))?;
     let file: RepoFixFile = serde_json::from_str(&json)?;

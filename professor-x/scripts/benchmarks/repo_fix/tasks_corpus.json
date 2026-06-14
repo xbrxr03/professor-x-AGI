@@ -1,0 +1,260 @@
+{
+  "tasks": [
+    {
+      "id": "fix_001",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fix_001",
+      "description": "In calc.py, the add(a, b) function returns a - b instead of a + b. Fix it so the tests pass.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "fix_002",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fix_002",
+      "description": "In seq.py, last(xs) raises IndexError because it uses xs[len(xs)] (off by one). Fix it to return the last element.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "fix_003",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fix_003",
+      "description": "In mathx.py, double(x) computes x * 2 but never returns it (returns None). Add the missing return.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "fix_004",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fix_004",
+      "description": "In counts.py, get_count(d, k) raises KeyError when k is absent. Make it return 0 for missing keys.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "fix_005",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fix_005",
+      "description": "In strutil.py, reverse(s) returns the string unchanged. Make it return the reversed string.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "fix_006",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fix_006",
+      "description": "In nums.py, evens(xs) keeps ODD numbers (x % 2 == 1). Fix it to keep even numbers.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "fix_007",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fix_007",
+      "description": "In fact.py, factorial(0) recurses forever because the base case is `n == 1`. Fix the base case so factorial(0) == 1.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "fix_008",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fix_008",
+      "description": "In valid.py, in_range(x, lo, hi) uses OR so it's always true. Fix it to require x within [lo, hi].",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "fix_009",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fix_009",
+      "description": "In helper.py, slugify replaces spaces with '' instead of '-', so make_slug in api.py is wrong. Fix slugify.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "fix_010",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fix_010",
+      "description": "In acc.py, Accumulator.add overwrites total (self.total = x) instead of accumulating. Fix it to add.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "fix_011",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fix_011",
+      "description": "In math_utils.py, square(x) returns x + x instead of x * x, so sum_of_squares in stats.py is wrong. Fix square.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "fix_012",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fix_012",
+      "description": "In running.py, running_max initializes m = 0, so it returns 0 for all-negative inputs. Fix the initialization to handle negatives.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "fix_013",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fix_013",
+      "description": "In avg.py, average(xs) raises ZeroDivisionError on an empty list. Make it return 0 for empty input.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "fix_014",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fix_014",
+      "description": "In ops.py, one of the four functions is wrong: mul(a, b) returns a + b instead of a * b. Fix it.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "gen_op_add",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/gen/gen_op_add",
+      "description": "In m.py, add uses the wrong arithmetic operator. Fix it so the tests pass.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "gen_op_scale",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/gen/gen_op_scale",
+      "description": "In m.py, scale uses the wrong arithmetic operator. Fix it so the tests pass.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "gen_op_diff",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/gen/gen_op_diff",
+      "description": "In m.py, diff uses the wrong arithmetic operator. Fix it so the tests pass.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "gen_op_power_two",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/gen/gen_op_power_two",
+      "description": "In m.py, power_two uses the wrong arithmetic operator. Fix it so the tests pass.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "gen_idx_last",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/gen/gen_idx_last",
+      "description": "In m.py, last(xs) is off by one (xs[len(xs)]). Return the last element.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "gen_idx_first",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/gen/gen_idx_first",
+      "description": "In m.py, first(xs) returns the second element, not the first. Fix it.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "gen_noret",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/gen/gen_noret",
+      "description": "In m.py, double(x) computes but never returns. Add the missing return.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "gen_cmp_is_positive",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/gen/gen_cmp_is_positive",
+      "description": "In m.py, is_positive uses the wrong comparison operator. Fix it.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "gen_cmp_at_least_ten",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/gen/gen_cmp_at_least_ten",
+      "description": "In m.py, at_least_ten uses the wrong comparison operator. Fix it.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "gen_bool_range",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/gen/gen_bool_range",
+      "description": "In m.py, in_range uses OR so it's always true. Require x within [lo, hi].",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "gen_acc_overwrite",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/gen/gen_acc_overwrite",
+      "description": "In m.py, Acc.add overwrites the total instead of accumulating. Fix it.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "gen_max_init",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/gen/gen_max_init",
+      "description": "In m.py, running_max inits m=0 so it fails on all-negative input. Fix the init.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "gen_rec_fact",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/gen/gen_rec_fact",
+      "description": "In m.py, factorial(0) recurses forever (base case n==1). Fix the base case.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "gen_str_rev",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/gen/gen_str_rev",
+      "description": "In m.py, reverse(s) returns the string unchanged. Return it reversed.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "gen_str_upper",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/gen/gen_str_upper",
+      "description": "In m.py, shout(s) lowercases instead of uppercasing. Fix it.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "gen_filter_even",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/gen/gen_filter_even",
+      "description": "In m.py, evens(xs) keeps odd numbers. Fix it to keep even numbers.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "gen_dict_get",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/gen/gen_dict_get",
+      "description": "In m.py, get_count raises KeyError for missing keys. Return 0 instead.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "gen_avg_empty",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/gen/gen_avg_empty",
+      "description": "In m.py, average(xs) crashes on an empty list. Return 0 for empty input.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    }
+  ]
+}
