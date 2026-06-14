@@ -8388,10 +8388,25 @@ async fn run_evolve_code_on_repofix(
     let failure_report = if fails.is_empty() {
         "No failures.".to_string()
     } else {
-        fails.iter().map(|(id, d, me)| {
+        // ACTIONABLE diagnosis (not a raw failure list — the coder needs a localizable target,
+        // see docs/research/m4-code-proposer-scoping.md): classify the dominant failure mode and
+        // tell the coder what KIND of code fix it implies (or that it's model-level, not harness).
+        let no_edit = fails.iter().filter(|(_, _, me)| !me).count();
+        let wrong_edit = fails.len() - no_edit;
+        let diagnosis = if no_edit >= wrong_edit {
+            "DOMINANT FAILURE: the agent finishes WITHOUT making an edit (gathers, then gives up). \
+             If this file contains the finish/synthesis/loop logic, a fix would force an edit \
+             before finishing or break a stuck loop. If not, output NO-DIFF."
+        } else {
+            "DOMINANT FAILURE: the agent makes a WRONG edit (the test stays red). This is usually \
+             a MODEL-reasoning limit, not a harness bug — there is likely no code fix here. Only \
+             propose a diff if you see a concrete harness defect; otherwise output NO-DIFF."
+        };
+        let list = fails.iter().map(|(id, d, me)| {
             format!("- {id}: {} -> {}", d.chars().take(70).collect::<String>(),
                     if *me {"WRONG edit"} else {"NO edit"})
-        }).collect::<Vec<_>>().join("\n")
+        }).collect::<Vec<_>>().join("\n");
+        format!("{diagnosis}\n\nFailing tasks:\n{list}")
     };
 
     let mut best = baseline;
