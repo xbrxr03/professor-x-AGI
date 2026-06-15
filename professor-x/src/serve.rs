@@ -9,7 +9,7 @@
 //!   GET  /                 → the built-in dashboard page
 //!   GET  /api/events?since=N → events with id > N  (live activity)
 //!   GET  /api/vitals       → φ, ICS, affect, body, counts
-//!   GET  /api/status       → current run, gates, queue, coding session, work events
+//!   GET  /api/status       → current run, latest task, gates, queue, coding session, work events
 //!   POST /api/task {task}  → run a task (spawned; watch via /api/events)
 
 use anyhow::Result;
@@ -32,6 +32,7 @@ use crate::memd::autonomy_queue::{AutonomyQueueItem, AutonomyQueueStore};
 use crate::memd::coding_sessions::{CodingSessionRecord, CodingSessionStore};
 use crate::memd::coding_smoke::{CodingSmokeRecord, CodingSmokeStore};
 use crate::memd::events::EventStore;
+use crate::memd::task_runs::{TaskRun, TaskRunStore};
 use crate::memd::work_loops::{
     WorkLoopGateRecord, WorkLoopGateStore, WorkLoopRunRecord, WorkLoopRunStore,
 };
@@ -152,6 +153,7 @@ async fn api_status(State(st): State<AppState>) -> Json<serde_json::Value> {
 }
 
 fn status_payload(st: &AppState) -> Result<serde_json::Value> {
+    let latest_task_run = TaskRunStore::new(Arc::clone(&st.memory.db)).latest()?;
     let latest_run = WorkLoopRunStore::new(Arc::clone(&st.memory.db)).latest()?;
     let gate_store = WorkLoopGateStore::new(Arc::clone(&st.memory.db));
     let latest_gate = gate_store.latest()?;
@@ -172,6 +174,7 @@ fn status_payload(st: &AppState) -> Result<serde_json::Value> {
         "working": st.working.load(Ordering::Relaxed),
         "state": work_state(latest_run.as_ref(), latest_gate.as_ref(), st.working.load(Ordering::Relaxed)),
         "now": work_now(&work_events, latest_gate.as_ref(), latest_session.as_ref()),
+        "latest_task_run": latest_task_run.as_ref().map(task_run_json),
         "current_run": latest_run.as_ref().map(run_json),
         "active_gate": latest_gate.as_ref().map(gate_json),
         "gate_ledger": gates.iter().map(gate_json).collect::<Vec<_>>(),
@@ -239,6 +242,26 @@ fn run_json(run: &WorkLoopRunRecord) -> serde_json::Value {
         "report_path": run.report_path,
         "started_at": run.started_at.to_rfc3339(),
         "completed_at": run.completed_at.to_rfc3339(),
+    })
+}
+
+fn task_run_json(run: &TaskRun) -> serde_json::Value {
+    json!({
+        "task_id": run.task_id,
+        "short_id": short_id(&run.task_id),
+        "status": run.status,
+        "task_type": run.task_type,
+        "priority": run.priority,
+        "attempt_count": run.attempt_count,
+        "step_count": run.step_count,
+        "score": run.outcome_score,
+        "failure_class": run.failure_class.map(|class| class.as_str().to_string()),
+        "failure_mode": run.failure_mode,
+        "last_tool": run.last_tool,
+        "last_summary": run.last_summary,
+        "transcript_path": run.transcript_path,
+        "updated_at": run.updated_at.to_rfc3339(),
+        "completed_at": run.completed_at.map(|ts| ts.to_rfc3339()),
     })
 }
 
@@ -373,6 +396,7 @@ button{background:var(--panel2);border:1px solid var(--line);color:var(--fg);pad
       <section class="panel wide"><h3>live state</h3><div id=state class=kv></div></section>
       <section class=panel><h3>current run</h3><div id=run class=kv></div></section>
       <section class=panel><h3>active gate</h3><div id=gate class=kv></div></section>
+      <section class=panel><h3>latest task</h3><div id=taskrun class=kv></div></section>
       <section class=panel><h3>autonomy queue</h3><div id=queue></div></section>
       <section class=panel><h3>coding session</h3><div id=session class=kv></div></section>
       <section class="panel wide"><h3>operator commands</h3><div id=commands></div></section>
@@ -400,6 +424,7 @@ async function pollStatus(){try{let s=await(await fetch('/api/status')).json();i
  document.getElementById('state').innerHTML=kv(s,[['state','state'],['now','now'],['model','model']]);
  document.getElementById('run').innerHTML=s.current_run?kv(s.current_run,[['short_id','id'],['profile','profile'],['progress','progress'],['failed_cycles','failed'],['report_path','report']]):'<span class=s-dim>no run recorded</span>';
  document.getElementById('gate').innerHTML=s.active_gate?kv(s.active_gate,[['kind','kind'],['label','label'],['status','status'],['detail','detail'],['report_path','report']]):'<span class=s-dim>no gate recorded</span>';
+ document.getElementById('taskrun').innerHTML=s.latest_task_run?kv(s.latest_task_run,[['short_id','id'],['status','status'],['failure_class','class'],['last_tool','tool'],['last_summary','summary']]):'<span class=s-dim>no task recorded</span>';
  document.getElementById('queue').innerHTML=(s.queue||[]).map(q=>`<div class=ev><span class=s-cyan>${esc(q.short_id)}</span> ${esc(q.status)} p${esc(q.priority)} ${esc(q.profile)} · ${esc(q.goal)}</div>`).join('')||'<span class=s-dim>queue empty</span>';
  document.getElementById('session').innerHTML=s.latest_coding_session?kv(s.latest_coding_session,[['short_id','id'],['status','status'],['goal','goal'],['session_report_path','report']]):'<span class=s-dim>no coding session recorded</span>';
  document.getElementById('commands').innerHTML=(s.commands||[]).map(c=>`<button title="${esc(c)}">${esc(c.replace('cargo run -- ',''))}</button>`).join('');
@@ -430,6 +455,7 @@ mod tests {
         assert!(INDEX_HTML.contains("/api/status"));
         assert!(INDEX_HTML.contains("current run"));
         assert!(INDEX_HTML.contains("active gate"));
+        assert!(INDEX_HTML.contains("latest task"));
         assert!(INDEX_HTML.contains("autonomy queue"));
         assert!(INDEX_HTML.contains("coding session"));
     }

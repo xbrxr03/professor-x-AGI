@@ -18,14 +18,15 @@ use tracing::{info, warn};
 
 use crate::evolved::analyzer::Analyzer;
 use crate::evolved::cognition_base::CognitionStore;
-use crate::memd::self_authored_tests::SelfAuthoredTest;
-use crate::memd::metacognitive::{MetacognitiveEntry, MetacognitiveStore};
 use crate::evolved::proposer::{
     ChangeManifest, EvolutionNode, HarnessComponent, NodeDatabase, VerificationStatus,
 };
 use crate::evolved::tracker::OutcomeTracker;
+use crate::failure::{extract_failure_class, FailureClass};
 use crate::memd::events::EventStore;
 use crate::memd::free_energy::{compute_fed, FedRecord};
+use crate::memd::metacognitive::{MetacognitiveEntry, MetacognitiveStore};
+use crate::memd::self_authored_tests::SelfAuthoredTest;
 use crate::memd::MemoryManager;
 use crate::ollama::{ChatMessage, ModelOptions, OllamaClient};
 
@@ -83,8 +84,76 @@ fn parse_dhe_from_patterns(patterns: &[String]) -> (u8, u8) {
                 return (layer, lever);
             }
         }
+        if let Some(class) = extract_failure_class(p) {
+            return failure_class_to_dhe(class);
+        }
     }
     (0, 3)
+}
+
+fn failure_class_to_dhe(class: FailureClass) -> (u8, u8) {
+    match class {
+        FailureClass::Retrieval => (1, 2),
+        FailureClass::Context => (2, 2),
+        FailureClass::ToolSelection | FailureClass::PolicyDenied => (3, 3),
+        FailureClass::ToolExecution => (4, 3),
+        FailureClass::Reasoning
+        | FailureClass::MaxSteps
+        | FailureClass::AnswerMissing
+        | FailureClass::ArtifactValidation
+        | FailureClass::Verification => (5, 1),
+        FailureClass::Cancelled | FailureClass::Unknown => (0, 3),
+    }
+}
+
+fn diagnostic_component_hints(layer: u8) -> Vec<&'static str> {
+    match layer {
+        1 => vec![
+            "Target COMPONENT: SystemPrompt. Add concrete guidance for when the agent must recall prior work or consult memory before acting.",
+            "Target COMPONENT: HarnessConfig. Adjust context allocation or retrieval-related config so relevant memory is more likely to surface early.",
+        ],
+        2 => vec![
+            "Target COMPONENT: HarnessConfig. Adjust context budget, memory mix, or step budget so the agent can keep the right evidence in view and avoid context overload.",
+        ],
+        3 => vec![
+            "Target COMPONENT: SkillDefinition. Define a reusable skill that tells the agent which tool to choose, what preconditions to verify, and how to recover from a wrong initial tool choice.",
+        ],
+        4 => vec![
+            "Target COMPONENT: SkillDefinition. Define a reusable skill for tool failure handling: inspect the observation, validate outputs, choose one bounded retry, and recover safely.",
+        ],
+        5 => vec![
+            "Target COMPONENT: SystemPrompt. Add concise global guidance for final-answer discipline, bounded reasoning, and using observations to satisfy the task contract before finishing.",
+        ],
+        _ => vec![
+            "Target COMPONENT: SystemPrompt. Improve the system prompt that guides every task — add concrete guidance that addresses the failure patterns above.",
+            "Target COMPONENT: SkillDefinition. Define a NEW reusable skill (a markdown SKILL file) that captures the correct procedure for the failing task class.",
+            "Target COMPONENT: HarnessConfig. Adjust a config setting (e.g. context budget, max steps) that would reduce the failure patterns above.",
+        ],
+    }
+}
+
+fn component_matches_diagnostic_layer(component: &HarnessComponent, layer: u8) -> bool {
+    match layer {
+        0 => true,
+        1 => matches!(
+            component,
+            HarnessComponent::SystemPrompt | HarnessComponent::HarnessConfig
+        ),
+        2 => matches!(component, HarnessComponent::HarnessConfig),
+        3 | 4 => matches!(component, HarnessComponent::SkillDefinition(_)),
+        5 => matches!(component, HarnessComponent::SystemPrompt),
+        _ => true,
+    }
+}
+
+fn expected_component_summary(layer: u8) -> &'static str {
+    match layer {
+        1 => "SystemPrompt or HarnessConfig",
+        2 => "HarnessConfig",
+        3 | 4 => "SkillDefinition",
+        5 => "SystemPrompt",
+        _ => "an applyable component",
+    }
 }
 
 pub async fn verify_node_in_sandbox(
@@ -350,8 +419,8 @@ fn apply_node_change_at(root: &Path, node: &EvolutionNode) -> Result<bool> {
             Ok(true)
         }
         HarnessComponent::SkillDefinition(name) => {
-            let path = component_relative_path(root, node)
-                .unwrap_or_else(|| skill_definition_path(name));
+            let path =
+                component_relative_path(root, node).unwrap_or_else(|| skill_definition_path(name));
             let content = sanitize_generated_content(&node.diff);
             // Existing skills may be revised but not gutted; new skills are free.
             preservation_guard(root, &path, &content, 0.4, &[])?;
@@ -766,9 +835,7 @@ pub fn flush_fed_to_memory(
     if let Err(e) = memory.free_energy.append(&record) {
         warn!("evolved: FED flush failed: {e}");
     } else {
-        info!(
-            "evolved: FED flushed — round={round} n={n} mae={mae:.4}"
-        );
+        info!("evolved: FED flushed — round={round} n={n} mae={mae:.4}");
     }
 }
 
@@ -898,14 +965,14 @@ impl EvolvedLoop {
         if node.status == crate::evolved::proposer::NodeStatus::Accepted {
             let current_round = tracker.len() as u32;
             let (layer, _lever) = parse_dhe_from_patterns(&failure_patterns);
-            let primary_pattern = failure_patterns.first().map(|s| s.as_str()).unwrap_or("unknown");
+            let primary_pattern = failure_patterns
+                .first()
+                .map(|s| s.as_str())
+                .unwrap_or("unknown");
             // We re-derive the test from the node's diff text (contains the full Researcher output)
-            if let Some(test) = Self::parse_self_authored_test(
-                &node.diff,
-                current_round,
-                layer,
-                primary_pattern,
-            ) {
+            if let Some(test) =
+                Self::parse_self_authored_test(&node.diff, current_round, layer, primary_pattern)
+            {
                 match self.memory.self_authored_tests.insert(&test) {
                     Ok(id) => {
                         info!(
@@ -945,7 +1012,10 @@ impl EvolvedLoop {
                 let accepted_artifact = self.write_node_artifact(&node, "accepted")?;
                 self.emit_event(
                     "evolution.committed",
-                    format!("committed accepted evolution proposal {}", commit.as_deref().unwrap_or("without-new-commit")),
+                    format!(
+                        "committed accepted evolution proposal {}",
+                        commit.as_deref().unwrap_or("without-new-commit")
+                    ),
                     serde_json::json!({
                         "target_component": format!("{:?}", node.target_component),
                         "commit": commit,
@@ -1040,24 +1110,11 @@ impl EvolvedLoop {
         candidates: &[EvolutionNode],
         success_rate: f32,
     ) -> Result<Vec<EvolutionNode>> {
-        const N: usize = 3;
-        let mut proposals = Vec::with_capacity(N);
+        let (layer, _lever) = parse_dhe_from_patterns(failure_patterns);
+        let hints = diagnostic_component_hints(layer);
+        let mut proposals = Vec::with_capacity(hints.len());
 
-        for i in 0..N {
-            // Steer each proposal toward a DIFFERENT applyable component. Without
-            // this the Researcher fixates on ToolDescription (not applyable), and
-            // every proposal gets filtered, yielding no change. Assigning a
-            // distinct applyable component per proposal guarantees the tournament
-            // always has real, applyable candidates.
-            let diversity_hint = match i {
-                0 => "Target COMPONENT: SystemPrompt. Improve the system prompt that guides every task — \
-                      add concrete guidance that addresses the failure patterns above.",
-                1 => "Target COMPONENT: SkillDefinition. Define a NEW reusable skill (a markdown SKILL file) \
-                      that captures the correct procedure for the failing task class.",
-                2 => "Target COMPONENT: HarnessConfig. Adjust a config setting (e.g. context budget, max steps) \
-                      that would reduce the failure patterns above.",
-                _ => "",
-            };
+        for (i, diversity_hint) in hints.iter().enumerate() {
             match self
                 .researcher_propose_with_hint(
                     failure_patterns,
@@ -1069,15 +1126,20 @@ impl EvolvedLoop {
             {
                 Ok(Some(node)) => {
                     info!(
-                        "evolved: proposal {}/{N} — {:?}: {}",
+                        "evolved: proposal {}/{} — {:?}: {}",
                         i + 1,
+                        hints.len(),
                         node.target_component,
                         node.motivation.chars().take(60).collect::<String>()
                     );
                     proposals.push(node);
                 }
-                Ok(None) => info!("evolved: proposal {}/{N} — no actionable output", i + 1),
-                Err(e) => warn!("evolved: proposal {}/{N} failed: {e}", i + 1),
+                Ok(None) => info!(
+                    "evolved: proposal {}/{} — no actionable output",
+                    i + 1,
+                    hints.len()
+                ),
+                Err(e) => warn!("evolved: proposal {}/{} failed: {e}", i + 1, hints.len()),
             }
         }
 
@@ -1139,11 +1201,7 @@ impl EvolvedLoop {
 
     /// Ask the LLM which of two proposals is better.
     /// Returns 1.0 if A wins, 0.0 if B wins, 0.5 on tie/error.
-    async fn elo_compare(
-        &self,
-        a: &EvolutionNode,
-        b: &EvolutionNode,
-    ) -> Result<f32> {
+    async fn elo_compare(&self, a: &EvolutionNode, b: &EvolutionNode) -> Result<f32> {
         let prompt = format!(
             "Two harness improvement proposals are competing. \
              Judge which is more likely to improve the agent's task success rate.\n\n\
@@ -1204,7 +1262,10 @@ impl EvolvedLoop {
         // Retrieve top cognition items — prefer semantic search, fallback to keyword
         let query_text = format!(
             "harness improvement {} failure",
-            failure_patterns.first().map(|s| s.as_str()).unwrap_or("unknown")
+            failure_patterns
+                .first()
+                .map(|s| s.as_str())
+                .unwrap_or("unknown")
         );
         let cognition_items = if let Ok(vec) = self.ollama.embed(&query_text).await {
             let emb_store = crate::embeddings::EmbeddingStore::new(Arc::clone(&self.memory.db));
@@ -1213,12 +1274,16 @@ impl EvolvedLoop {
                 .search_semantic(&emb_store, &vec, 5)
                 .unwrap_or_default();
             if semantic.is_empty() {
-                self.cognition.query_top_k(&query_text, 5).unwrap_or_default()
+                self.cognition
+                    .query_top_k(&query_text, 5)
+                    .unwrap_or_default()
             } else {
                 semantic
             }
         } else {
-            self.cognition.query_top_k(&query_text, 5).unwrap_or_default()
+            self.cognition
+                .query_top_k(&query_text, 5)
+                .unwrap_or_default()
         };
         let cognition_context = cognition_items
             .iter()
@@ -1301,7 +1366,27 @@ impl EvolvedLoop {
             .await?;
 
         let (_, answer) = resp.split_thinking();
-        self.parse_researcher_output(&answer)
+        let mut node = match self.parse_researcher_output(&answer)? {
+            Some(node) => node,
+            None => return Ok(None),
+        };
+        let (layer, lever) = parse_dhe_from_patterns(failure_patterns);
+        if node.manifest.evidence_cited.is_empty() {
+            node.manifest.evidence_cited = failure_patterns.iter().take(3).cloned().collect();
+        }
+        if node.manifest.root_cause.trim().is_empty() {
+            node.manifest.root_cause = failure_patterns
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "no recorded failure pattern".to_string());
+        }
+        if layer != 0 && !node.manifest.root_cause.contains("[DHE:layer=") {
+            node.manifest.root_cause = format!(
+                "[DHE:layer={layer},lever={lever}] {}",
+                node.manifest.root_cause
+            );
+        }
+        Ok(Some(node))
     }
 
     fn parse_researcher_output(&self, text: &str) -> Result<Option<EvolutionNode>> {
@@ -1349,8 +1434,7 @@ impl EvolvedLoop {
         if description.trim().is_empty() || evaluator.trim().is_empty() {
             return None;
         }
-        let category = extract_field(text, "TEST_CATEGORY")
-            .unwrap_or_else(|| "other".to_string());
+        let category = extract_field(text, "TEST_CATEGORY").unwrap_or_else(|| "other".to_string());
         Some(SelfAuthoredTest::new(
             origin_round,
             origin_layer,
@@ -1366,6 +1450,29 @@ impl EvolvedLoop {
         node: &mut EvolutionNode,
         tracker: &OutcomeTracker,
     ) -> Result<()> {
+        let failure_patterns = tracker.failure_patterns(20);
+        let (pred_layer, pred_lever) = parse_dhe_from_patterns(&failure_patterns);
+
+        if pred_layer != 0
+            && !component_matches_diagnostic_layer(&node.target_component, pred_layer)
+        {
+            node.status = crate::evolved::proposer::NodeStatus::Rejected;
+            node.manifest.verification_status = VerificationStatus::Rejected;
+            node.analysis = format!(
+                "proposal targets {:?}, but dominant diagnostic layer {} / lever {} requires {}",
+                node.target_component,
+                pred_layer,
+                pred_lever,
+                expected_component_summary(pred_layer)
+            );
+            node.results = serde_json::to_value(VerificationOutcome {
+                accepted: false,
+                reason: node.analysis.clone(),
+                checks: vec!["dhe_component_alignment".to_string()],
+            })?;
+            return Ok(());
+        }
+
         // Safety check: Middleware/core modules require human approval
         if matches!(node.target_component, HarnessComponent::Middleware) {
             warn!("evolved: Engineer blocked — Middleware changes require human approval");
@@ -1462,8 +1569,6 @@ impl EvolvedLoop {
         // computation meaningless. The round used here is the HIRO round at
         // attribution time when the runner supplies it; otherwise the
         // tracker-derived count is the best proxy available.
-        let failure_patterns = tracker.failure_patterns(20);
-        let (pred_layer, pred_lever) = parse_dhe_from_patterns(&failure_patterns);
         let component_name = format!("{:?}", node.target_component);
         let metacog_store = MetacognitiveStore::new(Arc::clone(&self.memory.db));
         // The loop runner doesn't carry an explicit HIRO-round counter at
@@ -1563,7 +1668,8 @@ impl EvolvedLoop {
                 self.compute_and_record_ics(round, &snap.text).await;
 
                 // ── Narrative self (Seed 6): add the next chapter ───────────
-                self.append_narrative_chapter(round, &behavior_summary).await;
+                self.append_narrative_chapter(round, &behavior_summary)
+                    .await;
             }
             Err(e) => warn!("evolved: failed to persist self-model update: {e}"),
         }
@@ -1574,11 +1680,7 @@ impl EvolvedLoop {
     /// theme. The agent checks whether its last anticipated arc came true (FED
     /// at the narrative level) and projects where the story heads next.
     async fn append_narrative_chapter(&self, round: u32, behavior_summary: &str) {
-        let prior_recap = self
-            .memory
-            .narrative
-            .story_recap(5)
-            .unwrap_or_default();
+        let prior_recap = self.memory.narrative.story_recap(5).unwrap_or_default();
         let prior_arc = self
             .memory
             .narrative
@@ -1621,7 +1723,10 @@ impl EvolvedLoop {
                     );
                     self.emit_event(
                         "evolution.narrative_chapter",
-                        format!("new life-story chapter at round {round}: {}", episode.chapter),
+                        format!(
+                            "new life-story chapter at round {round}: {}",
+                            episode.chapter
+                        ),
                         serde_json::json!({
                             "round": round,
                             "episode_id": id,
@@ -1674,9 +1779,7 @@ impl EvolvedLoop {
                          — identity drift is severe"
                     );
                 } else if score < 0.70 {
-                    warn!(
-                        "evolved: ICS below alert threshold (0.70) at round {round}: {score:.3}"
-                    );
+                    warn!("evolved: ICS below alert threshold (0.70) at round {round}: {score:.3}");
                 }
                 self.emit_event(
                     "evolution.ics_recorded",
@@ -1728,12 +1831,7 @@ impl EvolvedLoop {
         Ok(Some(git_head(&repo_root).await?))
     }
 
-    fn emit_event(
-        &self,
-        event_type: &str,
-        summary: impl AsRef<str>,
-        payload: serde_json::Value,
-    ) {
+    fn emit_event(&self, event_type: &str, summary: impl AsRef<str>, payload: serde_json::Value) {
         let Some(events) = &self.events else {
             return;
         };
@@ -2026,8 +2124,7 @@ mod tests {
 
         assert!(verified.outcome.accepted, "{}", verified.outcome.reason);
         assert!(verified.diff.contains("Record the fallback reason"));
-        let original =
-            std::fs::read_to_string(root.join("skills/conductor/existing.md")).unwrap();
+        let original = std::fs::read_to_string(root.join("skills/conductor/existing.md")).unwrap();
         assert!(!original.contains("Record the fallback reason"));
 
         let _ = std::fs::remove_dir_all(root);
@@ -2093,6 +2190,37 @@ mod tests {
         let patterns = vec!["failure [DHE:layer=3,lever=2]".to_string()];
 
         assert_eq!(parse_dhe_from_patterns(&patterns), (3, 2));
+    }
+
+    #[test]
+    fn dhe_parser_reads_structured_failure_class() {
+        let patterns = vec!["[failure:context] output truncated under heavy context".to_string()];
+
+        assert_eq!(parse_dhe_from_patterns(&patterns), (2, 2));
+    }
+
+    #[test]
+    fn diagnostic_component_alignment_routes_context_failures_to_config() {
+        assert!(component_matches_diagnostic_layer(
+            &HarnessComponent::HarnessConfig,
+            2
+        ));
+        assert!(!component_matches_diagnostic_layer(
+            &HarnessComponent::SystemPrompt,
+            2
+        ));
+        assert!(!component_matches_diagnostic_layer(
+            &HarnessComponent::SkillDefinition("retry".to_string()),
+            2
+        ));
+    }
+
+    #[test]
+    fn diagnostic_component_hints_focus_reasoning_failures_on_prompt() {
+        let hints = diagnostic_component_hints(5);
+
+        assert_eq!(hints.len(), 1);
+        assert!(hints[0].contains("SystemPrompt"));
     }
 
     #[test]

@@ -34,15 +34,16 @@ use uuid::Uuid;
 use crate::agentd::graph::{ExecutionStep, TaskNode, TaskStatus, TaskType};
 use crate::evolved::lcap::LcapPolicy;
 use crate::evolved::tracker::TaskOutcome;
+use crate::failure::{classify_failure_mode, normalize_failure_mode};
 use crate::memd::affect::{arousal_from_load, state_label, valence_from_outcome, AffectState};
 use crate::memd::causal_traces::{CausalTrace, TimedAction};
 use crate::memd::computational_body::ComputationalVitals;
-use crate::memd::self_prediction::{self, SelfPrediction};
-use crate::memd::working::MermaidCanvas;
 use crate::memd::episodic::EpisodicEntry;
 use crate::memd::events::EventStore;
+use crate::memd::self_prediction::{self, SelfPrediction};
 use crate::memd::task_runs::TaskRunStore;
 use crate::memd::transcripts::TranscriptStore;
+use crate::memd::working::MermaidCanvas;
 use crate::memd::MemoryManager;
 use crate::ollama::{ModelOptions, OllamaClient};
 use crate::policyd::{AuditStore, Decision, PermissionScope, PolicyEngine};
@@ -86,7 +87,11 @@ struct SignalBaselines {
 
 impl SignalBaselines {
     fn prior() -> Self {
-        Self { stress: 0.3, surprise: 0.3, affect: 0.2 }
+        Self {
+            stress: 0.3,
+            surprise: 0.3,
+            affect: 0.2,
+        }
     }
     fn update(&mut self, stress: f32, surprise: f32, affect: f32) {
         const A: f32 = 0.1; // EMA rate
@@ -168,13 +173,14 @@ impl ReactLoop {
         cancel: CancellationToken,
     ) -> Self {
         let session_id = Uuid::new_v4().to_string();
+        let lcap = LcapPolicy::load_from_db(&memory.db).unwrap_or_else(|_| LcapPolicy::new());
         Self {
             ollama,
             registry,
             policy,
             memory,
             cancel,
-            lcap: Arc::new(std::sync::Mutex::new(LcapPolicy::new())),
+            lcap: Arc::new(std::sync::Mutex::new(lcap)),
             current_round: 0,
             events: None,
             transcripts: None,
@@ -212,7 +218,11 @@ impl ReactLoop {
     }
 
     pub fn with_verifier(mut self, workdir: PathBuf, command: String, expect_exit: i32) -> Self {
-        self.verifier = Some(TaskVerifier { workdir, command, expect_exit });
+        self.verifier = Some(TaskVerifier {
+            workdir,
+            command,
+            expect_exit,
+        });
         self
     }
 
@@ -378,7 +388,10 @@ impl ReactLoop {
         let context = if context.trim().is_empty() {
             String::new()
         } else {
-            format!("\n\nWork so far:\n{}", context.chars().take(1200).collect::<String>())
+            format!(
+                "\n\nWork so far:\n{}",
+                context.chars().take(1200).collect::<String>()
+            )
         };
 
         // 1) PROPOSE k distinct approaches.
@@ -559,9 +572,8 @@ impl ReactLoop {
         // echoed in both episodic and cognition is grounded; one standing alone
         // is suppressed. Reduces confabulation, raises integration. Best-effort —
         // a no-op when embeddings are unavailable.
-        let (ice_examples, cognition_context) = self
-            .apply_binding(ice_examples, cognition_context)
-            .await;
+        let (ice_examples, cognition_context) =
+            self.apply_binding(ice_examples, cognition_context).await;
 
         // Fresh scratchpad per task (self-managed working memory).
         if let Ok(mut sp) = self.scratchpad.lock() {
@@ -584,10 +596,12 @@ impl ReactLoop {
             }
         }
 
-        let lcap_ceiling = {
+        let selected_arm = {
             let lc = self.lcap.lock().unwrap();
-            lc.select(&category, self.current_round).hard_ceiling_tokens
+            lc.select_arm(&category, self.current_round)
         };
+        let lcap_ceiling =
+            crate::evolved::lcap::ContextBudget::from_arm(&selected_arm).hard_ceiling_tokens;
         let num_ctx = effective_memory_ceiling(lcap_ceiling, self.memory_budget_override);
 
         // Seed 4 (interoception): predict the computational body state for this
@@ -619,10 +633,24 @@ impl ReactLoop {
         // Error is measured at task end; persistent error = genuine self-ignorance.
         {
             let tool_names: Vec<&str> = vec![
-                "fs.read", "fs.hash_read", "fs.window_open", "fs.window_goto",
-                "fs.window_scroll", "fs.list", "fs.write", "fs.hash_edit", "web.search",
-                "web.fetch", "vision.analyze", "shell.restricted", "patch.review",
-                "patch.apply", "memory.read", "memory.write", "finish", "fail",
+                "fs.read",
+                "fs.hash_read",
+                "fs.window_open",
+                "fs.window_goto",
+                "fs.window_scroll",
+                "fs.list",
+                "fs.write",
+                "fs.hash_edit",
+                "web.search",
+                "web.fetch",
+                "vision.analyze",
+                "shell.restricted",
+                "patch.review",
+                "patch.apply",
+                "memory.read",
+                "memory.write",
+                "finish",
+                "fail",
             ];
             let pred_prompt =
                 self_prediction::build_prediction_prompt(&task.description, &tool_names);
@@ -746,16 +774,17 @@ impl ReactLoop {
                     // LCAP: reward successful budget selection
                     {
                         let mut lc = self.lcap.lock().unwrap();
-                        let arm = arm_for_ctx(num_ctx);
-                        lc.update(&category, &arm, 1.0);
+                        lc.update(&category, &selected_arm, 1.0);
+                        if let Err(e) = lc.save_to_db(&self.memory.db) {
+                            warn!("react: failed to persist LCAP state after success: {e}");
+                        }
                     }
 
                     // Affect (H16): positive valence on success
                     {
                         let tool_density = task.steps.len() as f32 / 20.0;
                         let retry_pressure =
-                            task.attempt_count.saturating_sub(1) as f32
-                            / task.max_attempts as f32;
+                            task.attempt_count.saturating_sub(1) as f32 / task.max_attempts as f32;
                         let v = valence_from_outcome(1.0, predicted_success);
                         let a = arousal_from_load(tool_density, retry_pressure);
                         if let Ok(mut aff) = self.affect.lock() {
@@ -771,8 +800,13 @@ impl ReactLoop {
 
                     // Seeds 2 + 4: record causal trace and computational vitals
                     self.record_body_and_causal(
-                        task, &category, num_ctx, true, 1.0,
-                        episodic_engaged, cognition_engaged,
+                        task,
+                        &category,
+                        num_ctx,
+                        true,
+                        1.0,
+                        episodic_engaged,
+                        cognition_engaged,
                     );
 
                     return Ok(TaskOutcome {
@@ -780,6 +814,7 @@ impl ReactLoop {
                         description: task.description.clone(),
                         success: true,
                         score: 1.0,
+                        failure_class: None,
                         failure_mode: None,
                         steps_taken: task.steps.len() as u32,
                         timestamp: Utc::now(),
@@ -790,8 +825,7 @@ impl ReactLoop {
                         // Affect: mildly negative after a failed attempt, arousal rises with retries
                         {
                             let tool_density = task.steps.len() as f32 / 20.0;
-                            let retry_pressure =
-                                (attempt + 1) as f32 / task.max_attempts as f32;
+                            let retry_pressure = (attempt + 1) as f32 / task.max_attempts as f32;
                             let v = valence_from_outcome(0.0, predicted_success);
                             let a = arousal_from_load(tool_density, retry_pressure);
                             if let Ok(mut aff) = self.affect.lock() {
@@ -802,7 +836,9 @@ impl ReactLoop {
                         let reflection = self.generate_reflection(task).await;
                         task.push_reflection(reflection);
                         task.steps.clear();
-                        if let Ok(mut c) = self.canvas.lock() { c.clear(); }
+                        if let Ok(mut c) = self.canvas.lock() {
+                            c.clear();
+                        }
                     }
                 }
                 Err(e) => {
@@ -853,6 +889,8 @@ impl ReactLoop {
             "{mars} [DHE:layer={},lever={}]",
             dhe.failed_layer, dhe.recommended_lever
         );
+        let failure_class = classify_failure_mode(&failure_mode);
+        let failure_mode = normalize_failure_mode(&failure_mode);
 
         task.status = TaskStatus::Failed;
         task.completed_at = Some(Utc::now());
@@ -874,16 +912,46 @@ impl ReactLoop {
         );
 
         // LCAP: penalize failed budget selection
-        {
+        let regressed_arm = {
             let mut lc = self.lcap.lock().unwrap();
-            let arm = arm_for_ctx(num_ctx);
-            lc.update(&category, &arm, 0.0);
+            let next = if failure_class == crate::failure::FailureClass::Context {
+                lc.regress(&category, &selected_arm)
+            } else {
+                lc.update(&category, &selected_arm, 0.0);
+                None
+            };
+            if let Err(e) = lc.save_to_db(&self.memory.db) {
+                warn!("react: failed to persist LCAP state after failure: {e}");
+            }
+            next
+        };
+        if let Some(next_arm) = regressed_arm {
+            self.emit_event(
+                None,
+                Some(task.id),
+                "lcap.regressed",
+                format!(
+                    "layer-2 context failure regressed {:?} budget from {:?} to {:?}",
+                    category, selected_arm, next_arm
+                ),
+                json!({
+                    "category": format!("{category:?}"),
+                    "failure_class": failure_class.as_str(),
+                    "from_arm": format!("{selected_arm:?}"),
+                    "to_arm": format!("{next_arm:?}"),
+                }),
+            );
         }
 
         // Seeds 2 + 4: record causal trace and computational vitals
         self.record_body_and_causal(
-            task, &category, num_ctx, false, 0.0,
-            episodic_engaged, cognition_engaged,
+            task,
+            &category,
+            num_ctx,
+            false,
+            0.0,
+            episodic_engaged,
+            cognition_engaged,
         );
 
         Ok(TaskOutcome {
@@ -891,6 +959,7 @@ impl ReactLoop {
             description: task.description.clone(),
             success: false,
             score: 0.0,
+            failure_class: Some(failure_class),
             failure_mode: Some(failure_mode),
             steps_taken: task.steps.len() as u32,
             timestamp: Utc::now(),
@@ -1121,7 +1190,11 @@ impl ReactLoop {
                     self_model: reflected,
                 }
             };
-            if let Err(e) = self.memory.phi.record_activation(self.current_round, &activation) {
+            if let Err(e) = self
+                .memory
+                .phi
+                .record_activation(self.current_round, &activation)
+            {
                 warn!("react: failed to record phi activation: {e}");
             }
         }
@@ -1179,9 +1252,7 @@ impl ReactLoop {
         const SYNTHESIS_CHECKPOINT_STEP: usize = 14;
         const FORFEIT_AFTER_SYNTHESIS_STEP: usize = 18;
         let scope = match &self.workspace_override {
-            Some(root) => {
-                PermissionScope::default_autonomous().with_workspace_root(root.clone())
-            }
+            Some(root) => PermissionScope::default_autonomous().with_workspace_root(root.clone()),
             None => PermissionScope::default_autonomous(),
         };
         let executor = ToolExecutor::new(Arc::clone(&self.registry))
@@ -1219,7 +1290,11 @@ impl ReactLoop {
                 return Ok(false);
             }
 
-            if should_forfeit_after_synthesis(step_idx, synthesis_forced, FORFEIT_AFTER_SYNTHESIS_STEP) {
+            if should_forfeit_after_synthesis(
+                step_idx,
+                synthesis_forced,
+                FORFEIT_AFTER_SYNTHESIS_STEP,
+            ) {
                 warn!(
                     "react: synthesis/forfeit guard stopped task '{}' before max steps",
                     task.description
@@ -1413,7 +1488,8 @@ impl ReactLoop {
                     // interface error and make the expected payload explicit.
                     if parsed.tool_name == "finish" || parsed.tool_name == "done" {
                         if let Some(answer) = finish_answer_from_params(&parsed.params) {
-                            if task_requires_file_edit(task) && !has_successful_file_mutation(task) {
+                            if task_requires_file_edit(task) && !has_successful_file_mutation(task)
+                            {
                                 self.emit_event(
                                     Some(session_id),
                                     Some(task.id),
@@ -1464,7 +1540,9 @@ impl ReactLoop {
 
                                 let mut result = verifier.run();
                                 if !result.passed {
-                                    if let Some(repair) = try_python_verifier_repair(verifier, &result) {
+                                    if let Some(repair) =
+                                        try_python_verifier_repair(verifier, &result)
+                                    {
                                         self.emit_event(
                                             Some(session_id),
                                             Some(task.id),
@@ -1536,8 +1614,8 @@ impl ReactLoop {
                                 timestamp: Utc::now(),
                             };
                             task.steps.push(step);
-                            let _ = TaskRunStore::new(Arc::clone(&self.memory.db))
-                                .step_recorded(task);
+                            let _ =
+                                TaskRunStore::new(Arc::clone(&self.memory.db)).step_recorded(task);
                             self.emit_event(
                                 Some(session_id),
                                 Some(task.id),
@@ -1574,8 +1652,7 @@ impl ReactLoop {
                             observation: guidance,
                             timestamp: Utc::now(),
                         });
-                        let _ = TaskRunStore::new(Arc::clone(&self.memory.db))
-                            .step_recorded(task);
+                        let _ = TaskRunStore::new(Arc::clone(&self.memory.db)).step_recorded(task);
                         continue;
                     }
                     if parsed.tool_name == "fail" {
@@ -1618,9 +1695,7 @@ impl ReactLoop {
                     // task decomposition: the child has its own ReAct loop,
                     // memory access, and tool set, but cannot delegate further
                     // (depth cap). The parent reasons over the child's answer.
-                    if parsed.tool_name == "agent.delegate"
-                        || parsed.tool_name == "agent.spawn"
-                    {
+                    if parsed.tool_name == "agent.delegate" || parsed.tool_name == "agent.spawn" {
                         let goal = parsed
                             .params
                             .get("goal")
@@ -1639,9 +1714,7 @@ impl ReactLoop {
                     // critique (a self observing the self). Single evaluative
                     // pass, not a full loop. The consciousness tie-in to the
                     // self-model seeds: metacognition as an explicit second view.
-                    if parsed.tool_name == "agent.critic"
-                        || parsed.tool_name == "mirror.review"
-                    {
+                    if parsed.tool_name == "agent.critic" || parsed.tool_name == "mirror.review" {
                         let obs = self.critique(task).await;
                         self.record_local_step(task, step_idx, session_id, parsed, obs);
                         continue;
@@ -1650,9 +1723,7 @@ impl ReactLoop {
                     // tot.search — Tree-of-Thoughts deliberate branching. Propose
                     // several approaches, value them, commit to the best. For hard
                     // tasks where greedily following the first idea dead-ends.
-                    if parsed.tool_name == "tot.search"
-                        || parsed.tool_name == "deliberate"
-                    {
+                    if parsed.tool_name == "tot.search" || parsed.tool_name == "deliberate" {
                         let branches = parsed
                             .params
                             .get("branches")
@@ -1673,9 +1744,17 @@ impl ReactLoop {
                         s.action.tool_name == parsed.tool_name && s.action.params == parsed.params
                     }) {
                         let prior_out = if prior.observation.success {
-                            prior.observation.output.chars().take(800).collect::<String>()
+                            prior
+                                .observation
+                                .output
+                                .chars()
+                                .take(800)
+                                .collect::<String>()
                         } else {
-                            format!("(it failed: {})", prior.observation.error.as_deref().unwrap_or("unknown"))
+                            format!(
+                                "(it failed: {})",
+                                prior.observation.error.as_deref().unwrap_or("unknown")
+                            )
                         };
                         // Escalate the nudge once the model is visibly stuck (2nd+ consecutive
                         // duplicate): name the concrete next action instead of a soft "do
@@ -1704,7 +1783,10 @@ impl ReactLoop {
                             Some(session_id),
                             Some(task.id),
                             "react.duplicate_action",
-                            format!("blocked duplicate '{}' — returned prior result with nudge", parsed.tool_name),
+                            format!(
+                                "blocked duplicate '{}' — returned prior result with nudge",
+                                parsed.tool_name
+                            ),
                             json!({"step": step_idx + 1, "tool": parsed.tool_name}),
                         );
                         let step = ExecutionStep {
@@ -1878,8 +1960,7 @@ impl ReactLoop {
                         timestamp: Utc::now(),
                     };
                     {
-                        let param_preview = tool_params_preview(&parsed.params)
-                            .unwrap_or_default();
+                        let param_preview = tool_params_preview(&parsed.params).unwrap_or_default();
                         if let Ok(mut canvas) = self.canvas.lock() {
                             canvas.record_canvas_step(
                                 &parsed.tool_name,
@@ -1931,8 +2012,8 @@ impl ReactLoop {
                                 observation: guidance,
                                 timestamp: Utc::now(),
                             });
-                            let _ = TaskRunStore::new(Arc::clone(&self.memory.db))
-                                .step_recorded(task);
+                            let _ =
+                                TaskRunStore::new(Arc::clone(&self.memory.db)).step_recorded(task);
                         } else {
                             warn!(
                                 "react: circuit breaker tripped (failures persisted after escalation) on task '{}'",
@@ -2003,7 +2084,11 @@ impl ReactLoop {
             "tool.succeeded",
             format!(
                 "{tool}: {}",
-                preview.replace('\n', " ").chars().take(80).collect::<String>()
+                preview
+                    .replace('\n', " ")
+                    .chars()
+                    .take(80)
+                    .collect::<String>()
             ),
             json!({
                 "step": step_idx + 1,
@@ -2128,7 +2213,9 @@ impl ReactLoop {
         // its next action.
         if let Ok(hint) = self.causal_hint.lock() {
             if !hint.is_empty() {
-                parts.push(format!("<learned-strategies>\n{hint}\n</learned-strategies>"));
+                parts.push(format!(
+                    "<learned-strategies>\n{hint}\n</learned-strategies>"
+                ));
             }
         }
 
@@ -2262,7 +2349,11 @@ impl ReactLoop {
         }
         // Never strip a modality to empty if it had content — fall back per side.
         let final_ice = if kept_ice.is_empty() { ice } else { kept_ice };
-        let final_cog = if kept_cog.is_empty() { cognition } else { kept_cog };
+        let final_cog = if kept_cog.is_empty() {
+            cognition
+        } else {
+            kept_cog
+        };
         (final_ice, final_cog)
     }
 
@@ -2285,7 +2376,11 @@ impl ReactLoop {
             .iter()
             .filter(|e| e.importance > 0.3)
             .map(|e| {
-                let outcome = if e.importance >= 0.7 { "succeeded" } else { "failed" };
+                let outcome = if e.importance >= 0.7 {
+                    "succeeded"
+                } else {
+                    "failed"
+                };
                 format!("Past task ({outcome}): {}", e.content)
             })
             .collect()
@@ -2335,8 +2430,10 @@ impl ReactLoop {
             Ok(t) => t,
             Err(_) => return Vec::new(),
         };
-        let id_to_content: std::collections::HashMap<String, String> =
-            all.into_iter().map(|i| (i.id.to_string(), i.content)).collect();
+        let id_to_content: std::collections::HashMap<String, String> = all
+            .into_iter()
+            .map(|i| (i.id.to_string(), i.content))
+            .collect();
         top.into_iter()
             .filter(|(_, sim)| *sim >= RELEVANCE)
             .filter_map(|(id, _)| id_to_content.get(&id).cloned())
@@ -2454,7 +2551,10 @@ impl ReactLoop {
             let obs = if s.observation.success {
                 s.observation.output.chars().take(1200).collect::<String>()
             } else {
-                format!("ERROR: {}", s.observation.error.as_deref().unwrap_or("unknown"))
+                format!(
+                    "ERROR: {}",
+                    s.observation.error.as_deref().unwrap_or("unknown")
+                )
             };
             messages.push(json!({"role": "tool", "content": obs}));
         }
@@ -2508,7 +2608,11 @@ impl ReactLoop {
         let path = dir.join("trajectories.jsonl");
         if let Ok(line) = serde_json::to_string(&record) {
             use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+            {
                 let _ = writeln!(f, "{line}");
             }
         }
@@ -2551,9 +2655,7 @@ impl ReactLoop {
         // Threshold 0.92 from the memory write-pipeline spec.
         // Falls back to always-insert when embeddings are unavailable.
         let novel = if let Ok(query_vec) = self.ollama.embed(&summary).await {
-            let emb_store = crate::embeddings::EmbeddingStore::new(
-                Arc::clone(&self.memory.db),
-            );
+            let emb_store = crate::embeddings::EmbeddingStore::new(Arc::clone(&self.memory.db));
             let top_sim = emb_store
                 .top_k("episodic", &query_vec, 1)
                 .unwrap_or_default()
@@ -2563,9 +2665,7 @@ impl ReactLoop {
                 .unwrap_or(0.0);
 
             if top_sim > 0.92 {
-                debug!(
-                    "react: episodic surprise filter skipped near-duplicate (sim={top_sim:.3})"
-                );
+                debug!("react: episodic surprise filter skipped near-duplicate (sim={top_sim:.3})");
                 false
             } else {
                 // While we have the embedding, store it for future retrieval
@@ -2701,7 +2801,11 @@ fn run_verifier_command(command: &str, workdir: &Path, expect_exit: i32) -> Veri
         };
     };
     let args: Vec<&str> = parts.collect();
-    match Command::new(program).args(args).current_dir(workdir).output() {
+    match Command::new(program)
+        .args(args)
+        .current_dir(workdir)
+        .output()
+    {
         Ok(output) => {
             let exit_code = output.status.code().unwrap_or(-1);
             let mut text = String::new();
@@ -2762,7 +2866,10 @@ fn verifier_requires_new_edit_observation() -> Observation {
 }
 
 fn try_python_verifier_repair(verifier: &TaskVerifier, result: &VerifierResult) -> Option<String> {
-    if !result.output.contains("NameError: name 'inf' is not defined") {
+    if !result
+        .output
+        .contains("NameError: name 'inf' is not defined")
+    {
         return None;
     }
     let (path, line_no) = traceback_file_line(&result.output)?;
@@ -2808,12 +2915,28 @@ fn traceback_file_line(output: &str) -> Option<(PathBuf, usize)> {
 
 fn task_requires_file_edit(task: &TaskNode) -> bool {
     let desc = task.description.to_lowercase();
-    ["fix", "edit", "modify", "update", "change", "write", "add the missing return"]
+    [
+        "fix",
+        "edit",
+        "modify",
+        "update",
+        "change",
+        "write",
+        "add the missing return",
+    ]
+    .iter()
+    .any(|needle| desc.contains(needle))
+        && [
+            " file",
+            ".py",
+            ".rs",
+            ".toml",
+            ".json",
+            ".md",
+            "files are in",
+        ]
         .iter()
         .any(|needle| desc.contains(needle))
-        && [" file", ".py", ".rs", ".toml", ".json", ".md", "files are in"]
-            .iter()
-            .any(|needle| desc.contains(needle))
 }
 
 fn has_successful_file_mutation(task: &TaskNode) -> bool {
@@ -2842,9 +2965,8 @@ fn verifier_failed_since_latest_file_mutation(task: &TaskNode) -> bool {
     let Some(verifier_failure) = latest_verifier_failure_index(task) else {
         return false;
     };
-    latest_successful_file_mutation_index(task).map_or(true, |mutation| {
-        mutation <= verifier_failure
-    })
+    latest_successful_file_mutation_index(task)
+        .map_or(true, |mutation| mutation <= verifier_failure)
 }
 
 fn successful_observation_summary(task: &TaskNode, limit: usize, max_chars: usize) -> String {
@@ -2922,8 +3044,8 @@ fn augment_with_repair_hint(
     _params: &Value,
     scope: &PermissionScope,
 ) -> Observation {
-    let combined = format!("{} {}", obs.error.clone().unwrap_or_default(), obs.output)
-        .to_lowercase();
+    let combined =
+        format!("{} {}", obs.error.clone().unwrap_or_default(), obs.output).to_lowercase();
     let root = scope.workspace_root.to_string_lossy();
     let hint = if combined.contains("outside workspace") || combined.contains("resolves outside") {
         Some(format!(
@@ -2967,7 +3089,9 @@ fn augment_with_repair_hint(
         || combined.contains("not implemented")
         || combined.contains("unknown tool")
     {
-        Some("FIX: that tool is unavailable. Use one of the tools listed in the prompt.".to_string())
+        Some(
+            "FIX: that tool is unavailable. Use one of the tools listed in the prompt.".to_string(),
+        )
     } else {
         None
     };
@@ -3035,18 +3159,6 @@ fn tool_params_preview(params: &Value) -> Option<String> {
         return Some(truncate(&params.to_string(), 160));
     }
     None
-}
-
-/// Map a num_ctx token ceiling back to the nearest BudgetArm for LCAP reward tracking.
-fn arm_for_ctx(num_ctx: u32) -> crate::evolved::lcap::BudgetArm {
-    use crate::evolved::lcap::BudgetArm;
-    match num_ctx {
-        0..=4096 => BudgetArm::Sparse,
-        4097..=8192 => BudgetArm::Conservative,
-        8193..=12288 => BudgetArm::Balanced,
-        12289..=16384 => BudgetArm::Rich,
-        _ => BudgetArm::MemoryHeavy,
-    }
 }
 
 // ── Prompts ───────────────────────────────────────────────────────────────────
@@ -3155,7 +3267,11 @@ fn workspace_context() -> String {
                 .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
                 .map(|e| {
                     let name = e.file_name().to_string_lossy().to_string();
-                    if e.path().is_dir() { format!("{name}/") } else { name }
+                    if e.path().is_dir() {
+                        format!("{name}/")
+                    } else {
+                        name
+                    }
                 })
                 .collect()
         })
@@ -3195,7 +3311,11 @@ fn compact_history(task: &TaskNode, canvas: Option<&str>, recent_full: usize) ->
         }
         history.push_str("Earlier steps ledger:\n");
         for step in &task.steps[..older_len] {
-            let status = if step.observation.success { "ok" } else { "err" };
+            let status = if step.observation.success {
+                "ok"
+            } else {
+                "err"
+            };
             let params = serde_json::to_string(&step.action.params).unwrap_or_default();
             let params = truncate(&params, 140).replace('\n', " ");
             let obs = if step.observation.success {
@@ -3356,8 +3476,7 @@ mod tests {
     #[test]
     fn edit_required_task_needs_successful_file_mutation() {
         let mut task = TaskNode::new(
-            "In mathx.py, double(x) computes x * 2 but never returns it. Fix it."
-                .to_string(),
+            "In mathx.py, double(x) computes x * 2 but never returns it. Fix it.".to_string(),
             TaskType::UserRequest,
             1,
         );
@@ -3489,7 +3608,9 @@ mod tests {
 
         assert!(verifier_failed_since_latest_file_mutation(&task));
         let obs = verifier_requires_new_edit_observation();
-        assert!(obs.output.contains("no successful file edit has happened since"));
+        assert!(obs
+            .output
+            .contains("no successful file edit has happened since"));
 
         task.steps.push(ExecutionStep {
             index: 3,
@@ -3517,11 +3638,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("px-inf-repair-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let file = root.join("running.py");
-        std::fs::write(
-            &file,
-            "def running_max(xs):\n    m = -inf\n    return m\n",
-        )
-        .unwrap();
+        std::fs::write(&file, "def running_max(xs):\n    m = -inf\n    return m\n").unwrap();
         let output = format!(
             "stderr:\nTraceback (most recent call last):\n  File \"{}\", line 2, in running_max\n    m = -inf\nNameError: name 'inf' is not defined\n",
             file.display()
@@ -3544,7 +3661,9 @@ mod tests {
         )
         .unwrap();
         assert!(repair.contains("float('-inf')"));
-        assert!(std::fs::read_to_string(&file).unwrap().contains("float('-inf')"));
+        assert!(std::fs::read_to_string(&file)
+            .unwrap()
+            .contains("float('-inf')"));
         let _ = std::fs::remove_dir_all(root);
     }
 

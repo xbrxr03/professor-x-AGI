@@ -5,6 +5,10 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use crate::agentd::graph::{TaskNode, TaskStatus};
+use crate::failure::{
+    classify_failure_mode, extract_failure_class, normalize_failure_mode, parse_failure_class,
+    FailureClass,
+};
 
 #[derive(Debug, Clone)]
 pub struct TaskRun {
@@ -23,6 +27,7 @@ pub struct TaskRun {
     pub verification_summary: String,
     pub verification_artifacts: Vec<String>,
     pub outcome_score: Option<f32>,
+    pub failure_class: Option<FailureClass>,
     pub failure_mode: Option<String>,
     pub transcript_path: Option<String>,
     pub queued_at: DateTime<Utc>,
@@ -123,6 +128,11 @@ impl TaskRunStore {
         let (verification_summary, verification_artifacts) =
             verification_for_task(task, transcript_path);
         let verification_artifacts_raw = serde_json::to_string(&verification_artifacts)?;
+        let normalized_failure_mode = failure_mode.map(normalize_failure_mode);
+        let failure_class = normalized_failure_mode
+            .as_deref()
+            .and_then(extract_failure_class)
+            .or_else(|| failure_mode.map(classify_failure_mode));
         let db = self.db.lock().unwrap();
         db.execute(
             "UPDATE task_runs
@@ -131,12 +141,13 @@ impl TaskRunStore {
                  step_count = ?4,
                  last_summary = ?5,
                  outcome_score = ?6,
-                 failure_mode = ?7,
-                 transcript_path = ?8,
-                 verification_summary = ?9,
-                 verification_artifacts = ?10,
-                 updated_at = ?11,
-                 completed_at = ?12
+                 failure_class = ?7,
+                 failure_mode = ?8,
+                 transcript_path = ?9,
+                 verification_summary = ?10,
+                 verification_artifacts = ?11,
+                 updated_at = ?12,
+                 completed_at = ?13
              WHERE task_id = ?1",
             params![
                 task.id.to_string(),
@@ -151,7 +162,8 @@ impl TaskRunStore {
                     _ => "stopped",
                 },
                 task.outcome_score,
-                failure_mode,
+                failure_class.map(FailureClass::as_str),
+                normalized_failure_mode,
                 transcript_path.map(|path| path.display().to_string()),
                 verification_summary,
                 verification_artifacts_raw,
@@ -173,7 +185,7 @@ impl TaskRunStore {
             "SELECT task_id, description, task_type, status, priority, attempt_count, step_count,
                     last_tool, last_summary, last_output_preview, last_error, last_artifacts,
                     verification_summary, verification_artifacts,
-                    outcome_score, failure_mode, transcript_path,
+                    outcome_score, failure_class, failure_mode, transcript_path,
                     queued_at, started_at, updated_at, completed_at
              FROM task_runs
              WHERE task_id LIKE ?1
@@ -193,7 +205,7 @@ impl TaskRunStore {
             "SELECT task_id, description, task_type, status, priority, attempt_count, step_count,
                     last_tool, last_summary, last_output_preview, last_error, last_artifacts,
                     verification_summary, verification_artifacts,
-                    outcome_score, failure_mode, transcript_path,
+                    outcome_score, failure_class, failure_mode, transcript_path,
                     queued_at, started_at, updated_at, completed_at
              FROM task_runs
              ORDER BY updated_at DESC
@@ -285,10 +297,10 @@ impl TaskRunStore {
 fn parse_run(row: &rusqlite::Row) -> rusqlite::Result<TaskRun> {
     let artifacts_raw: String = row.get(11)?;
     let verification_artifacts_raw: String = row.get(13)?;
-    let queued_at_raw: String = row.get(17)?;
-    let started_at_raw: Option<String> = row.get(18)?;
-    let updated_at_raw: String = row.get(19)?;
-    let completed_at_raw: Option<String> = row.get(20)?;
+    let queued_at_raw: String = row.get(18)?;
+    let started_at_raw: Option<String> = row.get(19)?;
+    let updated_at_raw: String = row.get(20)?;
+    let completed_at_raw: Option<String> = row.get(21)?;
     Ok(TaskRun {
         task_id: row.get(0)?,
         description: row.get(1)?,
@@ -306,8 +318,12 @@ fn parse_run(row: &rusqlite::Row) -> rusqlite::Result<TaskRun> {
         verification_artifacts: serde_json::from_str(&verification_artifacts_raw)
             .unwrap_or_default(),
         outcome_score: row.get(14)?,
-        failure_mode: row.get(15)?,
-        transcript_path: row.get(16)?,
+        failure_class: row
+            .get::<_, Option<String>>(15)?
+            .as_deref()
+            .and_then(parse_failure_class),
+        failure_mode: row.get(16)?,
+        transcript_path: row.get(17)?,
         queued_at: parse_time(&queued_at_raw),
         started_at: started_at_raw.as_deref().map(parse_time),
         updated_at: parse_time(&updated_at_raw),
@@ -402,6 +418,7 @@ mod tests {
                     verification_summary TEXT NOT NULL DEFAULT '',
                     verification_artifacts TEXT NOT NULL DEFAULT '[]',
                     outcome_score REAL,
+                    failure_class TEXT,
                     failure_mode TEXT,
                     transcript_path TEXT,
                     queued_at TEXT NOT NULL,
@@ -468,9 +485,66 @@ mod tests {
             latest.transcript_path.as_deref(),
             Some("artifacts/transcripts/task.json")
         );
+        assert_eq!(latest.failure_class, None);
 
         let recent = store.recent(5).unwrap();
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].task_id, latest.task_id);
+    }
+
+    #[test]
+    fn stores_structured_failure_class() {
+        let db = Arc::new(Mutex::new(Connection::open_in_memory().unwrap()));
+        db.lock()
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE task_runs (
+                    task_id TEXT PRIMARY KEY,
+                    description TEXT NOT NULL,
+                    task_type TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    priority INTEGER NOT NULL DEFAULT 0,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    step_count INTEGER NOT NULL DEFAULT 0,
+                    last_tool TEXT,
+                    last_summary TEXT NOT NULL DEFAULT '',
+                    last_output_preview TEXT,
+                    last_error TEXT,
+                    last_artifacts TEXT NOT NULL DEFAULT '[]',
+                    verification_summary TEXT NOT NULL DEFAULT '',
+                    verification_artifacts TEXT NOT NULL DEFAULT '[]',
+                    outcome_score REAL,
+                    failure_class TEXT,
+                    failure_mode TEXT,
+                    transcript_path TEXT,
+                    queued_at TEXT NOT NULL,
+                    started_at TEXT,
+                    updated_at TEXT NOT NULL,
+                    completed_at TEXT
+                );",
+            )
+            .unwrap();
+
+        let store = TaskRunStore::new(db);
+        let mut task = TaskNode::new(
+            "write malformed daily update".to_string(),
+            crate::agentd::graph::TaskType::Scheduled,
+            90,
+        );
+        store.queued(&task).unwrap();
+        task.status = TaskStatus::Failed;
+        task.started_at = Some(Utc::now());
+        task.completed_at = Some(Utc::now());
+        task.outcome_score = Some(0.0);
+        store
+            .finished(&task, Some("field:recorded_at missing"), None)
+            .unwrap();
+
+        let latest = store.latest().unwrap().unwrap();
+        assert_eq!(latest.failure_class, Some(FailureClass::ArtifactValidation));
+        assert_eq!(
+            latest.failure_mode,
+            Some("[failure:artifact_validation] field:recorded_at missing".to_string())
+        );
     }
 }

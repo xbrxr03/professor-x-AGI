@@ -1,27 +1,27 @@
 pub mod affect;
 pub mod autonomy_queue;
 pub mod causal_traces;
-pub mod computational_body;
-pub mod narrative;
-pub mod phi;
-pub mod pci;
-pub mod self_authored_tests;
-pub mod self_prediction;
 pub mod coding_sessions;
 pub mod coding_smoke;
-pub mod events;
+pub mod computational_body;
 pub mod episodic;
+pub mod events;
 pub mod free_energy;
 pub mod ics;
 pub mod metacognitive;
+pub mod narrative;
+pub mod pci;
+pub mod phi;
 pub mod pinned;
 pub mod procedural;
+pub mod self_authored_tests;
 pub mod self_model;
+pub mod self_prediction;
 pub mod semantic;
 pub mod task_runs;
 pub mod transcripts;
-pub mod working;
 pub mod work_loops;
+pub mod working;
 
 use anyhow::Result;
 use rusqlite::Connection;
@@ -30,19 +30,19 @@ use std::sync::{Arc, Mutex};
 use tracing::info;
 
 use crate::embeddings::EmbeddingStore;
+use crate::memd::affect::AffectStore;
 use crate::memd::causal_traces::CausalTraceStore;
 use crate::memd::computational_body::ComputationalBodyStore;
-use crate::memd::narrative::NarrativeStore;
-use crate::memd::phi::PhiStore;
-use crate::memd::self_authored_tests::SelfAuthoredTestStore;
-use crate::memd::self_prediction::SelfPredictionStore;
-use crate::memd::affect::AffectStore;
 use crate::memd::episodic::EpisodicStore;
 use crate::memd::free_energy::FreeEnergyStore;
 use crate::memd::ics::IcsStore;
+use crate::memd::narrative::NarrativeStore;
+use crate::memd::phi::PhiStore;
 use crate::memd::pinned::PinnedStore;
 use crate::memd::procedural::ProceduralStore;
+use crate::memd::self_authored_tests::SelfAuthoredTestStore;
 use crate::memd::self_model::SelfModelStore;
+use crate::memd::self_prediction::SelfPredictionStore;
 use crate::memd::semantic::SemanticStore;
 use crate::memd::working::WorkingMemory;
 
@@ -199,6 +199,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
     verification_summary TEXT NOT NULL DEFAULT '',
     verification_artifacts TEXT NOT NULL DEFAULT '[]',
     outcome_score REAL,
+    failure_class TEXT,
     failure_mode TEXT,
     transcript_path TEXT,
     queued_at TEXT NOT NULL,
@@ -593,17 +594,11 @@ impl MemoryManager {
                 ("last_error", "TEXT"),
                 ("last_artifacts", "TEXT NOT NULL DEFAULT '[]'"),
                 ("verification_summary", "TEXT NOT NULL DEFAULT ''"),
-                (
-                    "verification_artifacts",
-                    "TEXT NOT NULL DEFAULT '[]'",
-                ),
+                ("verification_artifacts", "TEXT NOT NULL DEFAULT '[]'"),
+                ("failure_class", "TEXT"),
             ],
         )?;
-        ensure_columns(
-            &conn,
-            "coding_smokes",
-            &[("transcript_path", "TEXT")],
-        )?;
+        ensure_columns(&conn, "coding_smokes", &[("transcript_path", "TEXT")])?;
         ensure_columns(
             &conn,
             "coding_sessions",
@@ -635,11 +630,7 @@ impl MemoryManager {
         // Phase B truth gate — declared on a per-cron-job basis. Old rows get
         // NULL via the ALTER TABLE default; the validator treats that as
         // "no expected artifact" (back-compat).
-        ensure_columns(
-            &conn,
-            "cron_jobs",
-            &[("expected_artifact_kind", "TEXT")],
-        )?;
+        ensure_columns(&conn, "cron_jobs", &[("expected_artifact_kind", "TEXT")])?;
         info!("memd: database opened at {}", db_path.display());
 
         let db = Arc::new(Mutex::new(conn));
