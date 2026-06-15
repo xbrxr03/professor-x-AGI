@@ -71,6 +71,8 @@ impl ToolRegistry {
             ("shell.restricted", "Run a sandboxed shell command",         60, 60_000),
             ("patch.review",     "Review a unified diff patch without applying it", 20, 30_000),
             ("patch.apply",      "Check or apply a unified diff patch with fuzzy fallback", 62, 30_000),
+            ("git.checkpoint",   "Create a git-backed restore point for selected paths", 25, 10_000),
+            ("git.undo",         "Restore the latest or selected Professor X checkpoint", 64, 30_000),
             ("shell.elevated",   "Run a privileged shell command",        90, 60_000),
             ("repo.map",         "Ranked map of the codebase's key files and symbols", 10, 20_000),
             ("memory.read",      "Query Professor X memory layers",       5,  5_000),

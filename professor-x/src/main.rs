@@ -8757,6 +8757,26 @@ async fn run_interactive_tasks(
             record_console_command(&events, "tools", None)?;
             continue;
         }
+        if let Some(rest) = input.strip_prefix("/undo") {
+            let checkpoint = rest.trim();
+            let checkpoint = (!checkpoint.is_empty()).then_some(checkpoint);
+            record_console_command(&events, "undo", checkpoint.map(ToString::to_string))?;
+            let workspace_root = PermissionScope::default_autonomous().workspace_root;
+            match toolbridge::checkpoint::undo_checkpoint(&workspace_root, checkpoint) {
+                Ok(summary) => {
+                    events.append(
+                        None,
+                        None,
+                        "checkpoint.undone",
+                        &summary,
+                        serde_json::json!({"checkpoint": checkpoint}),
+                    )?;
+                    println!("✓ {summary}");
+                }
+                Err(e) => println!("undo failed: {e}"),
+            }
+            continue;
+        }
         if matches!(input, "/quit" | "/exit" | "quit" | "exit") {
             break;
         }
@@ -9050,6 +9070,7 @@ fn format_interactive_help() -> String {
         "Professor X interactive task mode",
         "Type a task and press Enter.  Reference files with @path (e.g. 'fix @src/main.rs').",
         "  /model [name]   show/switch the local model    /tools  list available tools",
+        "  /undo [id|path]  restore the latest or selected Prof X checkpoint",
         "",
         "Operator commands",
         "  /brief         show latest run, coding session, evidence, and next commands",

@@ -2738,7 +2738,8 @@ Complete tasks precisely and efficiently using the available tools.\n\n\
 - memory.read        — use for past tasks, learned procedures, or any recall requirement\n\
 - shell.restricted   — prefer standard tools (cargo, git, grep, find); always read stderr on failure\n\
 - patch.review       — inspect unified diffs before applying multi-file changes\n\
-- patch.apply        — multi-line code edits: run check mode first, then apply; if exact git apply fails it can fall back to normalized-whitespace hunk matching\n\
+- patch.apply        — multi-line code edits: run check mode first, then apply; apply mode creates a checkpoint first and can fall back to normalized-whitespace hunk matching\n\
+- git.undo           — restore the latest checkpoint if an applied edit was wrong\n\
 - ollama.complete    — offload sub-queries that would bloat the main context chain\n\
 - web.search → web.fetch — search first, fetch only the single most relevant URL\n\n\
 ## Tool discipline (these mistakes waste steps — avoid them)\n\
@@ -2789,6 +2790,8 @@ const TOOLS_DESCRIPTION: &str = "Available tools:
 - shell.restricted {\"command\": \"<cmd>\"} — run a shell command (sandboxed)
 - patch.review     {\"patch\": \"<unified diff>\"} — review paths/hunks/line deltas without applying
 - patch.apply      {\"mode\": \"check|apply\", \"patch\": \"<unified diff>\"} — check or apply a reviewable git-style patch, with normalized-whitespace fallback for drift
+- git.checkpoint   {\"paths\": [\"src/lib.rs\"], \"reason\": \"before risky edit\"} — create a git-backed restore point
+- git.undo         {\"checkpoint\": \"<optional checkpoint id/path>\"} — restore latest or selected checkpoint
 - scratchpad.write {\"content\": \"<your running plan / notes>\"} — maintain a working plan that persists across steps (use it for multi-step tasks: list the steps, check them off, track what you've learned)
 - meta.observe     {} — look at YOUR OWN recent processing (thoughts, tool calls, results) and notice patterns: are you looping, stalling, making progress?
 - agent.delegate   {\"goal\": \"<focused sub-task>\"} — spawn a sub-agent that solves the sub-goal on its own and returns its result. Use to decompose a hard task into an independent piece (the sub-agent has its own tools and memory).

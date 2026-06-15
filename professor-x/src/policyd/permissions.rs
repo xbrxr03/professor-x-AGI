@@ -42,6 +42,8 @@ impl PermissionScope {
                 "shell.restricted".to_string(),
                 "patch.review".to_string(),
                 "patch.apply".to_string(),
+                "git.checkpoint".to_string(),
+                "git.undo".to_string(),
                 "git.commit".to_string(),
                 "finish".to_string(),
                 "fail".to_string(),
