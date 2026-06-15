@@ -1214,6 +1214,32 @@ impl ReactLoop {
                 || (!synthesis_forced && duplicate_blocks >= 3)
             {
                 synthesis_forced = true;
+                if task_requires_file_edit(task) && !has_successful_file_mutation(task) {
+                    let guidance = edit_required_synthesis_guidance(task);
+                    self.emit_event(
+                        Some(session_id),
+                        Some(task.id),
+                        "react.synthesis_deferred",
+                        "edit-required task has no successful file mutation yet",
+                        json!({"step": step_idx + 1, "max_steps": MAX_STEPS}),
+                    );
+                    task.steps.push(ExecutionStep {
+                        index: (task.steps.len() + 1) as u32,
+                        thought: "loop guard: task requires a file edit before final synthesis"
+                            .to_string(),
+                        action: Action {
+                            tool_name: "auto.synthesize".to_string(),
+                            params: json!({}),
+                            risk_score: 0,
+                        },
+                        observation: guidance,
+                        timestamp: Utc::now(),
+                    });
+                    duplicate_blocks = 0;
+                    consecutive_duplicates = 0;
+                    let _ = TaskRunStore::new(Arc::clone(&self.memory.db)).step_recorded(task);
+                    continue;
+                }
                 // M2: directly synthesize the final answer from the gathered observations
                 // and finish, rather than nudging a stuck model into more thrash → forfeit.
                 if let Some(answer) = self.synthesize_final_answer(task, &react_opts).await {
@@ -1363,6 +1389,30 @@ impl ReactLoop {
                     // interface error and make the expected payload explicit.
                     if parsed.tool_name == "finish" || parsed.tool_name == "done" {
                         if let Some(answer) = finish_answer_from_params(&parsed.params) {
+                            if task_requires_file_edit(task) && !has_successful_file_mutation(task) {
+                                self.emit_event(
+                                    Some(session_id),
+                                    Some(task.id),
+                                    "task.finish_rejected",
+                                    "edit-required task requested finish before successful file mutation",
+                                    json!({"step": step_idx + 1}),
+                                );
+                                let guidance = edit_required_synthesis_guidance(task);
+                                task.steps.push(ExecutionStep {
+                                    index: (step_idx + 1) as u32,
+                                    thought: parsed.thought,
+                                    action: Action {
+                                        tool_name: parsed.tool_name,
+                                        params: parsed.params,
+                                        risk_score: 0,
+                                    },
+                                    observation: guidance,
+                                    timestamp: Utc::now(),
+                                });
+                                let _ = TaskRunStore::new(Arc::clone(&self.memory.db))
+                                    .step_recorded(task);
+                                continue;
+                            }
                             let step = ExecutionStep {
                                 index: (step_idx + 1) as u32,
                                 thought: parsed.thought,
@@ -2511,6 +2561,46 @@ fn synthesis_guidance(task: &TaskNode) -> Observation {
     }
 }
 
+fn edit_required_synthesis_guidance(task: &TaskNode) -> Observation {
+    let summary = successful_observation_summary(task, 5, 900);
+    let output = if summary.trim().is_empty() {
+        "EDIT REQUIRED — this task explicitly asks you to modify a file, but no successful file mutation has happened yet. Do not finish. Read the target file if needed, then call `fs.hash_edit`, `fs.write`, `fs.replace`, or `patch.apply` on the correct line.".to_string()
+    } else {
+        format!(
+            "EDIT REQUIRED — this task explicitly asks you to modify a file, but no successful file mutation has happened yet. Do not finish. Use the observations below to make the minimal edit with `fs.hash_edit`, `fs.write`, `fs.replace`, or `patch.apply`.\n\nSuccessful observations:\n{}",
+            summary
+        )
+    };
+    Observation {
+        success: false,
+        output,
+        error: Some("file edit required before finish".to_string()),
+        tokens_used: 0,
+        execution_ms: 0,
+        artifacts: Vec::new(),
+    }
+}
+
+fn task_requires_file_edit(task: &TaskNode) -> bool {
+    let desc = task.description.to_lowercase();
+    ["fix", "edit", "modify", "update", "change", "write", "add the missing return"]
+        .iter()
+        .any(|needle| desc.contains(needle))
+        && [" file", ".py", ".rs", ".toml", ".json", ".md", "files are in"]
+            .iter()
+            .any(|needle| desc.contains(needle))
+}
+
+fn has_successful_file_mutation(task: &TaskNode) -> bool {
+    task.steps.iter().any(|step| {
+        step.observation.success
+            && matches!(
+                step.action.tool_name.as_str(),
+                "fs.write" | "fs.hash_edit" | "fs.replace" | "patch.apply"
+            )
+    })
+}
+
 fn successful_observation_summary(task: &TaskNode, limit: usize, max_chars: usize) -> String {
     let mut lines = Vec::new();
     for step in task.steps.iter().rev() {
@@ -2900,8 +2990,9 @@ pub(crate) fn effective_memory_ceiling(lcap_ceiling: u32, override_budget: Optio
 mod tests {
     use super::{
         augment_with_repair_hint, auto_repair_enabled_value, compact_history,
-        effective_memory_ceiling, finish_answer_from_params, predict_success_from_ice,
-        should_force_synthesis, should_forfeit_after_synthesis, successful_observation_summary,
+        edit_required_synthesis_guidance, effective_memory_ceiling, finish_answer_from_params,
+        has_successful_file_mutation, predict_success_from_ice, should_force_synthesis,
+        should_forfeit_after_synthesis, successful_observation_summary, task_requires_file_edit,
         Observation,
     };
     use crate::agentd::graph::{ExecutionStep, TaskNode, TaskType};
@@ -3012,6 +3103,71 @@ mod tests {
         assert!(summary.contains("step 1 `fs.read`"));
         assert!(summary.contains("package name is professor-x"));
         assert!(!summary.contains("command failed"));
+    }
+
+    #[test]
+    fn edit_required_task_needs_successful_file_mutation() {
+        let mut task = TaskNode::new(
+            "In mathx.py, double(x) computes x * 2 but never returns it. Fix it."
+                .to_string(),
+            TaskType::UserRequest,
+            1,
+        );
+        assert!(task_requires_file_edit(&task));
+        assert!(!has_successful_file_mutation(&task));
+
+        task.steps.push(ExecutionStep {
+            index: 1,
+            thought: "read".to_string(),
+            action: Action {
+                tool_name: "fs.window_open".to_string(),
+                params: json!({"path": "mathx.py"}),
+                risk_score: 0,
+            },
+            observation: Observation {
+                success: true,
+                output: "L1|6a3| def double(x):\nL2|d29|     x * 2".to_string(),
+                error: None,
+                tokens_used: 0,
+                execution_ms: 0,
+                artifacts: Vec::new(),
+            },
+            timestamp: Utc::now(),
+        });
+        assert!(!has_successful_file_mutation(&task));
+
+        task.steps.push(ExecutionStep {
+            index: 2,
+            thought: "edit".to_string(),
+            action: Action {
+                tool_name: "fs.hash_edit".to_string(),
+                params: json!({"path": "mathx.py", "line": 2}),
+                risk_score: 0,
+            },
+            observation: Observation {
+                success: true,
+                output: "hash_edit apply mathx.py line 2".to_string(),
+                error: None,
+                tokens_used: 0,
+                execution_ms: 0,
+                artifacts: Vec::new(),
+            },
+            timestamp: Utc::now(),
+        });
+        assert!(has_successful_file_mutation(&task));
+    }
+
+    #[test]
+    fn edit_required_guidance_names_mutation_tools() {
+        let task = TaskNode::new(
+            "In helper.py, fix slugify. The files are in /tmp/x.".to_string(),
+            TaskType::UserRequest,
+            1,
+        );
+        let obs = edit_required_synthesis_guidance(&task);
+        assert!(!obs.success);
+        assert!(obs.output.contains("Do not finish"));
+        assert!(obs.output.contains("fs.hash_edit"));
     }
 
     #[test]
