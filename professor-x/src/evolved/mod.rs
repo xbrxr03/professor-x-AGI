@@ -1,3 +1,4 @@
+pub mod code_safety;
 pub mod analyzer;
 pub mod bf;
 pub mod cognition_base;

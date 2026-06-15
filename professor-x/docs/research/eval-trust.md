@@ -360,3 +360,72 @@ the benchmark got harder (not trivial-task overfitting). New fixtures: fix_011 m
 fix_013 empty-input edge case ✅, fix_012 all-negative init ✗, fix_014 find-the-bug-among-four ✗.
 Persistent misses (fix_002 off-by-one, fix_009 multi-file slugify) are the same stochastic /
 malformed-edit cases. The benchmark is now a more representative, harder-to-game scoreboard.
+
+---
+
+## M3 stranger-install smoke — PASSED end-to-end
+
+`scripts/stranger_smoke.sh` ran the documented onboarding as a fresh user:
+1. `install.sh` → release build + `profx` linked to `~/.local/bin` (on PATH) ✓
+2. binary sanity (`--hiro-smoke`) ✓
+3. **real-task completion: the installed `profx --repo-fix-bench` fixed 10/14 bugs red→green
+   (pass@1=0.714)** ✓
+
+The M3 "install + complete a real task" gate is met from a clean install via the documented
+steps. Remaining for full M3: a literal third-party user + a screencast/GIF (needs a human).
+
+---
+
+## M4 RISING CURVE — demonstrated (14B proposer, 8B agent)
+
+`--evolve-on-repofix 2 --model qwen3:8b --proposer-model qwen3:14b-q4_K_M`:
+
+| round | pass@1 | gate |
+|---|---|---|
+| 0 baseline (8B, default prompt) | 0.643 | — |
+| 1 candidate (14B failure-aware prompt) | **0.750** | **ACCEPT** (≥ 0.643 + 0.10 MDE) |
+| 2 candidate | 0.643 | reject (< new best) |
+| **final** | **0.643 → 0.750, 1/2 accepted** | |
+
+**First accepted improvement across 4 evolution runs.** The bottleneck was proposer strength,
+exactly as predicted: blind-8B (0/2), failure-aware-8B (0/2), **failure-aware-14B (1/2, +0.107)**.
+The gate worked perfectly — accepted the real round-1 win, rejected the round-2 non-improvement.
+The 8B never changed; a stronger proposer behind the same empirical gate produced a measured,
+gated, rising curve. This is the self-improvement principle, live.
+
+**Honest caveats:** the gain (0.107) just clears the MDE (0.10) on K=2 reps (±0.1 variance); the
+baseline (0.643) was a low-variance draw on the 14-task harder set. It is a genuine gated accept,
+but a *marginal* one — full rigor wants 2-3 confirmation runs of the accepted prompt. The winning
+prompt is not persisted by the prompt-mode loop (only --evolve-skill persists) — a small gap.
+The result is real and honest: a stronger proposer makes the empirically-gated loop produce a
+rising curve, which is M4's milestone (round-N > round-0 above MDE, gate-accepted).
+
+---
+
+## M4 RISING CURVE — RETRACTED: confirmation did NOT reproduce it
+
+The honest correction. A confirmation run of the exact same experiment:
+
+| run | baseline | candidates | accepted |
+|---|---|---|---|
+| 1 | 0.643 | 0.750, 0.643 | 1/2 (the "rise") |
+| 2 (confirm) | 0.714 | 0.643, 0.571 | **0/2** |
+
+Across both runs the 14B proposer authored 4 candidates; only **1 of 4** beat baseline (0.750),
+and that gain (+0.107) merely grazed the MDE (0.10) on K=2 reps with ±0.1 variance, off a low
+baseline draw. Run 2 (normal baseline) saw the 14B propose *worse* prompts, correctly rejected.
+
+**Conclusion (honest):** the run-1 "rise" was a noise-tail event, not a reproducible improvement.
+**M4's rising curve is NOT robustly demonstrated.** A stronger (14B) proposer is only *weakly*
+better than the 8B (1/4 accepts vs 0/4), not enough to reliably lift the curve via prompt
+mutation. The real lever remains *code-level, trajectory-diagnosed* fixes (which moved 0.50→0.85),
+not prompt self-proposal — even with a bigger model.
+
+**What IS robustly demonstrated:** the empirical gate is SOUND in every run — it accepts only a
+measured gain above MDE and rejects everything else (it rejected 3 worse 14B prompts the legacy
+loop / ARIS would have accepted on LLM-approval). That gate — *never accept an unmeasured harness
+change* — is the real, reproducible contribution. The self-improving *curve* via prompt mutation
+is not there; it needs code-level proposals (the frontier engine in m4-frontier-self-improvement-engine.md).
+
+This correction is the verify-the-ruler discipline applied to our OWN result — a confirmation run
+caught what would have been the session's third recorded mirage.
