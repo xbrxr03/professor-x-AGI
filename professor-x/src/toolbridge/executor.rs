@@ -17,6 +17,7 @@ use crate::toolbridge::apply_patch::apply_fuzzy_patch_to_memory;
 use crate::toolbridge::checkpoint::{create_checkpoint, undo_checkpoint};
 use crate::toolbridge::editverify::{verify_candidate_content, EditVerification};
 use crate::toolbridge::hashedit::{hash_edit_file, hash_read_file, resolve_workspace_path};
+use crate::toolbridge::shell_sandbox::restricted_shell_command;
 use crate::toolbridge::window::{goto_window_file, open_window_file, scroll_window_file};
 use crate::toolbridge::ToolRegistry;
 
@@ -103,6 +104,7 @@ pub struct ToolExecutor {
 #[derive(Debug, Serialize)]
 struct CommandOutputArtifact<'a> {
     command: &'a str,
+    sandbox: &'a str,
     exit_code: Option<i32>,
     success: bool,
     stdout: &'a str,
@@ -414,12 +416,8 @@ impl ToolExecutor {
                 // with no file arg) get immediate EOF instead of blocking
                 // forever — this hung a 14h baseline run on bare `awk '...'`.
                 // Hard 30s timeout so NO command can ever freeze the agent.
-                let child = tokio::process::Command::new("sh")
-                    .arg("-c")
-                    .arg(cmd)
-                    .current_dir(&self.workspace_root)
-                    .stdin(std::process::Stdio::null())
-                    .output();
+                let (mut shell, sandbox) = restricted_shell_command(&self.workspace_root, cmd);
+                let child = shell.output();
                 let out = match tokio::time::timeout(std::time::Duration::from_secs(30), child)
                     .await
                 {
@@ -435,6 +433,7 @@ impl ToolExecutor {
                 let stderr = String::from_utf8_lossy(&out.stderr).to_string();
                 let artifact_path = self.write_command_artifact(
                     cmd,
+                    sandbox.label(),
                     out.status.code(),
                     out.status.success(),
                     &stdout,
@@ -458,7 +457,11 @@ impl ToolExecutor {
                     )
                 };
                 Ok(ToolDispatch::with_artifact(
-                    format!("{preview}\n[full output: {}]", artifact_path.display()),
+                    format!(
+                        "{preview}\n[sandbox: {}]\n[full output: {}]",
+                        sandbox.label(),
+                        artifact_path.display()
+                    ),
                     artifact_path,
                 ))
             }
@@ -950,6 +953,7 @@ impl ToolExecutor {
     fn write_command_artifact(
         &self,
         command: &str,
+        sandbox: &str,
         exit_code: Option<i32>,
         success: bool,
         stdout: &str,
@@ -962,6 +966,7 @@ impl ToolExecutor {
         let path = dir.join(format!("{}.json", uuid::Uuid::new_v4()));
         let artifact = CommandOutputArtifact {
             command,
+            sandbox,
             exit_code,
             success,
             stdout,
@@ -1657,6 +1662,7 @@ mod tests {
             .await;
         assert!(obs.success, "{:?}", obs.error);
         assert!(obs.output.contains("hello professor x"));
+        assert!(obs.output.contains("[sandbox: "));
         assert!(obs.output.contains("[full output:"));
         assert_eq!(obs.artifacts.len(), 1);
 
@@ -1668,6 +1674,9 @@ mod tests {
         let artifact: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&files[0]).unwrap()).unwrap();
         assert_eq!(artifact["command"], "printf 'hello professor x'");
+        assert!(
+            artifact["sandbox"] == "bubblewrap" || artifact["sandbox"] == "fallback-policy-only"
+        );
         assert_eq!(artifact["success"], true);
         assert_eq!(artifact["stdout"], "hello professor x");
 
