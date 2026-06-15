@@ -7929,6 +7929,40 @@ async fn run_single_task(
 /// after the agent's edit (no LLM-judge — see docs/research/eval-trust.md for why).
 /// Measure repo-fix pass@1 once, optionally with a candidate system-prompt override.
 /// Returns (passed, ran). Shared by `--repo-fix-bench` and the M4 evolution loop.
+#[derive(Debug, Clone, serde::Serialize)]
+struct RepoFixTaskResult {
+    id: String,
+    description: String,
+    setup: String,
+    verify_cmd: String,
+    pre_exit: i32,
+    post_exit: i32,
+    expect_exit: i32,
+    passed: bool,
+    made_edit: bool,
+}
+
+#[derive(Debug, Clone)]
+struct RepoFixMeasureResult {
+    passed: usize,
+    ran: usize,
+    failures: Vec<(String, String, bool)>,
+    tasks: Vec<RepoFixTaskResult>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct RepoFixBenchArtifact {
+    run_id: String,
+    recorded_at: String,
+    harness_commit: String,
+    manifest_path: String,
+    model: String,
+    passed: usize,
+    ran: usize,
+    pass_at_1: f64,
+    tasks: Vec<RepoFixTaskResult>,
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn repo_fix_measure(
     ollama: &Arc<ollama::OllamaClient>,
@@ -7939,7 +7973,7 @@ async fn repo_fix_measure(
     cancel: &CancellationToken,
     prompt_override: Option<&str>,
     verbose: bool,
-) -> Result<(usize, usize, Vec<(String, String, bool)>)> {
+) -> Result<RepoFixMeasureResult> {
     use std::process::Command;
 
     #[derive(serde::Deserialize)]
@@ -7982,6 +8016,7 @@ async fn repo_fix_measure(
     let mut ran = 0usize;
     // Failure-aware evolution: (task_id, description, made_edit) for each failed task.
     let mut failures: Vec<(String, String, bool)> = Vec::new();
+    let mut task_results = Vec::new();
     for task in &file.tasks {
         let workdir = std::env::temp_dir().join(format!(
             "px-repofix-{}-{}-{}",
@@ -8022,6 +8057,25 @@ async fn repo_fix_measure(
 
         let post = run_verify(&task.verify_cmd, &workdir);
         let ok = post == task.expect_exit;
+        let made_edit = std::process::Command::new("diff")
+            .args(["-rq", &task.setup])
+            .arg(&workdir)
+            .output()
+            .map(|o| !o.stdout.is_empty())
+            .unwrap_or(false);
+
+        task_results.push(RepoFixTaskResult {
+            id: task.id.clone(),
+            description: task.description.clone(),
+            setup: task.setup.clone(),
+            verify_cmd: task.verify_cmd.clone(),
+            pre_exit: pre,
+            post_exit: post,
+            expect_exit: task.expect_exit,
+            passed: ok,
+            made_edit,
+        });
+
         if ok {
             passed += 1;
             // Lever 1 (distillation): collect the TEST-VERIFIED solving trajectory into the SFT
@@ -8034,12 +8088,6 @@ async fn repo_fix_measure(
         } else {
             // Record HOW it failed so the proposer targets the real pattern (item 3).
             // made_edit=false => "finished without editing" (the dominant measured failure).
-            let made_edit = std::process::Command::new("diff")
-                .args(["-rq", &task.setup])
-                .arg(&workdir)
-                .output()
-                .map(|o| !o.stdout.is_empty())
-                .unwrap_or(false);
             failures.push((task.id.clone(), task.description.clone(), made_edit));
         }
         if verbose {
@@ -8053,7 +8101,12 @@ async fn repo_fix_measure(
         }
         let _ = std::fs::remove_dir_all(&workdir);
     }
-    Ok((passed, ran, failures))
+    Ok(RepoFixMeasureResult {
+        passed,
+        ran,
+        failures,
+        tasks: task_results,
+    })
 }
 
 async fn run_repo_fix_bench(
@@ -8064,18 +8117,61 @@ async fn run_repo_fix_bench(
     events: Arc<EventStore>,
     cancel: CancellationToken,
 ) -> Result<()> {
-    let (passed, ran, _failures) = repo_fix_measure(
+    let result = repo_fix_measure(
         &ollama, &registry, &policy, &memory, &events, &cancel, None, true,
     )
     .await?;
+    let passed = result.passed;
+    let ran = result.ran;
     let p1 = if ran > 0 {
         passed as f64 / ran as f64
     } else {
         0.0
     };
     println!("\n=== REPO-FIX BENCH ===\npass@1 = {p1:.3}  ({passed}/{ran} tasks)");
+    let artifact = write_repo_fix_bench_artifact(&result, ollama.model())?;
+    println!("artifact = {}", artifact.display());
     info!("repo-fix bench complete: pass@1={p1:.3} ({passed}/{ran})");
     Ok(())
+}
+
+fn write_repo_fix_bench_artifact(
+    result: &RepoFixMeasureResult,
+    model: &str,
+) -> Result<std::path::PathBuf> {
+    let repo_root = default_repo_root();
+    let manifest_path = std::env::var("REPO_FIX_TASKS")
+        .unwrap_or_else(|_| "scripts/benchmarks/repo_fix/tasks.json".to_string());
+    let run_id = uuid::Uuid::new_v4().to_string();
+    let pass_at_1 = if result.ran > 0 {
+        result.passed as f64 / result.ran as f64
+    } else {
+        0.0
+    };
+    let artifact = RepoFixBenchArtifact {
+        run_id: run_id.clone(),
+        recorded_at: chrono::Utc::now().to_rfc3339(),
+        harness_commit: git_head(&repo_root).unwrap_or_else(|_| "unknown".to_string()),
+        manifest_path,
+        model: model.to_string(),
+        passed: result.passed,
+        ran: result.ran,
+        pass_at_1,
+        tasks: result.tasks.clone(),
+    };
+    let dir = repo_root
+        .join("professor-x")
+        .join("artifacts")
+        .join("repo-fix")
+        .join(chrono::Utc::now().format("%Y-%m-%d").to_string());
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!(
+        "repo-fix-{}-{}.json",
+        chrono::Utc::now().format("%H%M%S"),
+        short_fragment(&run_id)
+    ));
+    std::fs::write(&path, serde_json::to_string_pretty(&artifact)?)?;
+    Ok(path)
 }
 
 /// M4: self-improvement loop with an EMPIRICAL fitness gate. Unlike the legacy evolution
@@ -8113,11 +8209,11 @@ async fn run_evolve_on_repofix(
             let mut fails: std::collections::HashMap<String, (String, bool)> =
                 std::collections::HashMap::new();
             for _ in 0..K {
-                let (pa, ra, fl) =
+                let result =
                     repo_fix_measure(&o, &r, &p, &m, &e, &c, prompt.as_deref(), false).await?;
-                tot_p += pa;
-                tot_r += ra;
-                for (id, desc, made_edit) in fl {
+                tot_p += result.passed;
+                tot_r += result.ran;
+                for (id, desc, made_edit) in result.failures {
                     fails.insert(id, (desc, made_edit));
                 }
             }
@@ -8280,11 +8376,11 @@ async fn run_evolve_skill_on_repofix(
             let mut fails: std::collections::HashMap<String, (String, bool)> =
                 std::collections::HashMap::new();
             for _ in 0..K {
-                let (pa, ra, fl) =
+                let result =
                     repo_fix_measure(&o, &r, &p, &m, &e, &c, prompt.as_deref(), false).await?;
-                tp += pa;
-                tr += ra;
-                for (id, d, me) in fl {
+                tp += result.passed;
+                tr += result.ran;
+                for (id, d, me) in result.failures {
                     fails.insert(id, (d, me));
                 }
             }
@@ -8393,18 +8489,18 @@ async fn run_evolve_code_on_repofix(
              proposer.model());
 
     // Baseline with the CURRENT (already-built) binary.
-    let (bp, br, fails) =
+    let baseline_result =
         repo_fix_measure(&ollama, &registry, &policy, &memory, &events, &cancel, None, false).await?;
-    let baseline = if br > 0 { bp as f64 / br as f64 } else { 0.0 };
+    let baseline = if baseline_result.ran > 0 { baseline_result.passed as f64 / baseline_result.ran as f64 } else { 0.0 };
     println!("round 0 baseline pass@1 = {baseline:.3}");
-    let failure_report = if fails.is_empty() {
+    let failure_report = if baseline_result.failures.is_empty() {
         "No failures.".to_string()
     } else {
         // ACTIONABLE diagnosis (not a raw failure list — the coder needs a localizable target,
         // see docs/research/m4-code-proposer-scoping.md): classify the dominant failure mode and
         // tell the coder what KIND of code fix it implies (or that it's model-level, not harness).
-        let no_edit = fails.iter().filter(|(_, _, me)| !me).count();
-        let wrong_edit = fails.len() - no_edit;
+        let no_edit = baseline_result.failures.iter().filter(|(_, _, me)| !me).count();
+        let wrong_edit = baseline_result.failures.len() - no_edit;
         let diagnosis = if no_edit >= wrong_edit {
             "DOMINANT FAILURE: the agent finishes WITHOUT making an edit (gathers, then gives up). \
              If this file contains the finish/synthesis/loop logic, a fix would force an edit \
@@ -8414,7 +8510,7 @@ async fn run_evolve_code_on_repofix(
              a MODEL-reasoning limit, not a harness bug — there is likely no code fix here. Only \
              propose a diff if you see a concrete harness defect; otherwise output NO-DIFF."
         };
-        let list = fails.iter().map(|(id, d, me)| {
+        let list = baseline_result.failures.iter().map(|(id, d, me)| {
             format!("- {id}: {} -> {}", d.chars().take(70).collect::<String>(),
                     if *me {"WRONG edit"} else {"NO edit"})
         }).collect::<Vec<_>>().join("\n");
@@ -14726,6 +14822,41 @@ mod tests {
         assert!(summary.contains("exit=0"));
         assert!(summary.contains("stdout=2B"));
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn repo_fix_bench_artifact_carries_reviewable_task_evidence() {
+        let artifact = RepoFixBenchArtifact {
+            run_id: "run-123".to_string(),
+            recorded_at: "2026-06-15T00:00:00Z".to_string(),
+            harness_commit: "abcdef1".to_string(),
+            manifest_path: "scripts/benchmarks/repo_fix/tasks.json".to_string(),
+            model: "qwen3:8b-q4_K_M".to_string(),
+            passed: 1,
+            ran: 2,
+            pass_at_1: 0.5,
+            tasks: vec![RepoFixTaskResult {
+                id: "fix_001".to_string(),
+                description: "fix add".to_string(),
+                setup: "scripts/benchmarks/repo_fix/fix_001".to_string(),
+                verify_cmd: "python3 check.py".to_string(),
+                pre_exit: 1,
+                post_exit: 0,
+                expect_exit: 0,
+                passed: true,
+                made_edit: true,
+            }],
+        };
+
+        let value = serde_json::to_value(&artifact).unwrap();
+        assert_eq!(value["run_id"], "run-123");
+        assert_eq!(value["harness_commit"], "abcdef1");
+        assert_eq!(value["model"], "qwen3:8b-q4_K_M");
+        assert_eq!(value["pass_at_1"], 0.5);
+        assert_eq!(value["tasks"][0]["id"], "fix_001");
+        assert_eq!(value["tasks"][0]["pre_exit"], 1);
+        assert_eq!(value["tasks"][0]["post_exit"], 0);
+        assert_eq!(value["tasks"][0]["made_edit"], true);
     }
 
     #[test]
