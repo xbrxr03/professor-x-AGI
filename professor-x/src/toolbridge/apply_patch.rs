@@ -35,7 +35,9 @@ pub fn apply_fuzzy_patch_to_memory(
         let before = match std::fs::read_to_string(&resolved_path) {
             Ok(content) => content,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
-            Err(err) => return Err(err).with_context(|| format!("read {}", resolved_path.display())),
+            Err(err) => {
+                return Err(err).with_context(|| format!("read {}", resolved_path.display()))
+            }
         };
         let trailing_newline = before.ends_with('\n') || before.is_empty();
         let (after, fuzzy_matches) =

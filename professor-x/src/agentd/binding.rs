@@ -19,7 +19,6 @@
 /// cognition). Features coherent only within their own modality are suppressed.
 /// The bound context is therefore multi-modally grounded — which both reduces
 /// hallucination and raises integration (the IIT phi the system tracks).
-
 use crate::embeddings::cosine_similarity;
 
 /// A candidate context element from one modality, with its embedding.
@@ -71,14 +70,11 @@ pub fn bind(features: &[ModalityFeature], threshold: f32) -> Vec<BoundFeature> {
 
     // Guarantee non-empty output: if nothing cleared the bar, keep the best.
     if !bound.iter().any(|b| b.kept) {
-        if let Some(best) = bound
-            .iter_mut()
-            .max_by(|a, b| {
-                a.coherence
-                    .partial_cmp(&b.coherence)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-        {
+        if let Some(best) = bound.iter_mut().max_by(|a, b| {
+            a.coherence
+                .partial_cmp(&b.coherence)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }) {
             best.kept = true;
         }
     }
@@ -139,12 +135,30 @@ mod tests {
     fn echoed_feature_scores_higher_than_isolated() {
         // episodic + cognition share a direction; a stray semantic is orthogonal.
         let features = vec![
-            feat("episodic", "retrieval before planning works", vec![1.0, 0.0, 0.0], 0.6),
-            feat("cognition", "memory-first improves planning", vec![0.95, 0.05, 0.0], 0.6),
-            feat("semantic", "unrelated note about colour", vec![0.0, 0.0, 1.0], 0.6),
+            feat(
+                "episodic",
+                "retrieval before planning works",
+                vec![1.0, 0.0, 0.0],
+                0.6,
+            ),
+            feat(
+                "cognition",
+                "memory-first improves planning",
+                vec![0.95, 0.05, 0.0],
+                0.6,
+            ),
+            feat(
+                "semantic",
+                "unrelated note about colour",
+                vec![0.0, 0.0, 1.0],
+                0.6,
+            ),
         ];
         let bound = bind(&features, 0.5);
-        let echoed = bound.iter().find(|b| b.content.contains("retrieval before")).unwrap();
+        let echoed = bound
+            .iter()
+            .find(|b| b.content.contains("retrieval before"))
+            .unwrap();
         let isolated = bound.iter().find(|b| b.content.contains("colour")).unwrap();
         assert!(echoed.coherence > isolated.coherence);
         assert!(echoed.kept);
@@ -159,7 +173,10 @@ mod tests {
         ];
         let bound = bind(&features, 0.6);
         let c = bound.iter().find(|b| b.content == "c").unwrap();
-        assert!(!c.kept, "orthogonal low-relevance feature should be suppressed");
+        assert!(
+            !c.kept,
+            "orthogonal low-relevance feature should be suppressed"
+        );
     }
 
     #[test]

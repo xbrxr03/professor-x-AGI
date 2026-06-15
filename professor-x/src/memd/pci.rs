@@ -108,7 +108,10 @@ mod tests {
     fn lz_constant_sequence_is_minimal() {
         // All identical → 2 components (the first bit, then the rest as one run).
         let c = lz76(&[false; 64]);
-        assert!(c <= 3, "constant seq should be near-minimal complexity, got {c}");
+        assert!(
+            c <= 3,
+            "constant seq should be near-minimal complexity, got {c}"
+        );
     }
 
     #[test]
@@ -116,7 +119,10 @@ mod tests {
         // 0101... is highly regular → low complexity relative to length.
         let seq: Vec<bool> = (0..64).map(|i| i % 2 == 0).collect();
         let norm = normalize_lz(lz76(&seq), seq.len());
-        assert!(norm < 0.6, "alternating should be low-complexity, got {norm}");
+        assert!(
+            norm < 0.6,
+            "alternating should be low-complexity, got {norm}"
+        );
     }
 
     #[test]

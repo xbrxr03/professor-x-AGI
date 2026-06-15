@@ -132,7 +132,14 @@ impl AutonomyQueueStore {
              SET status = ?2, result_run_id = ?3, result_report_path = ?4,
                  failure_reason = ?5, completed_at = ?6, updated_at = ?6
              WHERE id = ?1",
-            params![id, status, result_run_id, result_report_path, failure_reason, now],
+            params![
+                id,
+                status,
+                result_run_id,
+                result_report_path,
+                failure_reason,
+                now
+            ],
         )?;
         Ok(())
     }
@@ -203,15 +210,20 @@ pub fn short_queue_id(id: &str) -> String {
     id.chars().take(8).collect()
 }
 
-pub fn autonomy_queue_brief(item: &AutonomyQueueItem, max_summary_chars: usize) -> AutonomyQueueBrief {
+pub fn autonomy_queue_brief(
+    item: &AutonomyQueueItem,
+    max_summary_chars: usize,
+) -> AutonomyQueueBrief {
     let commands = autonomy_queue_commands(item);
     AutonomyQueueBrief {
         queue_id: short_queue_id(&item.id),
         summary: autonomy_queue_summary(item, max_summary_chars),
-        next_command: commands
-            .first()
-            .cloned()
-            .unwrap_or_else(|| format!("cargo run -- --prof-x-queue-review {}", short_queue_id(&item.id))),
+        next_command: commands.first().cloned().unwrap_or_else(|| {
+            format!(
+                "cargo run -- --prof-x-queue-review {}",
+                short_queue_id(&item.id)
+            )
+        }),
         commands,
     }
 }
@@ -333,9 +345,7 @@ mod tests {
             .unwrap();
         let store = AutonomyQueueStore::new(db);
 
-        let low = store
-            .enqueue("low", "operator_run", "core", 1, 10)
-            .unwrap();
+        let low = store.enqueue("low", "operator_run", "core", 1, 10).unwrap();
         let high = store
             .enqueue("high", "operator_run", "commit", 3, 90)
             .unwrap();
@@ -397,7 +407,10 @@ mod tests {
             .unwrap();
         let store = AutonomyQueueStore::new(db);
         let now = Utc::now();
-        for id in ["abc11111-aaaa-bbbb-cccc-123456789abc", "abc22222-aaaa-bbbb-cccc-123456789abc"] {
+        for id in [
+            "abc11111-aaaa-bbbb-cccc-123456789abc",
+            "abc22222-aaaa-bbbb-cccc-123456789abc",
+        ] {
             store
                 .insert(&AutonomyQueueItem {
                     id: id.to_string(),

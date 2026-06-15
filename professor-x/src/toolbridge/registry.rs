@@ -55,31 +55,111 @@ impl ToolRegistry {
     fn register_builtins(&mut self) {
         // Risk scores ported from ClawOS policyd/service.py, extended for Professor X.
         let builtins = [
-            ("fs.read",          "Read file contents",                    10, 5_000),
-            ("fs.hash_read",     "Read file contents with line hashes for anchored edits", 12, 5_000),
-            ("fs.window_open",   "Read a bounded line-hash window from a file", 11, 5_000),
-            ("fs.window_goto",   "Read a bounded line-hash window at a target line", 11, 5_000),
-            ("fs.window_scroll", "Read a bounded line-hash window relative to a prior window", 11, 5_000),
-            ("fs.list",          "List directory contents",               8,  5_000),
-            ("fs.write",         "Write content to a file",               45, 10_000),
-            ("fs.hash_edit",     "Replace one line after verifying its line hash", 40, 10_000),
-            ("fs.replace",       "Replace exactly one text span in a file", 42, 10_000),
-            ("fs.delete",        "Delete a file or directory",            70, 10_000),
-            ("fs.search",        "Search for files matching a pattern",   12, 15_000),
-            ("web.search",       "Search the web for information",        15, 30_000),
-            ("web.fetch",        "Fetch content from a URL",              20, 30_000),
-            ("shell.restricted", "Run a sandboxed shell command",         60, 60_000),
-            ("patch.review",     "Review a unified diff patch without applying it", 20, 30_000),
-            ("patch.apply",      "Check or apply a unified diff patch with fuzzy fallback", 62, 30_000),
-            ("git.checkpoint",   "Create a git-backed restore point for selected paths", 25, 10_000),
-            ("git.undo",         "Restore the latest or selected Professor X checkpoint", 64, 30_000),
-            ("shell.elevated",   "Run a privileged shell command",        90, 60_000),
-            ("repo.map",         "Ranked map of the codebase's key files and symbols", 10, 20_000),
-            ("memory.read",      "Query Professor X memory layers",       5,  5_000),
-            ("memory.write",     "Write an entry to Professor X memory",  10, 5_000),
-            ("ollama.complete",  "Call the local Ollama LLM",             15, 120_000),
-            ("harness.modify",   "Propose a harness component change",    85, 30_000),
-            ("git.commit",       "Commit harness changes to git",         50, 30_000),
+            ("fs.read", "Read file contents", 10, 5_000),
+            (
+                "fs.hash_read",
+                "Read file contents with line hashes for anchored edits",
+                12,
+                5_000,
+            ),
+            (
+                "fs.window_open",
+                "Read a bounded line-hash window from a file",
+                11,
+                5_000,
+            ),
+            (
+                "fs.window_goto",
+                "Read a bounded line-hash window at a target line",
+                11,
+                5_000,
+            ),
+            (
+                "fs.window_scroll",
+                "Read a bounded line-hash window relative to a prior window",
+                11,
+                5_000,
+            ),
+            ("fs.list", "List directory contents", 8, 5_000),
+            ("fs.write", "Write content to a file", 45, 10_000),
+            (
+                "fs.hash_edit",
+                "Replace one line after verifying its line hash",
+                40,
+                10_000,
+            ),
+            (
+                "fs.replace",
+                "Replace exactly one text span in a file",
+                42,
+                10_000,
+            ),
+            ("fs.delete", "Delete a file or directory", 70, 10_000),
+            (
+                "fs.search",
+                "Search for files matching a pattern",
+                12,
+                15_000,
+            ),
+            ("web.search", "Search the web for information", 15, 30_000),
+            ("web.fetch", "Fetch content from a URL", 20, 30_000),
+            (
+                "shell.restricted",
+                "Run a sandboxed shell command",
+                60,
+                60_000,
+            ),
+            (
+                "patch.review",
+                "Review a unified diff patch without applying it",
+                20,
+                30_000,
+            ),
+            (
+                "patch.apply",
+                "Check or apply a unified diff patch with fuzzy fallback",
+                62,
+                30_000,
+            ),
+            (
+                "git.checkpoint",
+                "Create a git-backed restore point for selected paths",
+                25,
+                10_000,
+            ),
+            (
+                "git.undo",
+                "Restore the latest or selected Professor X checkpoint",
+                64,
+                30_000,
+            ),
+            (
+                "shell.elevated",
+                "Run a privileged shell command",
+                90,
+                60_000,
+            ),
+            (
+                "repo.map",
+                "Ranked map of the codebase's key files and symbols",
+                10,
+                20_000,
+            ),
+            ("memory.read", "Query Professor X memory layers", 5, 5_000),
+            (
+                "memory.write",
+                "Write an entry to Professor X memory",
+                10,
+                5_000,
+            ),
+            ("ollama.complete", "Call the local Ollama LLM", 15, 120_000),
+            (
+                "harness.modify",
+                "Propose a harness component change",
+                85,
+                30_000,
+            ),
+            ("git.commit", "Commit harness changes to git", 50, 30_000),
         ];
         for (name, desc, risk, timeout) in builtins {
             self.tools.insert(
@@ -105,7 +185,8 @@ impl ToolRegistry {
 
     /// Validate params against the tool's JSON Schema (basic type checking).
     pub fn validate_params(&self, name: &str, params: &serde_json::Value) -> Result<()> {
-        let manifest = self.get(name)
+        let manifest = self
+            .get(name)
             .ok_or_else(|| anyhow::anyhow!("unknown tool: {name}"))?;
 
         // Minimal validation: ensure params is an object if schema expects one.

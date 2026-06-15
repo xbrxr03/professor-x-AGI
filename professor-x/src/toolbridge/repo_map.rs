@@ -60,13 +60,10 @@ fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
 /// to `max_files` files.
 pub fn build_repo_map(root: &Path, focus: Option<&str>, max_files: usize) -> String {
     // Prefer the crate's src/ (canonical or nested), else the root itself.
-    let src = [
-        root.join("professor-x/src"),
-        root.join("src"),
-    ]
-    .into_iter()
-    .find(|p| p.exists())
-    .unwrap_or_else(|| root.to_path_buf());
+    let src = [root.join("professor-x/src"), root.join("src")]
+        .into_iter()
+        .find(|p| p.exists())
+        .unwrap_or_else(|| root.to_path_buf());
 
     let mut files = Vec::new();
     collect_rs_files(&src, &mut files);
@@ -119,7 +116,13 @@ pub fn build_repo_map(root: &Path, focus: Option<&str>, max_files: usize) -> Str
             // file score = sum over defined symbols of (global references - 1 def)
             let mut score: u64 = syms
                 .iter()
-                .map(|s| global_freq.get(&s.name).copied().unwrap_or(1).saturating_sub(1) as u64)
+                .map(|s| {
+                    global_freq
+                        .get(&s.name)
+                        .copied()
+                        .unwrap_or(1)
+                        .saturating_sub(1) as u64
+                })
                 .sum();
             if let Some(f) = &focus_lc {
                 let path_hit = file.to_string_lossy().to_lowercase().contains(f);
@@ -148,7 +151,10 @@ pub fn build_repo_map(root: &Path, focus: Option<&str>, max_files: usize) -> Str
             .to_string_lossy()
             .to_string();
         // Show the most-referenced symbols in this file (up to 8).
-        let mut syms: Vec<&&Symbol> = by_file.get(file).map(|v| v.iter().collect()).unwrap_or_default();
+        let mut syms: Vec<&&Symbol> = by_file
+            .get(file)
+            .map(|v| v.iter().collect())
+            .unwrap_or_default();
         syms.sort_by_key(|s| std::cmp::Reverse(global_freq.get(&s.name).copied().unwrap_or(0)));
         let listed: Vec<String> = syms
             .iter()

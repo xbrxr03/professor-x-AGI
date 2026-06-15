@@ -66,7 +66,15 @@ impl EventStore {
             )?;
             db.last_insert_rowid()
         };
-        self.append_jsonl(id, timestamp, session_id, task_id, event_type, summary.as_ref(), &payload)?;
+        self.append_jsonl(
+            id,
+            timestamp,
+            session_id,
+            task_id,
+            event_type,
+            summary.as_ref(),
+            &payload,
+        )?;
         Ok(())
     }
 
@@ -80,7 +88,8 @@ impl EventStore {
              LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit], parse_event)?;
-        let mut events: Vec<AgentEvent> = rows.map(|r| r.map_err(Into::into)).collect::<Result<_>>()?;
+        let mut events: Vec<AgentEvent> =
+            rows.map(|r| r.map_err(Into::into)).collect::<Result<_>>()?;
         events.reverse();
         Ok(events)
     }
@@ -97,7 +106,8 @@ impl EventStore {
             work_event_where_clause()
         ))?;
         let rows = stmt.query_map(params![limit], parse_event)?;
-        let mut events: Vec<AgentEvent> = rows.map(|r| r.map_err(Into::into)).collect::<Result<_>>()?;
+        let mut events: Vec<AgentEvent> =
+            rows.map(|r| r.map_err(Into::into)).collect::<Result<_>>()?;
         events.reverse();
         Ok(events)
     }
@@ -253,10 +263,22 @@ mod tests {
         let store = EventStore::new(db);
 
         store
-            .append(None, None, "daemon.started", "started", serde_json::json!({}))
+            .append(
+                None,
+                None,
+                "daemon.started",
+                "started",
+                serde_json::json!({}),
+            )
             .unwrap();
         store
-            .append(None, None, "task.queued", "queued", serde_json::json!({"priority": 100}))
+            .append(
+                None,
+                None,
+                "task.queued",
+                "queued",
+                serde_json::json!({"priority": 100}),
+            )
             .unwrap();
         store
             .append(

@@ -258,7 +258,10 @@ impl WorkLoopGateStore {
              ORDER BY cycle ASC
              LIMIT ?2",
         )?;
-        let rows = stmt.query_map(params![run_id, limit.clamp(1, 500) as i64], parse_gate_record)?;
+        let rows = stmt.query_map(
+            params![run_id, limit.clamp(1, 500) as i64],
+            parse_gate_record,
+        )?;
         rows.map(|row| row.map_err(Into::into)).collect()
     }
 }
@@ -482,6 +485,9 @@ mod tests {
         let latest = store.latest().unwrap().unwrap();
         assert_eq!(latest.status, "passed");
         assert_eq!(latest.passed, Some(true));
-        assert_eq!(latest.report_path.as_deref(), Some("artifacts/coding-smoke/report.json"));
+        assert_eq!(
+            latest.report_path.as_deref(),
+            Some("artifacts/coding-smoke/report.json")
+        );
     }
 }

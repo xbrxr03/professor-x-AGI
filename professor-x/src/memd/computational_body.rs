@@ -19,7 +19,6 @@
 /// signals anxiety. Under computational stress the agent shifts to System 1
 /// (fast, heuristic, cerebellum bypass); when comfortable, System 2
 /// (deliberate, full ReAct).
-
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
@@ -89,8 +88,7 @@ impl ComputationalVitals {
     /// Interoceptive prediction error against a predicted state.
     /// Seth: the gap between predicted and actual body state drives behaviour.
     pub fn interoceptive_error(&self, predicted: &ComputationalVitals) -> f32 {
-        let dl = (self.inference_latency_ms - predicted.inference_latency_ms).abs()
-            / 10_000.0;
+        let dl = (self.inference_latency_ms - predicted.inference_latency_ms).abs() / 10_000.0;
         let dt = (self.token_budget_used - predicted.token_budget_used).abs();
         let dm = (self.memory_pressure - predicted.memory_pressure).abs();
         ((dl.min(1.0) + dt + dm) / 3.0).clamp(0.0, 1.0)

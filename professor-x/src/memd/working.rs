@@ -4,7 +4,6 @@
 /// execution history into a compact flowchart. The canvas replaces the
 /// raw Thought/Action/Observation transcript in every ReAct prompt step,
 /// saving ~61% tokens (TencentDB Agent Memory, arXiv result).
-
 use std::collections::VecDeque;
 use uuid::Uuid;
 
@@ -64,10 +63,17 @@ impl MermaidCanvas {
 
     /// Convenience: record a ReAct tool call step.
     pub fn record_canvas_step(&mut self, tool: &str, param_preview: &str, success: bool) {
-        let label = format!("{tool} {}", param_preview.chars().take(30).collect::<String>())
-            .trim()
-            .to_string();
-        let status = if success { StepStatus::Ok } else { StepStatus::Failed };
+        let label = format!(
+            "{tool} {}",
+            param_preview.chars().take(30).collect::<String>()
+        )
+        .trim()
+        .to_string();
+        let status = if success {
+            StepStatus::Ok
+        } else {
+            StepStatus::Failed
+        };
         self.push(label, status);
     }
 
@@ -176,7 +182,11 @@ impl WorkingMemory {
         )
         .trim()
         .to_string();
-        let status = if success { StepStatus::Ok } else { StepStatus::Failed };
+        let status = if success {
+            StepStatus::Ok
+        } else {
+            StepStatus::Failed
+        };
         self.canvas.push(label, status);
     }
 

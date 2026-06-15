@@ -17,7 +17,6 @@
 /// experiment: do DMN insights produce better evolution proposals than
 /// failure-analysis alone? If yes, unstructured reflection is necessary for
 /// intelligence — not a luxury.
-
 use anyhow::Result;
 use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
@@ -141,9 +140,7 @@ fn sample_disparate_fragments(db: &Arc<Mutex<Connection>>, n: usize) -> Result<V
     let per_source = (n / 2).max(1);
 
     // Cognition (knowledge — papers, domain seeds, prior insights)
-    if let Ok(mut stmt) =
-        conn.prepare("SELECT content FROM cognition ORDER BY RANDOM() LIMIT ?1")
-    {
+    if let Ok(mut stmt) = conn.prepare("SELECT content FROM cognition ORDER BY RANDOM() LIMIT ?1") {
         if let Ok(rows) = stmt.query_map([per_source as i64], |r| r.get::<_, String>(0)) {
             for r in rows.flatten() {
                 fragments.push(r);
@@ -151,9 +148,7 @@ fn sample_disparate_fragments(db: &Arc<Mutex<Connection>>, n: usize) -> Result<V
         }
     }
     // Episodic (lived experience — past task outcomes)
-    if let Ok(mut stmt) =
-        conn.prepare("SELECT content FROM episodic ORDER BY RANDOM() LIMIT ?1")
-    {
+    if let Ok(mut stmt) = conn.prepare("SELECT content FROM episodic ORDER BY RANDOM() LIMIT ?1") {
         if let Ok(rows) = stmt.query_map([per_source as i64], |r| r.get::<_, String>(0)) {
             for r in rows.flatten() {
                 fragments.push(r);
@@ -161,9 +156,7 @@ fn sample_disparate_fragments(db: &Arc<Mutex<Connection>>, n: usize) -> Result<V
         }
     }
     // Semantic (learned principles)
-    if let Ok(mut stmt) =
-        conn.prepare("SELECT content FROM semantic ORDER BY RANDOM() LIMIT 2")
-    {
+    if let Ok(mut stmt) = conn.prepare("SELECT content FROM semantic ORDER BY RANDOM() LIMIT 2") {
         if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) {
             for r in rows.flatten() {
                 fragments.push(r);
@@ -247,7 +240,8 @@ mod tests {
 
     #[test]
     fn extract_field_parses_labeled_lines() {
-        let text = "INSIGHT: tool retries mirror synaptic pruning\nACTIONABLE: retire after 3 fails";
+        let text =
+            "INSIGHT: tool retries mirror synaptic pruning\nACTIONABLE: retire after 3 fails";
         assert_eq!(
             extract_field(text, "INSIGHT").as_deref(),
             Some("tool retries mirror synaptic pruning")
@@ -282,7 +276,8 @@ mod tests {
                 "INSERT INTO episodic (id, timestamp, content, keywords, importance)
                  VALUES (?1, '2026-01-01T00:00:00Z', ?2, '[]', 0.5)",
                 params![format!("e{i}"), format!("episodic memory {i}")],
-            ).unwrap();
+            )
+            .unwrap();
         }
         let db = Arc::new(Mutex::new(conn));
         let fragments = sample_disparate_fragments(&db, 6).unwrap();

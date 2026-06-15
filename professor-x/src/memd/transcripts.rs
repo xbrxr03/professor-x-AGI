@@ -390,7 +390,9 @@ mod tests {
             )
             .unwrap();
 
-        let path = store.record_task(&task, "succeeded", "done", &events).unwrap();
+        let path = store
+            .record_task(&task, "succeeded", "done", &events)
+            .unwrap();
         let raw = std::fs::read_to_string(path).unwrap();
         let transcript: serde_json::Value = serde_json::from_str(&raw).unwrap();
 

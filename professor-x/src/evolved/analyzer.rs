@@ -1,6 +1,5 @@
 /// Analyzer module — distills experimental outcomes into reusable insights.
 /// Source: ASI-Evolve pipeline/analyzer/analyzer.py
-
 use crate::evolved::cognition_base::CognitionItem;
 
 pub struct Analyzer;
@@ -9,11 +8,7 @@ impl Analyzer {
     /// Build the analyzer prompt for the LLM.
     /// Input: evolution node description + experimental results.
     /// Output: analysis string + new CognitionItem to write to cognition store.
-    pub fn build_prompt(
-        motivation: &str,
-        diff_applied: &str,
-        results_json: &str,
-    ) -> String {
+    pub fn build_prompt(motivation: &str, diff_applied: &str, results_json: &str) -> String {
         format!(
             "You are the Analyzer agent in a self-evolving AI harness.\n\n\
              Evolution proposal:\n{motivation}\n\n\
@@ -68,7 +63,11 @@ fn extract_keywords(text: &str) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
     text.split_whitespace()
         .filter(|w| w.len() > 5)
-        .map(|w| w.to_lowercase().trim_matches(|c: char| !c.is_alphabetic()).to_string())
+        .map(|w| {
+            w.to_lowercase()
+                .trim_matches(|c: char| !c.is_alphabetic())
+                .to_string()
+        })
         .filter(|w| !w.is_empty() && seen.insert(w.clone()))
         .take(5)
         .collect()

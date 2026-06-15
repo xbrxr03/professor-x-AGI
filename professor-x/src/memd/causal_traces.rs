@@ -11,7 +11,6 @@
 /// After N rounds, `extract_patterns` returns the causal sequences that reliably
 /// precede success across task categories — these feed the Researcher as context
 /// and inform LCAP arm selection.
-
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
@@ -173,8 +172,7 @@ impl CausalTraceStore {
                     continue;
                 }
             }
-            let actions: Vec<TimedAction> =
-                serde_json::from_str(&actions_json).unwrap_or_default();
+            let actions: Vec<TimedAction> = serde_json::from_str(&actions_json).unwrap_or_default();
 
             // Extract tools in STDP window
             let window_actions: Vec<&TimedAction> = actions
@@ -199,9 +197,7 @@ impl CausalTraceStore {
         let mut patterns: Vec<CausalPattern> = pattern_stats
             .into_iter()
             .filter(|(_, (total, _))| *total >= min_occurrences)
-            .filter(|(_, (total, successes))| {
-                *successes as f32 / *total as f32 >= min_success_rate
-            })
+            .filter(|(_, (total, successes))| *successes as f32 / *total as f32 >= min_success_rate)
             .map(|((cat, tool_a, tool_b), (total, successes))| {
                 let key = (cat.clone(), tool_a.clone(), tool_b.clone());
                 let timings = pattern_timing.get(&key).cloned().unwrap_or_default();
@@ -296,7 +292,14 @@ mod tests {
                 succeeded: true,
             })
             .collect();
-        CausalTrace::new("sess", "task", category, actions, outcome, if outcome { 1.0 } else { 0.0 })
+        CausalTrace::new(
+            "sess",
+            "task",
+            category,
+            actions,
+            outcome,
+            if outcome { 1.0 } else { 0.0 },
+        )
     }
 
     #[test]
@@ -329,7 +332,9 @@ mod tests {
         let t = make_trace("planning", &["memory.read", "fs.write"], false);
         store.insert(&t).unwrap();
 
-        let patterns = store.extract_patterns(Some("planning"), 3, 0.6, 10_000).unwrap();
+        let patterns = store
+            .extract_patterns(Some("planning"), 3, 0.6, 10_000)
+            .unwrap();
         assert!(!patterns.is_empty());
         assert_eq!(patterns[0].sequence, vec!["memory.read", "fs.write"]);
         assert!((patterns[0].success_rate - 5.0 / 6.0).abs() < 0.01);

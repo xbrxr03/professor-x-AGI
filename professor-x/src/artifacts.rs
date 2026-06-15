@@ -87,12 +87,9 @@ impl ArtifactKind {
                 "frozen_harness",
                 "recorded_at",
             ],
-            Self::EvolutionProposal => &[
-                "target_component",
-                "motivation",
-                "manifest",
-                "generated_at",
-            ],
+            Self::EvolutionProposal => {
+                &["target_component", "motivation", "manifest", "generated_at"]
+            }
             Self::EvolutionRejection => &["target_component", "reason", "generated_at"],
         }
     }
@@ -291,7 +288,9 @@ impl ArtifactValidator {
     }
 
     pub fn write_report(&self, report: &mut ArtifactValidationReport) -> Result<PathBuf> {
-        let dir = self.report_dir.join(Utc::now().format("%Y-%m-%d").to_string());
+        let dir = self
+            .report_dir
+            .join(Utc::now().format("%Y-%m-%d").to_string());
         std::fs::create_dir_all(&dir)?;
         let path = dir.join(format!("{}.json", report.task_id));
         report.report_path = Some(path.to_string_lossy().to_string());
@@ -320,7 +319,10 @@ impl ArtifactValidator {
                 if !root.exists() {
                     continue;
                 }
-                for path in walk_dir(&root).into_iter().filter(|path| is_artifact_file(path)) {
+                for path in walk_dir(&root)
+                    .into_iter()
+                    .filter(|path| is_artifact_file(path))
+                {
                     let mut checks = vec![check_path_root(kind, &path)];
                     checks.extend(validate_required_fields(kind, &path));
                     checks.push(check_no_nested_pxpx_for_path(&path));
@@ -409,14 +411,19 @@ fn check_no_nested_pxpx() -> ArtifactCheck {
     } else {
         ArtifactCheck::fail(
             "no_nested_professor_x_dir",
-            format!("nested {} exists; outputs should not double-prefix", bad.display()),
+            format!(
+                "nested {} exists; outputs should not double-prefix",
+                bad.display()
+            ),
         )
     }
 }
 
 fn check_no_nested_pxpx_for_path(path: &Path) -> ArtifactCheck {
     let s = path.to_string_lossy();
-    if s.contains("professor-x/professor-x/professor-x") || s.contains("professor-x\\professor-x\\professor-x") {
+    if s.contains("professor-x/professor-x/professor-x")
+        || s.contains("professor-x\\professor-x\\professor-x")
+    {
         return ArtifactCheck::fail(
             "no_nested_professor_x_dir",
             format!("artifact path '{}' contains triple professor-x nesting", s),
@@ -558,7 +565,11 @@ fn apply_artifact_schema_aliases(kind: ArtifactKind, fields: &mut BTreeMap<Strin
             let is_dry_run = fields.get("mode").is_some_and(|mode| mode == "dry_run");
             let has_dry_run_evidence = ["reason", "checks", "diff_hash", "harness_commit"]
                 .iter()
-                .all(|field| fields.get(*field).is_some_and(|value| !value.trim().is_empty()));
+                .all(|field| {
+                    fields
+                        .get(*field)
+                        .is_some_and(|value| !value.trim().is_empty())
+                });
             if is_dry_run && has_dry_run_evidence && !fields.contains_key("manifest") {
                 fields.insert(
                     "manifest".to_string(),
@@ -670,7 +681,10 @@ fn check_not_placeholder(field: &str, value: &str) -> ArtifactCheck {
         "dummy",
         "example",
     ];
-    if bad.iter().any(|bad| normalized == *bad || normalized.contains(&format!("<{bad}>"))) {
+    if bad
+        .iter()
+        .any(|bad| normalized == *bad || normalized.contains(&format!("<{bad}>")))
+    {
         ArtifactCheck::fail(
             format!("field:{field}:not_placeholder"),
             format!("'{value}' is placeholder metadata"),
@@ -709,9 +723,15 @@ fn check_timestamp_field(field: &str, value: &str) -> ArtifactCheck {
 }
 
 fn check_filename_matches_date(path: &Path, date: &str) -> ArtifactCheck {
-    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
     if stem == date.trim() {
-        ArtifactCheck::pass("filename_matches_date", "daily update filename matches date")
+        ArtifactCheck::pass(
+            "filename_matches_date",
+            "daily update filename matches date",
+        )
     } else {
         ArtifactCheck::fail(
             "filename_matches_date",
@@ -754,7 +774,10 @@ fn check_citations_field(value: &str) -> ArtifactCheck {
     let lower = value.to_ascii_lowercase();
     let source_markers = ["arxiv", "doi:", "http://", "https://", "paper:", "isbn:"];
     if source_markers.iter().any(|marker| lower.contains(marker)) {
-        ArtifactCheck::pass("field:citations:sourced", "citations include source identifiers")
+        ArtifactCheck::pass(
+            "field:citations:sourced",
+            "citations include source identifiers",
+        )
     } else {
         ArtifactCheck::fail(
             "field:citations:sourced",
@@ -876,7 +899,10 @@ fn locate_artifact(kind: ArtifactKind) -> Option<PathBuf> {
             _ => {
                 // Most-recently-modified file under the allowed root.
                 let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
-                for path in walk_dir(&root).into_iter().filter(|path| is_artifact_file(path)) {
+                for path in walk_dir(&root)
+                    .into_iter()
+                    .filter(|path| is_artifact_file(path))
+                {
                     let Ok(meta) = std::fs::metadata(&path) else {
                         continue;
                     };
@@ -932,11 +958,7 @@ fn walk_dir(root: &Path) -> Vec<PathBuf> {
         };
         for entry in read.flatten() {
             let path = entry.path();
-            if entry
-                .file_type()
-                .map(|ft| ft.is_dir())
-                .unwrap_or(false)
-            {
+            if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
                 stack.push(path);
                 continue;
             }

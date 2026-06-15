@@ -328,12 +328,21 @@ mod tests {
 
     #[test]
     fn checkpoint_restores_plain_non_git_workspace() {
-        let root = std::env::temp_dir().join(format!("px-checkpoint-plain-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("px-checkpoint-plain-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(root.join("src")).unwrap();
-        std::fs::write(root.join("src/lib.py"), "def add(a, b):\n    return a - b\n").unwrap();
+        std::fs::write(
+            root.join("src/lib.py"),
+            "def add(a, b):\n    return a - b\n",
+        )
+        .unwrap();
 
         let manifest = create_checkpoint(&root, &[PathBuf::from("src/lib.py")], "plain").unwrap();
-        std::fs::write(root.join("src/lib.py"), "def add(a, b):\n    return a + b\n").unwrap();
+        std::fs::write(
+            root.join("src/lib.py"),
+            "def add(a, b):\n    return a + b\n",
+        )
+        .unwrap();
 
         let out = undo_checkpoint(&root, manifest.to_str()).unwrap();
         assert!(out.contains("restored 1"));

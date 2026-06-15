@@ -1,8 +1,8 @@
 use anyhow::Result;
 use rusqlite::params;
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
-use rusqlite::Connection;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PinnedEntry {
@@ -46,7 +46,10 @@ impl PinnedStore {
 
     pub fn delete(&self, id: &str) -> Result<()> {
         let db = self.db.lock().unwrap();
-        db.execute("DELETE FROM pinned WHERE id = ?1 AND immutable = 0", params![id])?;
+        db.execute(
+            "DELETE FROM pinned WHERE id = ?1 AND immutable = 0",
+            params![id],
+        )?;
         Ok(())
     }
 }

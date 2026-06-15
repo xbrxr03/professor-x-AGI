@@ -245,10 +245,7 @@ mod tests {
             store.get_by_ref("session-1").unwrap().unwrap().id,
             "session-1"
         );
-        assert_eq!(
-            store.get_by_ref("latest").unwrap().unwrap().id,
-            "session-1"
-        );
+        assert_eq!(store.get_by_ref("latest").unwrap().unwrap().id, "session-1");
         assert_eq!(store.recent(5).unwrap().len(), 1);
     }
 }

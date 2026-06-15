@@ -1,3 +1,4 @@
+use aes_gcm::aead::rand_core::RngCore;
 /// AES-256-GCM credential vault.
 ///
 /// Security contract (Architecture doc, Section 9):
@@ -6,12 +7,10 @@
 /// - vault.key and vault.enc are in blocked_paths — never read by the agent.
 /// - Key is derived from a user passphrase (PBKDF2-HMAC-SHA256, 100k iterations) or
 ///   from a random key stored in vault.key (automated / no-passphrase mode).
-
 use aes_gcm::{
     aead::{Aead, KeyInit, OsRng},
     Aes256Gcm, Key, Nonce,
 };
-use aes_gcm::aead::rand_core::RngCore;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
@@ -20,7 +19,7 @@ use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
 const NONCE_LEN: usize = 12;
-const KEY_LEN: usize   = 32;
+const KEY_LEN: usize = 32;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct VaultStore {
@@ -44,7 +43,7 @@ impl CredentialVault {
     /// Open or create vault. Key file is auto-generated on first use.
     /// In production: replace with passphrase-derived key (PBKDF2).
     pub fn open(data_dir: &Path) -> Result<Self> {
-        let key_path   = data_dir.join("vault.key");
+        let key_path = data_dir.join("vault.key");
         let vault_path = data_dir.join("vault.enc");
 
         let key = if key_path.exists() {
@@ -81,13 +80,17 @@ impl CredentialVault {
         OsRng.fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
 
-        let ciphertext = cipher.encrypt(nonce, value.as_bytes())
+        let ciphertext = cipher
+            .encrypt(nonce, value.as_bytes())
             .map_err(|e| anyhow::anyhow!("vault encrypt: {e}"))?;
 
-        store.entries.insert(name.to_string(), EncryptedEntry {
-            nonce: base64_encode(&nonce_bytes),
-            ciphertext: base64_encode(&ciphertext),
-        });
+        store.entries.insert(
+            name.to_string(),
+            EncryptedEntry {
+                nonce: base64_encode(&nonce_bytes),
+                ciphertext: base64_encode(&ciphertext),
+            },
+        );
 
         self.save_store(&store)?;
         debug!("vault: stored credential '{name}'");
@@ -103,13 +106,14 @@ impl CredentialVault {
 
         let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.key));
         let nonce_bytes = base64_decode(&entry.nonce)?;
-        let ciphertext  = base64_decode(&entry.ciphertext)?;
+        let ciphertext = base64_decode(&entry.ciphertext)?;
 
         if nonce_bytes.len() != NONCE_LEN {
             bail!("vault: corrupt nonce for '{name}'");
         }
         let nonce = Nonce::from_slice(&nonce_bytes);
-        let plaintext = cipher.decrypt(nonce, ciphertext.as_slice())
+        let plaintext = cipher
+            .decrypt(nonce, ciphertext.as_slice())
             .map_err(|_| anyhow::anyhow!("vault: decryption failed for '{name}' — wrong key?"))?;
 
         Ok(Some(String::from_utf8(plaintext)?))
@@ -145,7 +149,9 @@ impl CredentialVault {
 
     fn load_store(&self) -> Result<VaultStore> {
         if !self.vault_path.exists() {
-            return Ok(VaultStore { entries: HashMap::new() });
+            return Ok(VaultStore {
+                entries: HashMap::new(),
+            });
         }
         let bytes = std::fs::read(&self.vault_path)?;
         Ok(serde_json::from_slice(&bytes)?)
@@ -164,7 +170,6 @@ impl CredentialVault {
 }
 
 fn base64_encode(data: &[u8]) -> String {
-    
     // Simple base64 using hex as a stand-in — real base64 via manual impl
     // to avoid adding another dep. In production replace with base64 crate.
     engine_encode(data)
@@ -186,8 +191,16 @@ fn engine_encode(input: &[u8]) -> String {
         let combined = (b0 << 16) | (b1 << 8) | b2;
         out.push(CHARS[((combined >> 18) & 0x3f) as usize] as char);
         out.push(CHARS[((combined >> 12) & 0x3f) as usize] as char);
-        out.push(if chunk.len() > 1 { CHARS[((combined >> 6) & 0x3f) as usize] as char } else { '=' });
-        out.push(if chunk.len() > 2 { CHARS[(combined & 0x3f) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            CHARS[((combined >> 6) & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            CHARS[(combined & 0x3f) as usize] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -197,7 +210,10 @@ fn engine_decode(s: &str) -> Option<Vec<u8>> {
         let mut t = [-1i8; 128];
         let chars = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         let mut i = 0usize;
-        while i < chars.len() { t[chars[i] as usize] = i as i8; i += 1; }
+        while i < chars.len() {
+            t[chars[i] as usize] = i as i8;
+            i += 1;
+        }
         t
     };
 
@@ -205,12 +221,23 @@ fn engine_decode(s: &str) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
 
     for chunk in bytes.chunks(4) {
-        let vals: Vec<u8> = chunk.iter().map(|&b| {
-            if b >= 128 { return 255u8; }
-            let v = INV[b as usize];
-            if v < 0 { 255u8 } else { v as u8 }
-        }).collect();
-        if vals.iter().any(|&v| v == 255) { return None; }
+        let vals: Vec<u8> = chunk
+            .iter()
+            .map(|&b| {
+                if b >= 128 {
+                    return 255u8;
+                }
+                let v = INV[b as usize];
+                if v < 0 {
+                    255u8
+                } else {
+                    v as u8
+                }
+            })
+            .collect();
+        if vals.iter().any(|&v| v == 255) {
+            return None;
+        }
         let b0 = (vals[0] << 2) | (vals[1] >> 4);
         out.push(b0);
         if chunk.len() > 2 {

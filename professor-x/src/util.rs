@@ -15,7 +15,9 @@ pub fn expand_file_refs(input: &str) -> String {
     let mut seen = HashSet::new();
     let mut blocks = String::new();
     for tok in input.split_whitespace() {
-        let Some(raw) = tok.strip_prefix('@') else { continue };
+        let Some(raw) = tok.strip_prefix('@') else {
+            continue;
+        };
         // trim trailing punctuation a user might type after the path
         let path = raw.trim_end_matches(|c: char| matches!(c, ',' | '.' | ';' | ':' | ')' | ']'));
         if path.is_empty() || !seen.insert(path.to_string()) {
@@ -25,7 +27,10 @@ pub fn expand_file_refs(input: &str) -> String {
         if !p.is_file() {
             continue;
         }
-        let too_big = p.metadata().map(|m| m.len() > MAX_FILE_BYTES).unwrap_or(true);
+        let too_big = p
+            .metadata()
+            .map(|m| m.len() > MAX_FILE_BYTES)
+            .unwrap_or(true);
         if too_big {
             continue;
         }

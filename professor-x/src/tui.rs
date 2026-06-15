@@ -12,14 +12,14 @@ use anyhow::Result;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Margin, Rect};
@@ -37,8 +37,8 @@ use crate::memd::autonomy_queue::{
     autonomy_queue_brief, autonomy_queue_next_command, short_queue_id, AutonomyQueueItem,
     AutonomyQueueStore,
 };
-use crate::memd::MemoryManager;
 use crate::memd::events::EventStore;
+use crate::memd::MemoryManager;
 use crate::ollama::OllamaClient;
 use crate::policyd::PolicyEngine;
 use crate::toolbridge::ToolRegistry;
@@ -233,14 +233,12 @@ fn event_to_line(event_type: &str, summary: &str, payload: &Value) -> Option<Lin
         "task.succeeded" => Some(styled("  ✓ done", GREEN)),
         "task.failed" | "task.fail_requested" => Some(styled("  ✗ couldn't complete that", RED)),
         "policy.denied" => Some(styled(format!("  ⛔ {summary}"), RED)),
-        event if event.starts_with("autonomy.queue.") => {
-            Some(styled(format!("  ◇ {}", queue_event_summary(event, summary, payload)), YELLOW))
-        }
-        "tui.command.started" => Some(styled(format!("  ▶ {summary}"), CYAN)),
-        "tui.command.completed" => Some(styled(
-            format_tui_command_event(summary, payload),
-            GREEN,
+        event if event.starts_with("autonomy.queue.") => Some(styled(
+            format!("  ◇ {}", queue_event_summary(event, summary, payload)),
+            YELLOW,
         )),
+        "tui.command.started" => Some(styled(format!("  ▶ {summary}"), CYAN)),
+        "tui.command.completed" => Some(styled(format_tui_command_event(summary, payload), GREEN)),
         "tui.command.failed" => Some(styled(format_tui_command_event(summary, payload), RED)),
         "react.duplicate_action" => None,
         _ => None,
@@ -361,10 +359,14 @@ fn handle_tui_command(
         return Ok(Some(tui_queue_lines(memory, limit)?));
     }
     if let Some(rest) = input.strip_prefix("/enqueue-commit") {
-        return Ok(Some(tui_enqueue_lines(memory, events, rest, "commit", 5, 65)?));
+        return Ok(Some(tui_enqueue_lines(
+            memory, events, rest, "commit", 5, 65,
+        )?));
     }
     if let Some(rest) = input.strip_prefix("/enqueue") {
-        return Ok(Some(tui_enqueue_lines(memory, events, rest, "core", 4, 55)?));
+        return Ok(Some(tui_enqueue_lines(
+            memory, events, rest, "core", 4, 55,
+        )?));
     }
     if is_tui_step_command(input) {
         return Ok(Some(vec![
@@ -385,19 +387,43 @@ fn tui_help_lines() -> Vec<Line<'static>> {
     vec![
         styled("TUI commands", ACCENT),
         styled("   /queue [n]            show queued autonomous work", CYAN),
-        styled("   /enqueue <goal>       queue a bounded core Prof X goal", CYAN),
-        styled("   /enqueue-commit <goal> queue verified commit-capable work", CYAN),
-        styled("   /step-live            run one supervised queue step", CYAN),
+        styled(
+            "   /enqueue <goal>       queue a bounded core Prof X goal",
+            CYAN,
+        ),
+        styled(
+            "   /enqueue-commit <goal> queue verified commit-capable work",
+            CYAN,
+        ),
+        styled(
+            "   /step-live            run one supervised queue step",
+            CYAN,
+        ),
         styled("   /queue-review [id]    review queue evidence", CYAN),
         styled("   /queue-replay [id]    replay queue timeline", CYAN),
         styled("   /queue-publish [id]   publish linked run evidence", CYAN),
         styled("   /brief /cockpit       show current work state", CYAN),
-        styled("   /work [n] /runs [n]   inspect events and run ledger", CYAN),
+        styled(
+            "   /work [n] /runs [n]   inspect events and run ledger",
+            CYAN,
+        ),
         styled("   /review [id] /replay [id] /publish [id]", CYAN),
-        styled("   /sessions [n] /session-review [id] /session-publish [id]", CYAN),
-        styled("   /task-review [id] /task-evidence [id] /inspect [id]", CYAN),
-        styled("   /plan /preview        plan or preview autonomous gates", CYAN),
-        styled("   /run [n] /run-commit [n] start bounded Prof X runs", CYAN),
+        styled(
+            "   /sessions [n] /session-review [id] /session-publish [id]",
+            CYAN,
+        ),
+        styled(
+            "   /task-review [id] /task-evidence [id] /inspect [id]",
+            CYAN,
+        ),
+        styled(
+            "   /plan /preview        plan or preview autonomous gates",
+            CYAN,
+        ),
+        styled(
+            "   /run [n] /run-commit [n] start bounded Prof X runs",
+            CYAN,
+        ),
     ]
 }
 
@@ -412,7 +438,13 @@ fn tui_queue_lines(memory: &Arc<MemoryManager>, limit: usize) -> Result<Vec<Line
     let mut lines = vec![styled("Autonomous queue", ACCENT)];
     for item in items {
         lines.push(styled(tui_queue_item_line(&item), CYAN));
-        lines.push(styled(format!("      next {}", autonomy_queue_brief(&item, 96).next_command), DIM));
+        lines.push(styled(
+            format!(
+                "      next {}",
+                autonomy_queue_brief(&item, 96).next_command
+            ),
+            DIM,
+        ));
     }
     Ok(lines)
 }
@@ -468,12 +500,7 @@ fn tui_enqueue_lines(
 
 fn tui_queue_item_line(item: &AutonomyQueueItem) -> String {
     let brief = autonomy_queue_brief(item, 72);
-    format!(
-        "{} queue={} {}",
-        item.status,
-        brief.queue_id,
-        brief.summary,
-    )
+    format!("{} queue={} {}", item.status, brief.queue_id, brief.summary,)
 }
 
 fn sanitize_tui_goal(goal: &str) -> String {
@@ -504,10 +531,18 @@ fn tui_cli_command(input: &str) -> Option<TuiCliCommand> {
         return Some(no_arg_tui_command("brief", "--brief", TUI_BRIEF_COMMAND));
     }
     if input == "/cockpit" {
-        return Some(no_arg_tui_command("cockpit snapshot", "--cockpit", TUI_COCKPIT_COMMAND));
+        return Some(no_arg_tui_command(
+            "cockpit snapshot",
+            "--cockpit",
+            TUI_COCKPIT_COMMAND,
+        ));
     }
     if input == "/plan" {
-        return Some(no_arg_tui_command("queue planner", "--prof-x-plan", TUI_PLAN_COMMAND));
+        return Some(no_arg_tui_command(
+            "queue planner",
+            "--prof-x-plan",
+            TUI_PLAN_COMMAND,
+        ));
     }
     if input == "/preview" {
         return Some(no_arg_tui_command(
@@ -549,7 +584,13 @@ fn tui_cli_command(input: &str) -> Option<TuiCliCommand> {
         });
     }
     if let Some(rest) = strip_tui_command(input, "/work") {
-        return Some(limit_tui_command("work feed", "--work-log", TUI_WORK_COMMAND, rest, 12));
+        return Some(limit_tui_command(
+            "work feed",
+            "--work-log",
+            TUI_WORK_COMMAND,
+            rest,
+            12,
+        ));
     }
     if let Some(rest) = strip_tui_command(input, "/sessions") {
         return Some(limit_tui_command(
@@ -561,7 +602,13 @@ fn tui_cli_command(input: &str) -> Option<TuiCliCommand> {
         ));
     }
     if let Some(rest) = strip_tui_command(input, "/runs") {
-        return Some(limit_tui_command("run ledger", "--work-loops", TUI_RUNS_COMMAND, rest, 10));
+        return Some(limit_tui_command(
+            "run ledger",
+            "--work-loops",
+            TUI_RUNS_COMMAND,
+            rest,
+            10,
+        ));
     }
     if let Some(rest) = strip_tui_command(input, "/queue-review") {
         return Some(ref_tui_command(
@@ -704,12 +751,7 @@ fn count_arg(rest: &str, default_value: usize, max_value: usize) -> String {
         .to_string()
 }
 
-fn ref_tui_command(
-    label: &'static str,
-    flag: &str,
-    display: &str,
-    rest: &str,
-) -> TuiCliCommand {
+fn ref_tui_command(label: &'static str, flag: &str, display: &str, rest: &str) -> TuiCliCommand {
     let item_ref = nonempty_or_latest(rest);
     TuiCliCommand {
         label,
@@ -723,7 +765,11 @@ fn nonempty_or_latest(raw: &str) -> String {
     if value.is_empty() {
         "latest".to_string()
     } else {
-        value.chars().filter(|ch| !ch.is_control()).take(120).collect()
+        value
+            .chars()
+            .filter(|ch| !ch.is_control())
+            .take(120)
+            .collect()
     }
 }
 
@@ -733,9 +779,8 @@ fn run_tui_cargo_command(
     command_display: String,
     args: Vec<String>,
 ) {
-    let crate_dir = find_professor_x_crate_dir().unwrap_or_else(|| {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-    });
+    let crate_dir = find_professor_x_crate_dir()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     let _ = events.append(
         None,
         None,
@@ -762,7 +807,10 @@ fn run_tui_cargo_command(
                 None,
                 None,
                 "tui.command.completed",
-                format!("{label} completed: {}", summarize_command_output(&stdout, &stderr)),
+                format!(
+                    "{label} completed: {}",
+                    summarize_command_output(&stdout, &stderr)
+                ),
                 serde_json::json!({
                     "command": command_display,
                     "status": output.status.code(),
@@ -778,7 +826,10 @@ fn run_tui_cargo_command(
                 None,
                 None,
                 "tui.command.failed",
-                format!("{label} failed: {}", summarize_command_output(&stdout, &stderr)),
+                format!(
+                    "{label} failed: {}",
+                    summarize_command_output(&stdout, &stderr)
+                ),
                 serde_json::json!({
                     "command": command_display,
                     "status": output.status.code(),
@@ -969,7 +1020,11 @@ fn vital_line(label: &str, v: f32, lo: f32, hi: f32, col: Color, val: String) ->
 }
 
 fn icol(ics: f32) -> Color {
-    if ics >= 0.70 { GREEN } else { RED }
+    if ics >= 0.70 {
+        GREEN
+    } else {
+        RED
+    }
 }
 fn scol(s: f32) -> Color {
     if s > 0.5 {
@@ -1014,22 +1069,19 @@ fn draw_vitals_panel(f: &mut Frame, area: Rect, app: &App) {
         styled(format!("phi rounds  {}", v.phi_rounds), DIM),
         styled(format!("episodic    {}", v.episodic), DIM),
         Line::from(""),
+        styled(format!("queue      {} pending", app.queue.pending), DIM),
         styled(
-            format!("queue      {} pending", app.queue.pending),
-            DIM,
-        ),
-        styled(
-            format!("latest     {} {}", app.queue.latest_status, app.queue.latest_id),
+            format!(
+                "latest     {} {}",
+                app.queue.latest_status, app.queue.latest_id
+            ),
             CYAN,
         ),
         styled(
             format!("goal       {}", truncate(&app.queue.latest_goal, 32)),
             FG,
         ),
-        styled(
-            format!("next       {}", app.queue.latest_command),
-            DIM,
-        ),
+        styled(format!("next       {}", app.queue.latest_command), DIM),
     ];
     let block = Block::default()
         .borders(Borders::ALL)
@@ -1179,10 +1231,7 @@ fn tui_loop(
                                         Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
                                     )));
                                     app.push(styled(
-                                        format!(
-                                            "Running {} inside this cockpit.",
-                                            command.label
-                                        ),
+                                        format!("Running {} inside this cockpit.", command.label),
                                         CYAN,
                                     ));
                                     app.push(styled(
@@ -1216,10 +1265,7 @@ fn tui_loop(
                                         Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
                                     )));
                                     app.push(styled(
-                                        format!(
-                                            "Running {} inside this cockpit.",
-                                            command.label
-                                        ),
+                                        format!("Running {} inside this cockpit.", command.label),
                                         CYAN,
                                     ));
                                     app.push(styled(

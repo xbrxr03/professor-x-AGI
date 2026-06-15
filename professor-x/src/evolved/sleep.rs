@@ -21,7 +21,6 @@
 /// This compounds learning across days. Without it, each round starts from the
 /// same raw episodic soup. With it, each round starts from a cleaner, more
 /// condensed memory that has already extracted what matters.
-
 use anyhow::Result;
 use chrono::{Duration, Utc};
 use std::sync::Arc;
@@ -223,6 +222,8 @@ mod tests {
 
         let remaining = memory.episodic.recent(10).unwrap();
         assert_eq!(remaining.len(), 2);
-        assert!(remaining.iter().all(|e| e.content != "old unimportant failure"));
+        assert!(remaining
+            .iter()
+            .all(|e| e.content != "old unimportant failure"));
     }
 }

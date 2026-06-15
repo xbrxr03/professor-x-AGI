@@ -213,7 +213,9 @@ mod tests {
     fn seed_if_empty_is_idempotent() {
         let store = fresh_store();
         store.seed_if_empty("I am Professor X.").unwrap();
-        store.seed_if_empty("Different text, should not overwrite.").unwrap();
+        store
+            .seed_if_empty("Different text, should not overwrite.")
+            .unwrap();
         let latest = store.latest().unwrap().unwrap();
         assert_eq!(latest.text, "I am Professor X.");
         assert_eq!(latest.round, 0);
@@ -244,7 +246,9 @@ mod tests {
     #[test]
     fn update_with_text_persists_and_returns_id() {
         let store = fresh_store();
-        let snap = store.update_with_text(10, "I am a better Professor X.").unwrap();
+        let snap = store
+            .update_with_text(10, "I am a better Professor X.")
+            .unwrap();
         assert_eq!(snap.round, 10);
         assert_eq!(snap.text, "I am a better Professor X.");
         assert!(snap.id.is_some());
@@ -254,13 +258,13 @@ mod tests {
 
     #[test]
     fn build_update_prompt_references_round_and_summary() {
-        let prompt = SelfModelStore::build_update_prompt(
-            "I am Professor X.",
-            20,
-            "improved p_tool by 12pp",
-        );
+        let prompt =
+            SelfModelStore::build_update_prompt("I am Professor X.", 20, "improved p_tool by 12pp");
         assert!(prompt.contains("round 10"), "should reference prior round");
-        assert!(prompt.contains("round 20"), "should reference current round");
+        assert!(
+            prompt.contains("round 20"),
+            "should reference current round"
+        );
         assert!(prompt.contains("improved p_tool by 12pp"));
         assert!(prompt.contains("I am Professor X."));
     }

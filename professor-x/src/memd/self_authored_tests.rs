@@ -13,7 +13,6 @@
 /// H-new: Pearson r(self_authored_pass_rate, HIRO_pass_at_3) > 0.70 over 30
 /// rounds. Interpretation: the agent's self-diagnosis is predictive of
 /// external capability.
-
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
@@ -150,11 +149,7 @@ impl SelfAuthoredTestStore {
 
     pub fn count(&self) -> Result<i64> {
         let db = self.db.lock().unwrap();
-        Ok(db.query_row(
-            "SELECT COUNT(*) FROM self_authored_tests",
-            [],
-            |r| r.get(0),
-        )?)
+        Ok(db.query_row("SELECT COUNT(*) FROM self_authored_tests", [], |r| r.get(0))?)
     }
 
     /// Mean pass rate across all tests — H-new measurement.
@@ -220,7 +215,14 @@ mod tests {
     #[test]
     fn insert_and_retrieve() {
         let store = fresh_store();
-        let test = SelfAuthoredTest::new(5, 3, "tool dispatch failure", "Use fs.read to find X", "file contains X", "tool_use");
+        let test = SelfAuthoredTest::new(
+            5,
+            3,
+            "tool dispatch failure",
+            "Use fs.read to find X",
+            "file contains X",
+            "tool_use",
+        );
         let id = store.insert(&test).unwrap();
         assert!(id > 0);
         assert_eq!(store.count().unwrap(), 1);
@@ -251,7 +253,9 @@ mod tests {
         for i in 0..3 {
             let test = SelfAuthoredTest::new(i, 3, "p", "d", "e", "c");
             let id = store.insert(&test).unwrap();
-            if i < 2 { store.record_outcome(id, true).unwrap(); }
+            if i < 2 {
+                store.record_outcome(id, true).unwrap();
+            }
         }
         // tests have pass rates: (1+1)/(1+2), (1+1)/(1+2), (0+1)/(0+2)
         let mean = store.mean_pass_rate().unwrap().unwrap();

@@ -15,7 +15,11 @@ pub struct FileWindow {
     pub output: String,
 }
 
-pub fn open_window_file(workspace_root: &Path, path: &str, lines: Option<usize>) -> Result<FileWindow> {
+pub fn open_window_file(
+    workspace_root: &Path,
+    path: &str,
+    lines: Option<usize>,
+) -> Result<FileWindow> {
     render_window_file(workspace_root, path, 1, lines)
 }
 

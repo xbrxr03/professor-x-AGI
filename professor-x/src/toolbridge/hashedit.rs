@@ -85,7 +85,10 @@ fn apply_by_line(content: &str, line: usize, new_text: &str) -> Result<String> {
     let mut lines = split_preserving_trailing_newline(content);
     let idx = line - 1;
     let Some(current) = lines.get_mut(idx) else {
-        bail!("line {line} is outside file; file has {} line(s)", lines.len());
+        bail!(
+            "line {line} is outside file; file has {} line(s)",
+            lines.len()
+        );
     };
     reject_obvious_python_wrong_line_edit(current, new_text)?;
     *current = new_text.to_string();
@@ -214,12 +217,8 @@ mod tests {
 
     #[test]
     fn hash_edit_line_fallback_rejects_python_def_replaced_by_indented_body() {
-        let err = apply_by_line(
-            "def mul(a, b):\n    return a + b\n",
-            1,
-            "    return a * b",
-        )
-        .unwrap_err();
+        let err =
+            apply_by_line("def mul(a, b):\n    return a + b\n", 1, "    return a * b").unwrap_err();
         assert!(err.to_string().contains("wrong-line Python edit"));
     }
 }
