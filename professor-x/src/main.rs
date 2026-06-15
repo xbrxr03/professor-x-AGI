@@ -77,6 +77,8 @@ struct CliArgs {
     dry_run_daily: bool,
     /// Print current daemon/scheduler/event status and exit.
     status: bool,
+    /// Print a machine-readable one-shot Prof X work status JSON document.
+    status_json: bool,
     /// Print the last N agent events and exit.
     events_limit: Option<usize>,
     /// Print the last N work/task/tool events and exit.
@@ -300,6 +302,7 @@ where
         memory_budget: None,
         dry_run_daily: false,
         status: false,
+        status_json: false,
         events_limit: None,
         work_feed_limit: None,
         transcripts_limit: None,
@@ -433,6 +436,10 @@ where
             }
             "--status" => {
                 cli.status = true;
+                i += 1;
+            }
+            "--status-json" | "--prof-x-status-json" | "--work-status-json" => {
+                cli.status_json = true;
                 i += 1;
             }
             "--events" => {
@@ -952,6 +959,7 @@ async fn main() -> Result<()> {
     }
 
     let inspect_mode = cli.status
+        || cli.status_json
         || cli.events_limit.is_some()
         || cli.work_feed_limit.is_some()
         || cli.transcripts_limit.is_some()
@@ -972,6 +980,7 @@ async fn main() -> Result<()> {
         || cli.publish_run.is_some()
         || cli.watch
         || cli.watch_work
+        || cli.work_cockpit_once
         || cli.observe_work_limit.is_some()
         || cli.observe
         || cli.lab
@@ -1021,6 +1030,10 @@ async fn main() -> Result<()> {
 
     if cli.status {
         return observer::print_snapshot(Arc::clone(&memory), Arc::clone(&events));
+    }
+
+    if cli.status_json {
+        return print_work_status_json(Arc::clone(&memory), Arc::clone(&events), 16);
     }
 
     if let Some(limit) = cli.events_limit {
@@ -9537,6 +9550,7 @@ fn format_operator_help() -> String {
         "  cargo run -- --prof-x-queue-publish latest",
         "  cargo run -- --observe-work",
         "  cargo run -- --cockpit",
+        "  cargo run -- --status-json",
         "  cargo run -- --watch-work",
         "  cargo run -- --prof-x-journal 50",
         "  cargo run -- --prof-x-journal-commit 50",
@@ -11736,6 +11750,51 @@ fn print_work_cockpit(
     Ok(())
 }
 
+fn print_work_status_json(
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    limit: usize,
+) -> Result<()> {
+    let value = render_work_status_json(memory, events, limit)?;
+    println!("{}", serde_json::to_string_pretty(&value)?);
+    Ok(())
+}
+
+fn render_work_status_json(
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    limit: usize,
+) -> Result<serde_json::Value> {
+    let repo_root = default_repo_root();
+    let recent_events = events.work_tail(limit)?;
+    let latest_run = WorkLoopRunStore::new(Arc::clone(&memory.db)).latest()?;
+    let latest_coding_session = CodingSessionStore::new(Arc::clone(&memory.db)).latest()?;
+    let latest_coding_smoke = CodingSmokeStore::new(Arc::clone(&memory.db)).latest()?;
+    let recent_queue = AutonomyQueueStore::new(Arc::clone(&memory.db)).recent(5)?;
+    let runtime_line = cockpit_runtime_line(&repo_root);
+    let safety_line = shell_sandbox_posture_line();
+    let gate_store = WorkLoopGateStore::new(Arc::clone(&memory.db));
+    let latest_gate = gate_store.latest()?;
+    let recent_gates = latest_run
+        .as_ref()
+        .map(|run| gate_store.recent_for_run(&run.run_id, 8))
+        .transpose()?
+        .unwrap_or_default();
+
+    Ok(format_work_status_json(
+        &repo_root,
+        &runtime_line,
+        &safety_line,
+        &recent_events,
+        latest_run.as_ref(),
+        latest_coding_session.as_ref(),
+        latest_coding_smoke.as_ref(),
+        latest_gate.as_ref(),
+        &recent_gates,
+        &recent_queue,
+    ))
+}
+
 fn render_work_cockpit(
     memory: Arc<MemoryManager>,
     events: Arc<EventStore>,
@@ -11769,6 +11828,175 @@ fn render_work_cockpit(
         &recent_gates,
         &recent_queue,
     ))
+}
+
+fn format_work_status_json(
+    repo_root: &std::path::Path,
+    runtime_line: &str,
+    safety_line: &str,
+    recent_events: &[memd::events::AgentEvent],
+    latest_run: Option<&WorkLoopRunRecord>,
+    latest_coding_session: Option<&CodingSessionRecord>,
+    latest_coding_smoke: Option<&CodingSmokeRecord>,
+    latest_gate: Option<&WorkLoopGateRecord>,
+    recent_gates: &[WorkLoopGateRecord],
+    recent_queue: &[AutonomyQueueItem],
+) -> serde_json::Value {
+    serde_json::json!({
+        "schema": "professor_x.work_status.v1",
+        "generated_at": chrono::Utc::now().to_rfc3339(),
+        "repo": {
+            "root": repo_root.display().to_string(),
+            "git": cockpit_git_line(repo_root),
+        },
+        "runtime": runtime_line,
+        "safety": safety_line,
+        "state": cockpit_state(latest_run, latest_gate),
+        "now": cockpit_now_summary(recent_events, latest_gate, latest_coding_session),
+        "latest_activity": cockpit_latest_activity(recent_events),
+        "signal": work_signal_summary(recent_events),
+        "current_run": latest_run.map(work_status_run_json),
+        "active_gate": latest_gate.map(work_status_gate_json),
+        "gate_ledger": recent_gates.iter().take(8).map(work_status_gate_json).collect::<Vec<_>>(),
+        "autonomous_queue": recent_queue.iter().take(5).map(work_status_queue_json).collect::<Vec<_>>(),
+        "latest_coding_session": latest_coding_session.map(work_status_coding_session_json),
+        "latest_coding_smoke": latest_coding_smoke.map(work_status_coding_smoke_json),
+        "recent_events": recent_events.iter().map(work_status_event_json).collect::<Vec<_>>(),
+        "commands": [
+            "cargo run -- --status-json",
+            "cargo run -- --cockpit",
+            "cargo run -- --observe-work",
+            "cargo run -- --prof-x-live-publish 6",
+            "cargo run -- --replay latest",
+            "cargo run -- --run-review latest"
+        ],
+    })
+}
+
+fn work_status_run_json(run: &WorkLoopRunRecord) -> serde_json::Value {
+    serde_json::json!({
+        "run_id": run.run_id,
+        "short_id": short_fragment(&run.run_id),
+        "kind": run.run_kind,
+        "profile": run.profile,
+        "started_at": run.started_at.to_rfc3339(),
+        "completed_at": run.completed_at.to_rfc3339(),
+        "requested_cycles": run.requested_cycles,
+        "completed_cycles": run.completed_cycles,
+        "passed_cycles": run.passed_cycles,
+        "failed_cycles": run.failed_cycles,
+        "progress": cockpit_progress(run.completed_cycles, run.requested_cycles),
+        "report_path": run.report_path,
+        "commands": {
+            "replay": format!("cargo run -- --replay {}", short_fragment(&run.run_id)),
+            "review": format!("cargo run -- --run-review {}", short_fragment(&run.run_id)),
+            "publish": format!("cargo run -- --publish-run {}", short_fragment(&run.run_id)),
+        },
+        "planned_jobs": run.planned_jobs.iter().map(|job| serde_json::json!({
+            "cycle": job.cycle,
+            "kind": job.kind,
+            "label": job.label,
+            "reason": job.reason,
+        })).collect::<Vec<_>>(),
+        "evidence": run.smoke_records.iter().map(|smoke| serde_json::json!({
+            "cycle": smoke.cycle,
+            "kind": smoke.kind,
+            "passed": smoke.passed,
+            "report_path": smoke.report_path,
+            "transcript_path": smoke.transcript_path,
+            "workspace": smoke.workspace,
+            "detail": smoke.detail,
+        })).collect::<Vec<_>>(),
+    })
+}
+
+fn work_status_gate_json(gate: &WorkLoopGateRecord) -> serde_json::Value {
+    serde_json::json!({
+        "run_id": gate.run_id,
+        "short_run_id": short_fragment(&gate.run_id),
+        "run_kind": gate.run_kind,
+        "profile": gate.profile,
+        "cycle": gate.cycle,
+        "kind": gate.kind,
+        "label": gate.label,
+        "reason": gate.reason,
+        "status": gate.status,
+        "passed": gate.passed,
+        "started_at": gate.started_at.map(|ts| ts.to_rfc3339()),
+        "completed_at": gate.completed_at.map(|ts| ts.to_rfc3339()),
+        "updated_at": gate.updated_at.to_rfc3339(),
+        "report_path": gate.report_path,
+        "transcript_path": gate.transcript_path,
+        "workspace": gate.workspace,
+        "detail": gate.detail,
+    })
+}
+
+fn work_status_queue_json(item: &AutonomyQueueItem) -> serde_json::Value {
+    let brief = autonomy_queue_brief(item, 160);
+    serde_json::json!({
+        "queue_id": item.id,
+        "short_id": short_fragment(&item.id),
+        "status": item.status,
+        "priority": item.priority,
+        "profile": item.profile.to_string(),
+        "cycles": item.cycles,
+        "goal": item.goal,
+        "next_command": brief.next_command,
+        "commands": brief.commands,
+        "result_run_id": item.result_run_id,
+        "result_report_path": item.result_report_path,
+        "failure_reason": item.failure_reason,
+        "queued_at": item.queued_at.to_rfc3339(),
+        "updated_at": item.updated_at.to_rfc3339(),
+    })
+}
+
+fn work_status_coding_session_json(session: &CodingSessionRecord) -> serde_json::Value {
+    serde_json::json!({
+        "id": session.id,
+        "short_id": short_fragment(&session.id),
+        "generated_at": session.generated_at.to_rfc3339(),
+        "goal": session.goal,
+        "exercise": session.exercise,
+        "status": session.status,
+        "workspace": session.workspace,
+        "commit": coding_session_commit_hint(session),
+        "checks": session.checks,
+        "artifacts": session.artifacts,
+        "session_report_path": session.session_report_path,
+        "smoke_report_path": session.smoke_report_path,
+        "transcript_path": session.transcript_path,
+        "last_outcome": session.step_outcomes.last(),
+        "failure_reason": session.failure_reason,
+    })
+}
+
+fn work_status_coding_smoke_json(smoke: &CodingSmokeRecord) -> serde_json::Value {
+    serde_json::json!({
+        "id": smoke.id,
+        "generated_at": smoke.generated_at.to_rfc3339(),
+        "workspace": smoke.workspace,
+        "passed": smoke.passed,
+        "initial_test_failed": smoke.initial_test_failed,
+        "edit_applied": smoke.edit_applied,
+        "final_test_passed": smoke.final_test_passed,
+        "report_path": smoke.report_path,
+        "transcript_path": smoke.transcript_path,
+        "artifacts": smoke.artifacts,
+    })
+}
+
+fn work_status_event_json(event: &memd::events::AgentEvent) -> serde_json::Value {
+    serde_json::json!({
+        "id": event.id,
+        "timestamp": event.timestamp.to_rfc3339(),
+        "event_type": event.event_type,
+        "summary": event.summary,
+        "session_id": event.session_id,
+        "task_id": event.task_id,
+        "line": format_work_event(event),
+    })
 }
 
 fn format_work_cockpit(
@@ -13005,6 +13233,7 @@ mod tests {
         assert!(help.contains("--prof-x-queue-review latest"));
         assert!(help.contains("--prof-x-queue-publish latest"));
         assert!(help.contains("--observe-work"));
+        assert!(help.contains("--status-json"));
         assert!(help.contains("--task-evidence latest"));
         assert!(help.contains("--inspect latest"));
         assert!(help.contains("--prof-x-code-live"));
@@ -13027,6 +13256,14 @@ mod tests {
             assert!(!cli.run_now);
             assert!(!cli.lab);
         }
+    }
+
+    #[test]
+    fn status_json_flag_is_inspect_only() {
+        let cli = parse_args_from(["professor-x", "--prof-x-status-json"]);
+        assert!(cli.status_json);
+        assert!(!cli.run_now);
+        assert!(!cli.lab);
     }
 
     #[test]
@@ -14717,6 +14954,66 @@ mod tests {
         assert!(screen.contains("--cockpit"));
         assert!(screen.contains("--prof-x-live-publish 6"));
         assert!(screen.contains("--run-review latest"));
+    }
+
+    #[test]
+    fn format_work_status_json_is_machine_readable_operator_state() {
+        let now = chrono::Utc::now();
+        let event = memd::events::AgentEvent {
+            id: 55,
+            timestamp: now,
+            session_id: None,
+            task_id: Some("task-123456789".to_string()),
+            event_type: "tool.started".to_string(),
+            summary: "running tool 'shell.restricted' :: command=cargo test".to_string(),
+            payload: serde_json::json!({
+                "tool": "shell.restricted",
+                "params_preview": "command=cargo test",
+            }),
+        };
+        let queued = queue_item(
+            "make Prof X observable from scripts",
+            WorkLoopProfile::Core,
+            2,
+        );
+
+        let value = format_work_status_json(
+            std::path::Path::new("."),
+            "pid=123 profx_peer=1 ollama=up model=qwen3:8b-q4_k_m",
+            "shell_sandbox=fallback-policy-only",
+            std::slice::from_ref(&event),
+            None,
+            None,
+            None,
+            None,
+            &[],
+            std::slice::from_ref(&queued),
+        );
+
+        assert_eq!(value["schema"], "professor_x.work_status.v1");
+        assert_eq!(value["state"], "IDLE");
+        assert_eq!(
+            value["now"],
+            "running tool shell.restricted command=cargo test"
+        );
+        assert_eq!(value["runtime"], "pid=123 profx_peer=1 ollama=up model=qwen3:8b-q4_k_m");
+        assert_eq!(value["autonomous_queue"][0]["short_id"], "12345678");
+        assert!(value["autonomous_queue"][0]["next_command"]
+            .as_str()
+            .unwrap()
+            .contains("--prof-x-step-live 1"));
+        assert!(value["recent_events"][0]["line"]
+            .as_str()
+            .unwrap()
+            .contains("Running"));
+        assert!(value["commands"].as_array().unwrap().iter().any(|cmd| {
+            cmd.as_str()
+                .unwrap()
+                .contains("cargo run -- --observe-work")
+        }));
+        assert!(value["commands"].as_array().unwrap().iter().any(|cmd| {
+            cmd.as_str().unwrap().contains("cargo run -- --status-json")
+        }));
     }
 
     #[test]
