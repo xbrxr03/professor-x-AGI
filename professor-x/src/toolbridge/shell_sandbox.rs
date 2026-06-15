@@ -8,6 +8,13 @@ pub enum ShellSandbox {
     PolicyOnly,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShellSandboxPosture {
+    pub mode: ShellSandbox,
+    pub bwrap_installed: bool,
+    pub bwrap_usable: bool,
+}
+
 impl ShellSandbox {
     pub fn label(self) -> &'static str {
         match self {
@@ -25,6 +32,35 @@ pub fn selected_shell_sandbox() -> ShellSandbox {
     } else {
         ShellSandbox::PolicyOnly
     }
+}
+
+pub fn shell_sandbox_posture() -> ShellSandboxPosture {
+    let bwrap_installed = which_bwrap().is_some();
+    let bwrap_usable = *BWRAP_USABLE.get_or_init(probe_bwrap);
+    let mode = if bwrap_usable {
+        ShellSandbox::Bubblewrap
+    } else {
+        ShellSandbox::PolicyOnly
+    };
+    ShellSandboxPosture {
+        mode,
+        bwrap_installed,
+        bwrap_usable,
+    }
+}
+
+pub fn shell_sandbox_posture_line() -> String {
+    let posture = shell_sandbox_posture();
+    format_shell_sandbox_posture(posture)
+}
+
+pub fn format_shell_sandbox_posture(posture: ShellSandboxPosture) -> String {
+    format!(
+        "shell_sandbox={} bwrap_installed={} bwrap_usable={}",
+        posture.mode.label(),
+        posture.bwrap_installed,
+        posture.bwrap_usable
+    )
 }
 
 pub fn restricted_shell_command(
@@ -132,6 +168,19 @@ mod tests {
     fn sandbox_labels_are_operator_readable() {
         assert_eq!(ShellSandbox::Bubblewrap.label(), "bubblewrap");
         assert_eq!(ShellSandbox::PolicyOnly.label(), "fallback-policy-only");
+    }
+
+    #[test]
+    fn sandbox_posture_line_is_operator_readable() {
+        let line = format_shell_sandbox_posture(ShellSandboxPosture {
+            mode: ShellSandbox::PolicyOnly,
+            bwrap_installed: true,
+            bwrap_usable: false,
+        });
+        assert_eq!(
+            line,
+            "shell_sandbox=fallback-policy-only bwrap_installed=true bwrap_usable=false"
+        );
     }
 
     #[test]

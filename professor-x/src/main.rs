@@ -49,6 +49,7 @@ use memd::work_loops::{
 };
 use policyd::{AuditStore, Decision, PermissionScope, PolicyEngine};
 use toolbridge::executor::{Action, Observation};
+use toolbridge::shell_sandbox::shell_sandbox_posture_line;
 use toolbridge::{ToolExecutor, ToolRegistry};
 
 // ── CLI args ──────────────────────────────────────────────────────────────────
@@ -11604,6 +11605,7 @@ fn render_work_cockpit(
     let latest_coding_smoke = CodingSmokeStore::new(Arc::clone(&memory.db)).latest()?;
     let recent_queue = AutonomyQueueStore::new(Arc::clone(&memory.db)).recent(5)?;
     let runtime_line = cockpit_runtime_line(&repo_root);
+    let safety_line = shell_sandbox_posture_line();
     let gate_store = WorkLoopGateStore::new(Arc::clone(&memory.db));
     let latest_gate = gate_store.latest()?;
     let recent_gates = latest_run
@@ -11615,6 +11617,7 @@ fn render_work_cockpit(
     Ok(format_work_cockpit(
         &repo_root,
         &runtime_line,
+        &safety_line,
         &recent_events,
         latest_run.as_ref(),
         latest_coding_session.as_ref(),
@@ -11628,6 +11631,7 @@ fn render_work_cockpit(
 fn format_work_cockpit(
     repo_root: &std::path::Path,
     runtime_line: &str,
+    safety_line: &str,
     recent_events: &[memd::events::AgentEvent],
     latest_run: Option<&WorkLoopRunRecord>,
     latest_coding_session: Option<&CodingSessionRecord>,
@@ -11644,6 +11648,7 @@ fn format_work_cockpit(
         chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
     ));
     lines.push(format!("runtime {runtime_line}"));
+    lines.push(format!("safety {safety_line}"));
     lines.push(format!(
         "state {}  {}",
         cockpit_state(latest_run, latest_gate),
@@ -14527,6 +14532,7 @@ mod tests {
         let screen = format_work_cockpit(
             std::path::Path::new("."),
             "pid=123 profx_peer=1 ollama=up model=qwen3:8b-q4_k_m",
+            "shell_sandbox=fallback-policy-only bwrap_installed=true bwrap_usable=false",
             &[event],
             Some(&run),
             Some(&session),
@@ -14538,6 +14544,9 @@ mod tests {
 
         assert!(screen.contains("Professor X live work cockpit"));
         assert!(screen.contains("runtime pid=123 profx_peer=1 ollama=up model=qwen3:8b-q4_k_m"));
+        assert!(screen.contains(
+            "safety shell_sandbox=fallback-policy-only bwrap_installed=true bwrap_usable=false"
+        ));
         assert!(screen.contains("state IDLE"));
         assert!(screen.contains("now   last work_loop.cycle.passed #10 Prof X operator run cycle 1/2 passed"));
         assert!(screen.contains("progress [######......] 1/2"));
