@@ -1986,23 +1986,20 @@ impl ReactLoop {
             parts.push(format!("<reflections>\n{refs}\n</reflections>"));
         }
 
-        // Prior steps this attempt. The last 3 steps are shown IN FULL — with
-        // their observation output — so the agent acts on what its tools
-        // returned instead of re-running them blindly. Older steps are
-        // compressed to the Mermaid canvas overview (token savings) only when
-        // there are more than 3, so long tasks stay bounded.
+        // Prior steps this attempt. Recent steps keep their observation output
+        // so the agent acts on tool results instead of re-running them blindly.
+        // Older steps are compacted into a bounded ledger + Mermaid overview,
+        // preserving enough state to avoid loops without letting long outputs
+        // consume the local model's context window.
         const RECENT_FULL: usize = 3;
         if !task.steps.is_empty() {
-            let mut history = String::new();
-            if task.steps.len() > RECENT_FULL {
-                if let Ok(canvas) = self.canvas.lock() {
-                    if !canvas.is_empty() {
-                        history.push_str("Earlier steps (overview):\n");
-                        history.push_str(&canvas.to_mermaid());
-                        history.push_str("\n\nMost recent steps (detail):\n");
-                    }
-                }
-            }
+            let canvas = self
+                .canvas
+                .lock()
+                .ok()
+                .filter(|canvas| !canvas.is_empty())
+                .map(|canvas| canvas.to_mermaid());
+            let mut history = compact_history(task, canvas.as_deref(), RECENT_FULL);
             history.push_str(&task.recent_steps_text(RECENT_FULL));
             parts.push(format!("<history>\n{history}\n</history>"));
         }
@@ -2847,6 +2844,48 @@ fn predict_success_from_ice(examples: &[String]) -> f32 {
     (successes as f32 + 1.0) / (examples.len() as f32 + 2.0)
 }
 
+fn compact_history(task: &TaskNode, canvas: Option<&str>, recent_full: usize) -> String {
+    let mut history = String::new();
+    let older_len = task.steps.len().saturating_sub(recent_full);
+    if older_len > 0 {
+        history.push_str(&format!(
+            "<compaction older_steps=\"{}\" recent_full=\"{}\">\n",
+            older_len, recent_full
+        ));
+        if let Some(canvas) = canvas.filter(|text| !text.trim().is_empty()) {
+            history.push_str("Earlier steps overview:\n");
+            history.push_str(canvas);
+            history.push('\n');
+        }
+        history.push_str("Earlier steps ledger:\n");
+        for step in &task.steps[..older_len] {
+            let status = if step.observation.success { "ok" } else { "err" };
+            let params = serde_json::to_string(&step.action.params).unwrap_or_default();
+            let params = truncate(&params, 140).replace('\n', " ");
+            let obs = if step.observation.success {
+                truncate(&step.observation.output, 180)
+            } else {
+                format!(
+                    "ERROR: {}",
+                    truncate(step.observation.error.as_deref().unwrap_or("unknown"), 180)
+                )
+            }
+            .replace('\n', " ");
+            let artifacts = if step.observation.artifacts.is_empty() {
+                String::new()
+            } else {
+                format!(" artifacts={}", step.observation.artifacts.join(","))
+            };
+            history.push_str(&format!(
+                "- step {} [{status}] {}({params}) => {obs}{artifacts}\n",
+                step.index, step.action.tool_name
+            ));
+        }
+        history.push_str("</compaction>\n\nMost recent steps (detail):\n");
+    }
+    history
+}
+
 /// Resolve the effective per-task context ceiling. The override only ever
 /// clamps the LCAP-selected value down; raising it would let an H1 sweep
 /// silently exceed LCAP's learned distribution and contaminate other runs.
@@ -2860,9 +2899,10 @@ pub(crate) fn effective_memory_ceiling(lcap_ceiling: u32, override_budget: Optio
 #[cfg(test)]
 mod tests {
     use super::{
-        augment_with_repair_hint, auto_repair_enabled_value, effective_memory_ceiling,
-        finish_answer_from_params, predict_success_from_ice, should_force_synthesis,
-        should_forfeit_after_synthesis, successful_observation_summary, Observation,
+        augment_with_repair_hint, auto_repair_enabled_value, compact_history,
+        effective_memory_ceiling, finish_answer_from_params, predict_success_from_ice,
+        should_force_synthesis, should_forfeit_after_synthesis, successful_observation_summary,
+        Observation,
     };
     use crate::agentd::graph::{ExecutionStep, TaskNode, TaskType};
     use crate::policyd::PermissionScope;
@@ -2972,6 +3012,53 @@ mod tests {
         assert!(summary.contains("step 1 `fs.read`"));
         assert!(summary.contains("package name is professor-x"));
         assert!(!summary.contains("command failed"));
+    }
+
+    #[test]
+    fn compact_history_keeps_old_steps_bounded_and_recent_steps_external() {
+        let mut task = TaskNode::new("compact long context".to_string(), TaskType::Research, 1);
+        for idx in 1..=5 {
+            task.steps.push(ExecutionStep {
+                index: idx,
+                thought: format!("thought {idx}"),
+                action: Action {
+                    tool_name: if idx == 2 {
+                        "shell.restricted".to_string()
+                    } else {
+                        "fs.read".to_string()
+                    },
+                    params: json!({"path": format!("file-{idx}.txt")}),
+                    risk_score: 0,
+                },
+                observation: if idx == 2 {
+                    Observation::err("command failed with a very long diagnostic")
+                } else {
+                    Observation {
+                        success: true,
+                        output: format!("{} useful output", "x".repeat(1000)),
+                        error: None,
+                        tokens_used: 0,
+                        execution_ms: 0,
+                        artifacts: if idx == 1 {
+                            vec!["artifacts/commands/one.json".to_string()]
+                        } else {
+                            Vec::new()
+                        },
+                    }
+                },
+                timestamp: Utc::now(),
+            });
+        }
+
+        let compacted = compact_history(&task, Some("graph TD\n  A-->B"), 2);
+        assert!(compacted.contains("<compaction older_steps=\"3\" recent_full=\"2\">"));
+        assert!(compacted.contains("Earlier steps overview:"));
+        assert!(compacted.contains("Earlier steps ledger:"));
+        assert!(compacted.contains("step 1 [ok] fs.read"));
+        assert!(compacted.contains("artifacts/commands/one.json"));
+        assert!(compacted.contains("step 2 [err] shell.restricted"));
+        assert!(!compacted.contains("file-4.txt"));
+        assert!(compacted.len() < 2500);
     }
 
     #[test]
