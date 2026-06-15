@@ -304,6 +304,19 @@ async fn verify_node_inside_worktree(
         });
     }
 
+    checks.push("cargo_test".to_string());
+    let regressions = run_regression_tests_at(worktree).await?;
+    if !regressions.accepted {
+        return Ok(SandboxVerification {
+            outcome: VerificationOutcome {
+                accepted: false,
+                reason: regressions.reason,
+                checks,
+            },
+            diff: String::new(),
+        });
+    }
+
     let diff = collect_diff_at(worktree, &paths).await?;
     Ok(SandboxVerification {
         outcome: VerificationOutcome {
@@ -351,6 +364,19 @@ async fn verify_diff_inside_worktree(worktree: &Path, diff: &str) -> Result<Sand
             outcome: VerificationOutcome {
                 accepted: false,
                 reason: compile.reason,
+                checks,
+            },
+            diff: String::new(),
+        });
+    }
+
+    checks.push("cargo_test".to_string());
+    let regressions = run_regression_tests_at(worktree).await?;
+    if !regressions.accepted {
+        return Ok(SandboxVerification {
+            outcome: VerificationOutcome {
+                accepted: false,
+                reason: regressions.reason,
                 checks,
             },
             diff: String::new(),
@@ -684,6 +710,48 @@ async fn run_compile_check_at(root: &Path) -> Result<VerificationOutcome> {
             stderr.lines().take(8).collect::<Vec<_>>().join(" ")
         ),
         checks: vec!["cargo_check".to_string()],
+    })
+}
+
+async fn run_regression_tests_at(root: &Path) -> Result<VerificationOutcome> {
+    let current_dir = if root.join("professor-x/Cargo.toml").exists() {
+        root.join("professor-x")
+    } else if root.join("Cargo.toml").exists() {
+        root.to_path_buf()
+    } else {
+        return Ok(VerificationOutcome {
+            accepted: true,
+            reason: "no Cargo.toml found; regression tests skipped".to_string(),
+            checks: vec!["cargo_test_skipped".to_string()],
+        });
+    };
+
+    let output = tokio::process::Command::new("cargo")
+        .args(["test", "--quiet", "--bins"])
+        .current_dir(current_dir)
+        .output()
+        .await?;
+    if output.status.success() {
+        return Ok(VerificationOutcome {
+            accepted: true,
+            reason: "cargo test --bins passed".to_string(),
+            checks: vec!["cargo_test".to_string()],
+        });
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let detail = [stdout.as_ref(), stderr.as_ref()]
+        .into_iter()
+        .flat_map(|text| text.lines())
+        .filter(|line| !line.trim().is_empty())
+        .take(8)
+        .collect::<Vec<_>>()
+        .join(" ");
+    Ok(VerificationOutcome {
+        accepted: false,
+        reason: format!("cargo test --bins failed: {detail}"),
+        checks: vec!["cargo_test".to_string()],
     })
 }
 
@@ -2037,7 +2105,11 @@ mod tests {
             "[package]\nname = \"px-evolve-test\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
         )
         .unwrap();
-        std::fs::write(root.join("src/lib.rs"), "pub fn ok() -> bool { true }\n").unwrap();
+        std::fs::write(
+            root.join("src/main.rs"),
+            "fn ok() -> bool {\n    true\n}\n\nfn main() {\n    println!(\"{}\", ok());\n}\n\n#[cfg(test)]\nmod tests {\n    use super::ok;\n\n    #[test]\n    fn ok_stays_true() {\n        assert!(ok());\n    }\n}\n",
+        )
+        .unwrap();
         std::fs::write(
             root.join("skills/conductor/existing.md"),
             "When a tool fails, inspect the observation and retry with a narrower input.\n",
@@ -2077,6 +2149,11 @@ mod tests {
         let verified = verify_node_in_sandbox(&root, &node).await.unwrap();
 
         assert!(verified.outcome.accepted, "{}", verified.outcome.reason);
+        assert!(verified
+            .outcome
+            .checks
+            .iter()
+            .any(|check| check == "cargo_test"));
         assert!(verified.diff.contains("skills/conductor/fallback.md"));
         assert!(!root.join("skills/conductor/fallback.md").exists());
 
@@ -2123,6 +2200,11 @@ mod tests {
         let verified = verify_diff_in_sandbox(&root, patch).await.unwrap();
 
         assert!(verified.outcome.accepted, "{}", verified.outcome.reason);
+        assert!(verified
+            .outcome
+            .checks
+            .iter()
+            .any(|check| check == "cargo_test"));
         assert!(verified.diff.contains("Record the fallback reason"));
         let original = std::fs::read_to_string(root.join("skills/conductor/existing.md")).unwrap();
         assert!(!original.contains("Record the fallback reason"));
@@ -2145,6 +2227,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn patch_sandbox_verifier_rejects_failing_bin_tests() {
+        let root = temp_git_repo();
+        let patch = "diff --git a/src/main.rs b/src/main.rs\n--- a/src/main.rs\n+++ b/src/main.rs\n@@ -1,6 +1,6 @@\n fn ok() -> bool {\n-    true\n+    false\n }\n \n fn main() {\n     println!(\"{}\", ok());\n";
+
+        let verified = verify_diff_in_sandbox(&root, patch).await.unwrap();
+
+        assert!(!verified.outcome.accepted);
+        assert!(verified.outcome.reason.contains("cargo test --bins failed"));
+        assert!(verified
+            .outcome
+            .checks
+            .iter()
+            .any(|check| check == "cargo_test"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
     async fn worktree_clean_ignores_runtime_observability_artifacts_only() {
         let root = temp_git_repo();
         std::fs::create_dir_all(root.join("artifacts/events")).unwrap();
@@ -2154,7 +2254,7 @@ mod tests {
 
         assert!(git_worktree_clean_at(&root).await.unwrap());
 
-        std::fs::write(root.join("src/lib.rs"), "pub fn ok() -> bool { false }\n").unwrap();
+        std::fs::write(root.join("src/main.rs"), "fn ok() -> bool { false }\n").unwrap();
         assert!(!git_worktree_clean_at(&root).await.unwrap());
 
         let _ = std::fs::remove_dir_all(root);
