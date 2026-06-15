@@ -1698,6 +1698,7 @@ async fn main() -> Result<()> {
             Arc::clone(&policy),
             Arc::clone(&memory),
             Arc::clone(&events),
+            Arc::clone(&transcripts),
             cancel,
         )
         .await;
@@ -7940,6 +7941,9 @@ struct RepoFixTaskResult {
     expect_exit: i32,
     passed: bool,
     made_edit: bool,
+    workdir: Option<String>,
+    transcript_path: Option<String>,
+    diff_summary: String,
 }
 
 #[derive(Debug, Clone)]
@@ -7970,6 +7974,7 @@ async fn repo_fix_measure(
     policy: &Arc<PolicyEngine>,
     memory: &Arc<MemoryManager>,
     events: &Arc<EventStore>,
+    transcripts: Option<Arc<TranscriptStore>>,
     cancel: &CancellationToken,
     prompt_override: Option<&str>,
     verbose: bool,
@@ -8053,16 +8058,19 @@ async fn repo_fix_measure(
         if let Some(p) = prompt_override {
             react = react.with_prompt_override(p.to_string());
         }
+        if let Some(t) = &transcripts {
+            react = react.with_transcripts(Arc::clone(t));
+        }
         let _ = react.run(&mut node).await;
 
         let post = run_verify(&task.verify_cmd, &workdir);
         let ok = post == task.expect_exit;
-        let made_edit = std::process::Command::new("diff")
-            .args(["-rq", &task.setup])
-            .arg(&workdir)
-            .output()
-            .map(|o| !o.stdout.is_empty())
-            .unwrap_or(false);
+        let diff_summary = repo_fix_source_diff_summary(std::path::Path::new(&task.setup), &workdir);
+        let made_edit = !diff_summary.trim().is_empty();
+        let transcript_path = transcripts
+            .as_ref()
+            .and_then(|store| store.get_by_task_prefix(&node.id.to_string()).ok().flatten())
+            .map(|summary| summary.transcript_path);
 
         task_results.push(RepoFixTaskResult {
             id: task.id.clone(),
@@ -8074,6 +8082,13 @@ async fn repo_fix_measure(
             expect_exit: task.expect_exit,
             passed: ok,
             made_edit,
+            workdir: if ok {
+                None
+            } else {
+                Some(workdir.display().to_string())
+            },
+            transcript_path,
+            diff_summary: diff_summary.clone(),
         });
 
         if ok {
@@ -8099,7 +8114,9 @@ async fn repo_fix_measure(
                 if ok { "PASS" } else { "fail" }
             );
         }
-        let _ = std::fs::remove_dir_all(&workdir);
+        if ok {
+            let _ = std::fs::remove_dir_all(&workdir);
+        }
     }
     Ok(RepoFixMeasureResult {
         passed,
@@ -8109,16 +8126,45 @@ async fn repo_fix_measure(
     })
 }
 
+fn repo_fix_source_diff_summary(setup: &std::path::Path, workdir: &std::path::Path) -> String {
+    std::process::Command::new("diff")
+        .args([
+            "-ru",
+            "--exclude=__pycache__",
+            "--exclude=*.pyc",
+            "--exclude=.git",
+            "--exclude=artifacts",
+            "--exclude=target",
+        ])
+        .arg(setup)
+        .arg(workdir)
+        .output()
+        .map(|o| {
+            let text = String::from_utf8_lossy(&o.stdout);
+            text.lines().take(80).collect::<Vec<_>>().join("\n")
+        })
+        .unwrap_or_else(|e| format!("diff unavailable: {e}"))
+}
+
 async fn run_repo_fix_bench(
     ollama: Arc<ollama::OllamaClient>,
     registry: Arc<std::sync::RwLock<ToolRegistry>>,
     policy: Arc<PolicyEngine>,
     memory: Arc<MemoryManager>,
     events: Arc<EventStore>,
+    transcripts: Arc<TranscriptStore>,
     cancel: CancellationToken,
 ) -> Result<()> {
     let result = repo_fix_measure(
-        &ollama, &registry, &policy, &memory, &events, &cancel, None, true,
+        &ollama,
+        &registry,
+        &policy,
+        &memory,
+        &events,
+        Some(transcripts),
+        &cancel,
+        None,
+        true,
     )
     .await?;
     let passed = result.passed;
@@ -8210,7 +8256,7 @@ async fn run_evolve_on_repofix(
                 std::collections::HashMap::new();
             for _ in 0..K {
                 let result =
-                    repo_fix_measure(&o, &r, &p, &m, &e, &c, prompt.as_deref(), false).await?;
+                    repo_fix_measure(&o, &r, &p, &m, &e, None, &c, prompt.as_deref(), false).await?;
                 tot_p += result.passed;
                 tot_r += result.ran;
                 for (id, desc, made_edit) in result.failures {
@@ -8377,7 +8423,7 @@ async fn run_evolve_skill_on_repofix(
                 std::collections::HashMap::new();
             for _ in 0..K {
                 let result =
-                    repo_fix_measure(&o, &r, &p, &m, &e, &c, prompt.as_deref(), false).await?;
+                    repo_fix_measure(&o, &r, &p, &m, &e, None, &c, prompt.as_deref(), false).await?;
                 tp += result.passed;
                 tr += result.ran;
                 for (id, d, me) in result.failures {
@@ -8490,7 +8536,7 @@ async fn run_evolve_code_on_repofix(
 
     // Baseline with the CURRENT (already-built) binary.
     let baseline_result =
-        repo_fix_measure(&ollama, &registry, &policy, &memory, &events, &cancel, None, false).await?;
+        repo_fix_measure(&ollama, &registry, &policy, &memory, &events, None, &cancel, None, false).await?;
     let baseline = if baseline_result.ran > 0 { baseline_result.passed as f64 / baseline_result.ran as f64 } else { 0.0 };
     println!("round 0 baseline pass@1 = {baseline:.3}");
     let failure_report = if baseline_result.failures.is_empty() {
@@ -14845,6 +14891,9 @@ mod tests {
                 expect_exit: 0,
                 passed: true,
                 made_edit: true,
+                workdir: Some("/tmp/px-repofix-fix_001-run".to_string()),
+                transcript_path: Some("artifacts/transcripts/2026-06-15/task.json".to_string()),
+                diff_summary: "diff -ru old/calc.py new/calc.py".to_string(),
             }],
         };
 
@@ -14857,6 +14906,37 @@ mod tests {
         assert_eq!(value["tasks"][0]["pre_exit"], 1);
         assert_eq!(value["tasks"][0]["post_exit"], 0);
         assert_eq!(value["tasks"][0]["made_edit"], true);
+        assert_eq!(value["tasks"][0]["workdir"], "/tmp/px-repofix-fix_001-run");
+        assert_eq!(
+            value["tasks"][0]["transcript_path"],
+            "artifacts/transcripts/2026-06-15/task.json"
+        );
+        assert!(
+            value["tasks"][0]["diff_summary"]
+                .as_str()
+                .unwrap()
+                .contains("calc.py")
+        );
+    }
+
+    #[test]
+    fn repo_fix_source_diff_ignores_runtime_artifacts() {
+        let root = std::env::temp_dir().join(format!("px-repofix-diff-{}", uuid::Uuid::new_v4()));
+        let setup = root.join("setup");
+        let workdir = root.join("workdir");
+        std::fs::create_dir_all(&setup).unwrap();
+        std::fs::create_dir_all(workdir.join("artifacts/checkpoints")).unwrap();
+        std::fs::write(setup.join("calc.py"), "def add(a, b):\n    return a - b\n").unwrap();
+        std::fs::write(workdir.join("calc.py"), "def add(a, b):\n    return a - b\n").unwrap();
+        std::fs::write(workdir.join("artifacts/checkpoints/one.json"), "{}\n").unwrap();
+
+        assert_eq!(repo_fix_source_diff_summary(&setup, &workdir), "");
+
+        std::fs::write(workdir.join("calc.py"), "def add(a, b):\n    return a + b\n").unwrap();
+        let summary = repo_fix_source_diff_summary(&setup, &workdir);
+        assert!(summary.contains("calc.py"));
+        assert!(!summary.contains("artifacts/checkpoints"));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

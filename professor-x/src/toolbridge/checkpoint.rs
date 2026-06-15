@@ -16,6 +16,8 @@ pub struct CheckpointEntry {
     pub path: String,
     pub existed: bool,
     pub blob_oid: Option<String>,
+    #[serde(default)]
+    pub content: Option<Vec<u8>>,
 }
 
 pub fn create_checkpoint(
@@ -72,23 +74,30 @@ pub fn undo_checkpoint(workspace_root: &Path, checkpoint: Option<&str>) -> Resul
     for entry in &manifest.entries {
         let target = resolve_inside(workspace_root, Path::new(&entry.path))?;
         if entry.existed {
-            let oid = entry.blob_oid.as_deref().ok_or_else(|| {
-                anyhow::anyhow!("checkpoint entry {} missing blob oid", entry.path)
-            })?;
-            let output = std::process::Command::new("git")
-                .args(["cat-file", "-p", oid])
-                .current_dir(workspace_root)
-                .output()?;
-            if !output.status.success() {
+            let bytes = if let Some(oid) = entry.blob_oid.as_deref() {
+                let output = std::process::Command::new("git")
+                    .args(["cat-file", "-p", oid])
+                    .current_dir(workspace_root)
+                    .output()?;
+                if !output.status.success() {
+                    anyhow::bail!(
+                        "git cat-file {oid} failed: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                }
+                output.stdout
+            } else if let Some(content) = &entry.content {
+                content.clone()
+            } else {
                 anyhow::bail!(
-                    "git cat-file {oid} failed: {}",
-                    String::from_utf8_lossy(&output.stderr)
+                    "checkpoint entry {} missing blob oid and embedded content",
+                    entry.path
                 );
-            }
+            };
             if let Some(parent) = target.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            std::fs::write(&target, output.stdout)?;
+            std::fs::write(&target, bytes)?;
             restored += 1;
         } else if target.exists() {
             if target.is_dir() {
@@ -119,23 +128,30 @@ fn capture_one(workspace_root: &Path, path: &Path) -> Result<CheckpointEntry> {
             .arg(path)
             .current_dir(workspace_root)
             .output()?;
-        if !output.status.success() {
-            anyhow::bail!(
-                "git hash-object failed for {}: {}",
-                path.display(),
-                String::from_utf8_lossy(&output.stderr)
-            );
+        if output.status.success() {
+            Ok(CheckpointEntry {
+                path: rel,
+                existed: true,
+                blob_oid: Some(String::from_utf8_lossy(&output.stdout).trim().to_string()),
+                content: None,
+            })
+        } else {
+            Ok(CheckpointEntry {
+                path: rel,
+                existed: true,
+                blob_oid: None,
+                content: Some(
+                    std::fs::read(path)
+                        .with_context(|| format!("read checkpoint content {}", path.display()))?,
+                ),
+            })
         }
-        Ok(CheckpointEntry {
-            path: rel,
-            existed: true,
-            blob_oid: Some(String::from_utf8_lossy(&output.stdout).trim().to_string()),
-        })
     } else {
         Ok(CheckpointEntry {
             path: rel,
             existed: false,
             blob_oid: None,
+            content: None,
         })
     }
 }
@@ -307,6 +323,24 @@ mod tests {
             "pub fn x() {}\n"
         );
         assert!(!root.join("src/new.rs").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn checkpoint_restores_plain_non_git_workspace() {
+        let root = std::env::temp_dir().join(format!("px-checkpoint-plain-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/lib.py"), "def add(a, b):\n    return a - b\n").unwrap();
+
+        let manifest = create_checkpoint(&root, &[PathBuf::from("src/lib.py")], "plain").unwrap();
+        std::fs::write(root.join("src/lib.py"), "def add(a, b):\n    return a + b\n").unwrap();
+
+        let out = undo_checkpoint(&root, manifest.to_str()).unwrap();
+        assert!(out.contains("restored 1"));
+        assert_eq!(
+            std::fs::read_to_string(root.join("src/lib.py")).unwrap(),
+            "def add(a, b):\n    return a - b\n"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 }
