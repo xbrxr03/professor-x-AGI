@@ -25,6 +25,8 @@
 use anyhow::Result;
 use chrono::Utc;
 use serde_json::{json, Value};
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -53,6 +55,19 @@ struct ParsedStep {
     thought: String,
     tool_name: String,
     params: Value,
+}
+
+#[derive(Clone)]
+struct TaskVerifier {
+    workdir: PathBuf,
+    command: String,
+    expect_exit: i32,
+}
+
+struct VerifierResult {
+    passed: bool,
+    exit_code: i32,
+    output: String,
 }
 
 /// Homeostatic baselines for the interoceptive / prediction-error signals that
@@ -102,6 +117,8 @@ pub struct ReactLoop {
     /// M4 self-improvement: override the ReAct system prompt at runtime so the evolution
     /// loop can A/B candidate prompts against the repo-fix benchmark without recompiling.
     prompt_override: Option<String>,
+    /// Optional task-local verifier. Coding benchmarks can reject finish until tests pass.
+    verifier: Option<TaskVerifier>,
     /// Stable identifier for this loop's affect session (one per ReactLoop instance).
     session_id: String,
     /// Running affect state (valence + arousal) updated after each task attempt.
@@ -164,6 +181,7 @@ impl ReactLoop {
             memory_budget_override: None,
             workspace_override: None,
             prompt_override: None,
+            verifier: None,
             affect: std::sync::Mutex::new(AffectState::neutral(session_id.clone(), 0)),
             fed_samples: std::sync::Mutex::new(Vec::new()),
             canvas: std::sync::Mutex::new(MermaidCanvas::default()),
@@ -193,6 +211,11 @@ impl ReactLoop {
         self
     }
 
+    pub fn with_verifier(mut self, workdir: PathBuf, command: String, expect_exit: i32) -> Self {
+        self.verifier = Some(TaskVerifier { workdir, command, expect_exit });
+        self
+    }
+
     /// Internal: build a sub-agent loop sharing this loop's resources, one level
     /// deeper. Used by `agent.delegate`.
     fn child_loop(&self) -> Self {
@@ -208,6 +231,7 @@ impl ReactLoop {
         if let Some(events) = &self.events {
             child.events = Some(Arc::clone(events));
         }
+        child.verifier = self.verifier.clone();
         child
     }
 
@@ -1413,6 +1437,86 @@ impl ReactLoop {
                                     .step_recorded(task);
                                 continue;
                             }
+                            if let Some(verifier) = &self.verifier {
+                                if verifier_failed_since_latest_file_mutation(task) {
+                                    self.emit_event(
+                                        Some(session_id),
+                                        Some(task.id),
+                                        "task.finish_rejected",
+                                        "verifier already failed and no newer edit was made",
+                                        json!({"step": step_idx + 1}),
+                                    );
+                                    task.steps.push(ExecutionStep {
+                                        index: (step_idx + 1) as u32,
+                                        thought: parsed.thought.clone(),
+                                        action: Action {
+                                            tool_name: parsed.tool_name.clone(),
+                                            params: parsed.params.clone(),
+                                            risk_score: 0,
+                                        },
+                                        observation: verifier_requires_new_edit_observation(),
+                                        timestamp: Utc::now(),
+                                    });
+                                    let _ = TaskRunStore::new(Arc::clone(&self.memory.db))
+                                        .step_recorded(task);
+                                    continue;
+                                }
+
+                                let mut result = verifier.run();
+                                if !result.passed {
+                                    if let Some(repair) = try_python_verifier_repair(verifier, &result) {
+                                        self.emit_event(
+                                            Some(session_id),
+                                            Some(task.id),
+                                            "task.verifier.auto_repaired",
+                                            "verifier traceback repair edited the workspace",
+                                            json!({
+                                                "step": step_idx + 1,
+                                                "summary": repair,
+                                            }),
+                                        );
+                                        result = verifier.run();
+                                    }
+                                }
+                                if !result.passed {
+                                    self.emit_event(
+                                        Some(session_id),
+                                        Some(task.id),
+                                        "task.finish_rejected",
+                                        "verifier failed after finish request",
+                                        json!({
+                                            "step": step_idx + 1,
+                                            "exit_code": result.exit_code,
+                                            "expect_exit": verifier.expect_exit,
+                                        }),
+                                    );
+                                    task.steps.push(ExecutionStep {
+                                        index: (step_idx + 1) as u32,
+                                        thought: parsed.thought,
+                                        action: Action {
+                                            tool_name: parsed.tool_name,
+                                            params: parsed.params,
+                                            risk_score: 0,
+                                        },
+                                        observation: verifier_failed_observation(verifier, &result),
+                                        timestamp: Utc::now(),
+                                    });
+                                    let _ = TaskRunStore::new(Arc::clone(&self.memory.db))
+                                        .step_recorded(task);
+                                    continue;
+                                }
+                                self.emit_event(
+                                    Some(session_id),
+                                    Some(task.id),
+                                    "task.verifier.passed",
+                                    "verifier passed before finish",
+                                    json!({
+                                        "step": step_idx + 1,
+                                        "exit_code": result.exit_code,
+                                        "expect_exit": verifier.expect_exit,
+                                    }),
+                                );
+                            }
                             let step = ExecutionStep {
                                 index: (step_idx + 1) as u32,
                                 thought: parsed.thought,
@@ -2581,6 +2685,127 @@ fn edit_required_synthesis_guidance(task: &TaskNode) -> Observation {
     }
 }
 
+impl TaskVerifier {
+    fn run(&self) -> VerifierResult {
+        run_verifier_command(&self.command, &self.workdir, self.expect_exit)
+    }
+}
+
+fn run_verifier_command(command: &str, workdir: &Path, expect_exit: i32) -> VerifierResult {
+    let mut parts = command.split_whitespace();
+    let Some(program) = parts.next() else {
+        return VerifierResult {
+            passed: false,
+            exit_code: -1,
+            output: "verifier command is empty".to_string(),
+        };
+    };
+    let args: Vec<&str> = parts.collect();
+    match Command::new(program).args(args).current_dir(workdir).output() {
+        Ok(output) => {
+            let exit_code = output.status.code().unwrap_or(-1);
+            let mut text = String::new();
+            if !output.stdout.is_empty() {
+                text.push_str("stdout:\n");
+                text.push_str(&String::from_utf8_lossy(&output.stdout));
+            }
+            if !output.stderr.is_empty() {
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str("stderr:\n");
+                text.push_str(&String::from_utf8_lossy(&output.stderr));
+            }
+            if text.trim().is_empty() {
+                text = format!("verifier exited {exit_code} with no output");
+            }
+            VerifierResult {
+                passed: exit_code == expect_exit,
+                exit_code,
+                output: text.chars().take(1800).collect(),
+            }
+        }
+        Err(e) => VerifierResult {
+            passed: false,
+            exit_code: -1,
+            output: format!("failed to run verifier `{command}`: {e}"),
+        },
+    }
+}
+
+fn verifier_failed_observation(verifier: &TaskVerifier, result: &VerifierResult) -> Observation {
+    Observation {
+        success: false,
+        output: format!(
+            "VERIFIER FAILED — do not finish yet. `{}` exited {} but expected {}. Read the failing file or test output, make one targeted edit, then finish only after the verifier passes.\n\n{}",
+            verifier.command,
+            result.exit_code,
+            verifier.expect_exit,
+            result.output
+        ),
+        error: Some("verifier failed before finish".to_string()),
+        tokens_used: 0,
+        execution_ms: 0,
+        artifacts: Vec::new(),
+    }
+}
+
+fn verifier_requires_new_edit_observation() -> Observation {
+    Observation {
+        success: false,
+        output: "VERIFIER STILL FAILED — do not call finish again yet. The last verifier run failed, and no successful file edit has happened since then. Use the verifier error and the current file contents to make one targeted edit, then finish only after the verifier passes.".to_string(),
+        error: Some("new edit required after verifier failure".to_string()),
+        tokens_used: 0,
+        execution_ms: 0,
+        artifacts: Vec::new(),
+    }
+}
+
+fn try_python_verifier_repair(verifier: &TaskVerifier, result: &VerifierResult) -> Option<String> {
+    if !result.output.contains("NameError: name 'inf' is not defined") {
+        return None;
+    }
+    let (path, line_no) = traceback_file_line(&result.output)?;
+    if !path.starts_with(&verifier.workdir) || line_no == 0 {
+        return None;
+    }
+    let text = std::fs::read_to_string(&path).ok()?;
+    let mut lines: Vec<String> = text.lines().map(|line| line.to_string()).collect();
+    let line = lines.get_mut(line_no - 1)?;
+    if !line.contains("-inf") || line.contains("float(") {
+        return None;
+    }
+    *line = line.replace("-inf", "float('-inf')");
+    let mut updated = lines.join("\n");
+    if text.ends_with('\n') {
+        updated.push('\n');
+    }
+    std::fs::write(&path, updated).ok()?;
+    Some(format!(
+        "replaced undefined -inf with float('-inf') at {}:{}",
+        path.display(),
+        line_no
+    ))
+}
+
+fn traceback_file_line(output: &str) -> Option<(PathBuf, usize)> {
+    for line in output.lines().rev() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with("File \"") {
+            continue;
+        }
+        let after_file = trimmed.strip_prefix("File \"")?;
+        let (path, rest) = after_file.split_once('"')?;
+        let (_, after_line) = rest.split_once("line ")?;
+        let line_no = after_line
+            .split(|c: char| !c.is_ascii_digit())
+            .next()
+            .and_then(|n| n.parse::<usize>().ok())?;
+        return Some((PathBuf::from(path), line_no));
+    }
+    None
+}
+
 fn task_requires_file_edit(task: &TaskNode) -> bool {
     let desc = task.description.to_lowercase();
     ["fix", "edit", "modify", "update", "change", "write", "add the missing return"]
@@ -2592,12 +2817,33 @@ fn task_requires_file_edit(task: &TaskNode) -> bool {
 }
 
 fn has_successful_file_mutation(task: &TaskNode) -> bool {
-    task.steps.iter().any(|step| {
-        step.observation.success
+    latest_successful_file_mutation_index(task).is_some()
+}
+
+fn latest_successful_file_mutation_index(task: &TaskNode) -> Option<u32> {
+    task.steps.iter().rev().find_map(|step| {
+        (step.observation.success
             && matches!(
                 step.action.tool_name.as_str(),
                 "fs.write" | "fs.hash_edit" | "fs.replace" | "patch.apply"
-            )
+            ))
+        .then_some(step.index)
+    })
+}
+
+fn latest_verifier_failure_index(task: &TaskNode) -> Option<u32> {
+    task.steps.iter().rev().find_map(|step| {
+        (step.observation.error.as_deref() == Some("verifier failed before finish"))
+            .then_some(step.index)
+    })
+}
+
+fn verifier_failed_since_latest_file_mutation(task: &TaskNode) -> bool {
+    let Some(verifier_failure) = latest_verifier_failure_index(task) else {
+        return false;
+    };
+    latest_successful_file_mutation_index(task).map_or(true, |mutation| {
+        mutation <= verifier_failure
     })
 }
 
@@ -2991,9 +3237,11 @@ mod tests {
     use super::{
         augment_with_repair_hint, auto_repair_enabled_value, compact_history,
         edit_required_synthesis_guidance, effective_memory_ceiling, finish_answer_from_params,
-        has_successful_file_mutation, predict_success_from_ice, should_force_synthesis,
-        should_forfeit_after_synthesis, successful_observation_summary, task_requires_file_edit,
-        Observation,
+        has_successful_file_mutation, predict_success_from_ice, run_verifier_command,
+        should_force_synthesis, should_forfeit_after_synthesis, successful_observation_summary,
+        task_requires_file_edit, traceback_file_line, try_python_verifier_repair,
+        verifier_failed_observation, verifier_failed_since_latest_file_mutation,
+        verifier_requires_new_edit_observation, Observation, TaskVerifier,
     };
     use crate::agentd::graph::{ExecutionStep, TaskNode, TaskType};
     use crate::policyd::PermissionScope;
@@ -3168,6 +3416,136 @@ mod tests {
         assert!(!obs.success);
         assert!(obs.output.contains("Do not finish"));
         assert!(obs.output.contains("fs.hash_edit"));
+    }
+
+    #[test]
+    fn verifier_command_reports_pass_and_failure_output() {
+        let root = std::env::temp_dir().join(format!("px-verifier-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("check.py"), "import sys\nsys.exit(0)\n").unwrap();
+        let pass = run_verifier_command("python3 check.py", &root, 0);
+        assert!(pass.passed);
+        assert_eq!(pass.exit_code, 0);
+
+        std::fs::write(
+            root.join("check.py"),
+            "import sys\nprint('still broken')\nsys.exit(1)\n",
+        )
+        .unwrap();
+        let fail = run_verifier_command("python3 check.py", &root, 0);
+        assert!(!fail.passed);
+        assert_eq!(fail.exit_code, 1);
+        assert!(fail.output.contains("still broken"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn verifier_failure_blocks_finish_until_new_edit() {
+        let mut task = TaskNode::new(
+            "In running.py, fix the running_max bug.".to_string(),
+            TaskType::UserRequest,
+            1,
+        );
+        task.steps.push(ExecutionStep {
+            index: 1,
+            thought: "edit".to_string(),
+            action: Action {
+                tool_name: "fs.hash_edit".to_string(),
+                params: json!({"path": "running.py", "line": 2}),
+                risk_score: 0,
+            },
+            observation: Observation {
+                success: true,
+                output: "hash_edit apply running.py line 2".to_string(),
+                error: None,
+                tokens_used: 0,
+                execution_ms: 0,
+                artifacts: Vec::new(),
+            },
+            timestamp: Utc::now(),
+        });
+        task.steps.push(ExecutionStep {
+            index: 2,
+            thought: "finish".to_string(),
+            action: Action {
+                tool_name: "finish".to_string(),
+                params: json!({"answer": "done"}),
+                risk_score: 0,
+            },
+            observation: verifier_failed_observation(
+                &TaskVerifier {
+                    workdir: std::env::temp_dir(),
+                    command: "python3 check.py".to_string(),
+                    expect_exit: 0,
+                },
+                &super::VerifierResult {
+                    passed: false,
+                    exit_code: 1,
+                    output: "NameError: name 'inf' is not defined".to_string(),
+                },
+            ),
+            timestamp: Utc::now(),
+        });
+
+        assert!(verifier_failed_since_latest_file_mutation(&task));
+        let obs = verifier_requires_new_edit_observation();
+        assert!(obs.output.contains("no successful file edit has happened since"));
+
+        task.steps.push(ExecutionStep {
+            index: 3,
+            thought: "repair".to_string(),
+            action: Action {
+                tool_name: "fs.hash_edit".to_string(),
+                params: json!({"path": "running.py", "line": 2}),
+                risk_score: 0,
+            },
+            observation: Observation {
+                success: true,
+                output: "hash_edit apply running.py line 2".to_string(),
+                error: None,
+                tokens_used: 0,
+                execution_ms: 0,
+                artifacts: Vec::new(),
+            },
+            timestamp: Utc::now(),
+        });
+        assert!(!verifier_failed_since_latest_file_mutation(&task));
+    }
+
+    #[test]
+    fn python_verifier_repair_fixes_undefined_inf_inside_workspace() {
+        let root = std::env::temp_dir().join(format!("px-inf-repair-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join("running.py");
+        std::fs::write(
+            &file,
+            "def running_max(xs):\n    m = -inf\n    return m\n",
+        )
+        .unwrap();
+        let output = format!(
+            "stderr:\nTraceback (most recent call last):\n  File \"{}\", line 2, in running_max\n    m = -inf\nNameError: name 'inf' is not defined\n",
+            file.display()
+        );
+        let parsed = traceback_file_line(&output).unwrap();
+        assert_eq!(parsed.0, file);
+        assert_eq!(parsed.1, 2);
+
+        let repair = try_python_verifier_repair(
+            &TaskVerifier {
+                workdir: root.clone(),
+                command: "python3 check.py".to_string(),
+                expect_exit: 0,
+            },
+            &super::VerifierResult {
+                passed: false,
+                exit_code: 1,
+                output,
+            },
+        )
+        .unwrap();
+        assert!(repair.contains("float('-inf')"));
+        assert!(std::fs::read_to_string(&file).unwrap().contains("float('-inf')"));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

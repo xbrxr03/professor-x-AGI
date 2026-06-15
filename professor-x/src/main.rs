@@ -8054,7 +8054,8 @@ async fn repo_fix_measure(
             cancel.clone(),
         )
         .with_events(Arc::clone(events))
-        .with_workspace_root(workdir.clone());
+        .with_workspace_root(workdir.clone())
+        .with_verifier(workdir.clone(), task.verify_cmd.clone(), task.expect_exit);
         if let Some(p) = prompt_override {
             react = react.with_prompt_override(p.to_string());
         }
