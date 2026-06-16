@@ -1,0 +1,22 @@
+{
+  "generated_at": "2026-06-16T02:31:14.695360333+00:00",
+  "mode": "operator_commit_smoke",
+  "operator_goal": "record bounded commit-capable autonomy evidence after the six-gate scheduler fix",
+  "workspace": "repo-root",
+  "harness_commit": "6b0bf33",
+  "target_component": "SkillDefinition(\"px-operator-autocommit-20260616-022930\")",
+  "motivation": "operator queued goal proposal: record bounded commit-capable autonomy evidence after the six-gate scheduler fix",
+  "accepted": true,
+  "applied": false,
+  "commit": null,
+  "reason": "sandbox verification passed",
+  "checks": [
+    "reward_hacking_scan",
+    "sandbox_worktree",
+    "material_diff",
+    "cargo_check",
+    "cargo_test"
+  ],
+  "diff_hash": "8812925a7e44934021ab6704f5d2e8d489a5c347244f18584c84872e6982af47",
+  "diff_bytes": 1346
+}
