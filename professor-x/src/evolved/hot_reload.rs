@@ -54,8 +54,35 @@ pub fn current_generation() -> u32 {
         .unwrap_or(0)
 }
 
-/// Rebuild the release binary at `repo_root`. Returns the built binary path on success.
-/// On a failing build it returns `Err` — the caller MUST keep running the current binary.
+/// Resolve the cargo manifest directory (the one containing `Cargo.toml`) for the
+/// `professor-x` binary. The git root is NOT necessarily the manifest dir — in this repo the
+/// crate lives in a `professor-x/` subdirectory. We try, in order: the directory two levels up
+/// from the running binary (`<manifest>/target/{release,debug}/professor-x`, layout-independent),
+/// then `repo_root`, then `repo_root/professor-x`.
+pub fn manifest_dir(repo_root: &Path) -> Result<PathBuf> {
+    if let Ok(exe) = std::env::current_exe() {
+        // <manifest>/target/<profile>/professor-x  →  pop profile, target, file.
+        if let Some(manifest) = exe.parent().and_then(|p| p.parent()).and_then(|p| p.parent()) {
+            if manifest.join("Cargo.toml").exists() {
+                return Ok(manifest.to_path_buf());
+            }
+        }
+    }
+    for candidate in [repo_root.to_path_buf(), repo_root.join("professor-x")] {
+        if candidate.join("Cargo.toml").exists() {
+            return Ok(candidate);
+        }
+    }
+    anyhow::bail!(
+        "could not locate Cargo.toml for the professor-x crate (looked near the running binary, {} and {}/professor-x)",
+        repo_root.display(),
+        repo_root.display()
+    )
+}
+
+/// Rebuild the release binary for the crate found via [`manifest_dir`]. Returns the built
+/// binary path on success. On a failing build it returns `Err` — the caller MUST keep running
+/// the current binary.
 ///
 /// Self-rebuild subtlety: the process calling this is usually `target/release/professor-x`
 /// itself, so cargo's relink step would hit `ETXTBSY` ("text file busy") trying to overwrite
@@ -63,7 +90,8 @@ pub fn current_generation() -> u32 {
 /// valid after a rename), letting cargo write a fresh file at the original path; on failure we
 /// move it back so a working binary always remains.
 pub async fn rebuild_release(repo_root: &Path) -> Result<PathBuf> {
-    let bin = repo_root.join("target/release/professor-x");
+    let manifest = manifest_dir(repo_root)?;
+    let bin = manifest.join("target/release/professor-x");
     let stash = if bin.exists() {
         let s = repo_root.join(format!(
             "target/release/.professor-x.prev-{}",
@@ -78,7 +106,7 @@ pub async fn rebuild_release(repo_root: &Path) -> Result<PathBuf> {
 
     let out = tokio::process::Command::new("cargo")
         .args(["build", "--release", "--bin", "professor-x"])
-        .current_dir(repo_root)
+        .current_dir(&manifest)
         .output()
         .await
         .context("spawning cargo build --release")?;

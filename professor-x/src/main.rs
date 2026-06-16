@@ -144,6 +144,8 @@ struct CliArgs {
     hiro_smoke: bool,
     /// Rebuild the release binary and re-exec into it (close the evolve→apply loop, no restart).
     self_rebuild_reexec: bool,
+    /// Rebuild-only safety gate: confirm the committed tree builds release-clean; never re-exec.
+    self_rebuild_check: bool,
     /// Internal: target of a hot-reload re-exec; prints the generation and exits (probe).
     self_reload_probe: bool,
     repo_fix_bench: bool,
@@ -343,6 +345,7 @@ where
         patch_apply_live_path: None,
         hiro_smoke: false,
         self_rebuild_reexec: false,
+        self_rebuild_check: false,
         self_reload_probe: false,
         repo_fix_bench: false,
         evolve_on_repofix: None,
@@ -639,6 +642,10 @@ where
             }
             "--self-rebuild-reexec" | "--hot-reload" => {
                 cli.self_rebuild_reexec = true;
+                i += 1;
+            }
+            "--self-rebuild-check" | "--verify-rebuild" => {
+                cli.self_rebuild_check = true;
                 i += 1;
             }
             "--self-reload-probe" => {
@@ -1272,6 +1279,10 @@ async fn main() -> Result<()> {
         let generation = crate::evolved::hot_reload::current_generation();
         println!("hot-reload probe: running as generation {generation} (re-exec succeeded)");
         return Ok(());
+    }
+
+    if cli.self_rebuild_check {
+        return run_self_rebuild_check(Arc::clone(&events)).await;
     }
 
     if cli.self_rebuild_reexec {
@@ -2670,6 +2681,47 @@ async fn run_patch_apply_commit(events: Arc<EventStore>, patch_path: PathBuf) ->
         anyhow::bail!("patch apply commit did not commit an accepted patch");
     }
     Ok(())
+}
+
+/// Rebuild-only safety gate: prove the committed source builds release-clean so a later
+/// hot-reload can never replace a working binary with a broken one. Never re-execs.
+async fn run_self_rebuild_check(events: Arc<EventStore>) -> Result<()> {
+    use crate::evolved::hot_reload;
+    let repo_root = default_repo_root();
+    println!("hot-reload check: rebuilding committed tree (release) — no re-exec…");
+    events.append(
+        None,
+        None,
+        "hot_reload.check.started",
+        "verifying the committed tree builds release-clean before any hot-reload",
+        serde_json::json!({
+            "harness_commit": git_head(&repo_root).unwrap_or_else(|_| "unknown".to_string()),
+        }),
+    )?;
+    match hot_reload::rebuild_release(&repo_root).await {
+        Ok(bin) => {
+            println!("hot-reload check: OK — release binary built at {}", bin.display());
+            println!("  the committed tree is safe to hot-reload (re-exec gated separately).");
+            events.append(
+                None,
+                None,
+                "hot_reload.check.passed",
+                "committed tree builds release-clean; safe to hot-reload",
+                serde_json::json!({ "binary": bin.display().to_string() }),
+            )?;
+            Ok(())
+        }
+        Err(err) => {
+            events.append(
+                None,
+                None,
+                "hot_reload.check.failed",
+                "committed tree does NOT build release-clean; hot-reload would be refused",
+                serde_json::json!({ "error": err.to_string() }),
+            )?;
+            Err(err)
+        }
+    }
 }
 
 /// Close the evolve→apply→measure loop with no operator restart: rebuild the release binary
