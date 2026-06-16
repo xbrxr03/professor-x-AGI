@@ -12491,12 +12491,16 @@ fn render_work_status_json(
         .map(|run| gate_store.recent_for_run(&run.run_id, 8))
         .transpose()?
         .unwrap_or_default();
+    let recent_evolution_events = events.work_tail(200)?;
+    let latest_evolution_artifact =
+        latest_evolution_artifact_status(&repo_root, &recent_evolution_events);
 
     Ok(format_work_status_json(
         &repo_root,
         &runtime_line,
         &safety_line,
         &recent_events,
+        latest_evolution_artifact.as_ref(),
         latest_task_run.as_ref(),
         latest_run.as_ref(),
         latest_coding_session.as_ref(),
@@ -12528,12 +12532,16 @@ fn render_work_cockpit(
         .map(|run| gate_store.recent_for_run(&run.run_id, 8))
         .transpose()?
         .unwrap_or_default();
+    let recent_evolution_events = events.work_tail(200)?;
+    let latest_evolution_artifact =
+        latest_evolution_artifact_status(&repo_root, &recent_evolution_events);
 
     Ok(format_work_cockpit(
         &repo_root,
         &runtime_line,
         &safety_line,
         &recent_events,
+        latest_evolution_artifact.as_ref(),
         latest_run.as_ref(),
         latest_coding_session.as_ref(),
         latest_coding_smoke.as_ref(),
@@ -12548,6 +12556,7 @@ fn format_work_status_json(
     runtime_line: &str,
     safety_line: &str,
     recent_events: &[memd::events::AgentEvent],
+    latest_evolution_artifact: Option<&EvolutionArtifactStatus>,
     latest_task_run: Option<&TaskRun>,
     latest_run: Option<&WorkLoopRunRecord>,
     latest_coding_session: Option<&CodingSessionRecord>,
@@ -12570,6 +12579,7 @@ fn format_work_status_json(
         "now": cockpit_now_summary(recent_events, latest_gate, latest_coding_session),
         "latest_activity": cockpit_latest_activity(recent_events),
         "signal": work_signal_summary(recent_events),
+        "latest_evolution_artifact": latest_evolution_artifact,
         "latest_task_run": latest_task_run.map(work_status_task_run_json),
         "current_run": latest_run.map(work_status_run_json),
         "active_gate": latest_gate.map(work_status_gate_json),
@@ -12747,11 +12757,136 @@ fn work_status_event_json(event: &memd::events::AgentEvent) -> serde_json::Value
     })
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct EvolutionArtifactStatus {
+    stage: String,
+    artifact_path: String,
+    event_type: Option<String>,
+    event_id: Option<i64>,
+    event_summary: Option<String>,
+    generated_at: Option<String>,
+    artifact_id: Option<String>,
+    status: Option<String>,
+    target_component: Option<String>,
+    reason: Option<String>,
+    checks: Vec<String>,
+    empirical_gate: Option<evolved::loop_runner::EmpiricalVerificationEvidence>,
+    empirical_gate_summary: Option<String>,
+    diff_bytes: Option<usize>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct StoredEvolutionArtifactStatus {
+    generated_at: Option<String>,
+    artifact_id: Option<String>,
+    status: Option<String>,
+    target_component: Option<String>,
+    analysis: Option<String>,
+    verification: Option<evolved::loop_runner::VerificationOutcome>,
+    diff_bytes: Option<usize>,
+}
+
+fn empirical_gate_summary(
+    evidence: &evolved::loop_runner::EmpiricalVerificationEvidence,
+) -> String {
+    format!(
+        "repo-fix {} task(s) baseline {:.3} candidate {:.3} delta {:+.3} {}",
+        evidence.task_count,
+        evidence.baseline_score,
+        evidence.candidate_score,
+        evidence.score_delta,
+        if evidence.passed { "pass" } else { "reject" }
+    )
+}
+
+fn latest_evolution_artifact_status(
+    repo_root: &std::path::Path,
+    recent_events: &[memd::events::AgentEvent],
+) -> Option<EvolutionArtifactStatus> {
+    recent_events
+        .iter()
+        .rev()
+        .find(|event| {
+            event.event_type.starts_with("evolution.")
+                && event.payload["artifact_path"].as_str().is_some()
+        })
+        .and_then(|event| evolution_artifact_status_from_event(repo_root, event))
+}
+
+fn evolution_artifact_status_from_event(
+    repo_root: &std::path::Path,
+    event: &memd::events::AgentEvent,
+) -> Option<EvolutionArtifactStatus> {
+    let raw_path = event.payload["artifact_path"].as_str()?;
+    let artifact_path = resolve_report_reference(repo_root, raw_path);
+    let stage = evolution_artifact_stage(&artifact_path)
+        .unwrap_or_else(|| event.event_type.trim_start_matches("evolution.").to_string());
+
+    if let Ok(raw) = std::fs::read_to_string(&artifact_path) {
+        if let Ok(stored) = serde_json::from_str::<StoredEvolutionArtifactStatus>(&raw) {
+            let verification = stored.verification.clone();
+            let evidence = verification.as_ref().and_then(|value| value.evidence.clone());
+            let reason = verification
+                .as_ref()
+                .map(|value| value.reason.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .or_else(|| stored.analysis.filter(|value| !value.trim().is_empty()));
+            return Some(EvolutionArtifactStatus {
+                stage,
+                artifact_path: display_repo_path(repo_root, &artifact_path),
+                event_type: Some(event.event_type.clone()),
+                event_id: Some(event.id),
+                event_summary: Some(event.summary.clone()),
+                generated_at: stored.generated_at,
+                artifact_id: stored.artifact_id,
+                status: stored.status,
+                target_component: stored.target_component,
+                reason,
+                checks: verification
+                    .as_ref()
+                    .map(|value| value.checks.clone())
+                    .unwrap_or_default(),
+                empirical_gate_summary: evidence.as_ref().map(empirical_gate_summary),
+                empirical_gate: evidence,
+                diff_bytes: stored.diff_bytes,
+            });
+        }
+    }
+
+    Some(EvolutionArtifactStatus {
+        stage,
+        artifact_path: display_repo_path(repo_root, &artifact_path),
+        event_type: Some(event.event_type.clone()),
+        event_id: Some(event.id),
+        event_summary: Some(event.summary.clone()),
+        generated_at: Some(event.timestamp.to_rfc3339()),
+        artifact_id: None,
+        status: None,
+        target_component: event.payload["target_component"]
+            .as_str()
+            .map(ToOwned::to_owned),
+        reason: event.payload["reason"].as_str().map(ToOwned::to_owned),
+        checks: Vec::new(),
+        empirical_gate: None,
+        empirical_gate_summary: None,
+        diff_bytes: None,
+    })
+}
+
+fn evolution_artifact_stage(path: &std::path::Path) -> Option<String> {
+    path.parent()?
+        .parent()?
+        .file_name()?
+        .to_str()
+        .map(|value| value.to_string())
+}
+
 fn format_work_cockpit(
     repo_root: &std::path::Path,
     runtime_line: &str,
     safety_line: &str,
     recent_events: &[memd::events::AgentEvent],
+    latest_evolution_artifact: Option<&EvolutionArtifactStatus>,
     latest_run: Option<&WorkLoopRunRecord>,
     latest_coding_session: Option<&CodingSessionRecord>,
     latest_coding_smoke: Option<&CodingSmokeRecord>,
@@ -12777,6 +12912,31 @@ fn format_work_cockpit(
         "now   {}",
         cockpit_now_summary(recent_events, latest_gate, latest_coding_session)
     ));
+    lines.push(String::new());
+    lines.push("Latest evolution artifact".to_string());
+    if let Some(artifact) = latest_evolution_artifact {
+        lines.push(format!(
+            "  {} {} {}",
+            artifact.stage,
+            artifact.status.as_deref().unwrap_or("unknown"),
+            artifact.target_component.as_deref().unwrap_or("unknown"),
+        ));
+        if let Some(reason) = artifact.reason.as_deref() {
+            lines.push(format!("  reason {}", truncate(reason, 160)));
+        }
+        if let Some(summary) = artifact.empirical_gate_summary.as_deref() {
+            lines.push(format!("  gate {}", truncate(summary, 160)));
+        }
+        if !artifact.checks.is_empty() {
+            lines.push(format!(
+                "  checks {}",
+                truncate(&artifact.checks.join(", "), 160)
+            ));
+        }
+        lines.push(format!("  artifact {}", artifact.artifact_path));
+    } else {
+        lines.push("  none recorded".to_string());
+    }
     lines.push(String::new());
     lines.push("Current run".to_string());
     match latest_run {
@@ -16015,6 +16175,30 @@ mod tests {
                 "detail": "deterministic coding smoke",
             }),
         };
+        let evolution = EvolutionArtifactStatus {
+            stage: "rejections".to_string(),
+            artifact_path: "artifacts/evolution/rejections/2026-06-16/081201-test.json"
+                .to_string(),
+            event_type: Some("evolution.rejected".to_string()),
+            event_id: Some(12),
+            event_summary: Some("evolution proposal rejected".to_string()),
+            generated_at: Some(now.to_rfc3339()),
+            artifact_id: Some("artifact-123".to_string()),
+            status: Some("Rejected".to_string()),
+            target_component: Some("SkillDefinition(\"HandleActionBlocks\")".to_string()),
+            reason: Some(
+                "empirical repo-fix gate failed: repo-fix bench timed out after 600s"
+                    .to_string(),
+            ),
+            checks: vec![
+                "cargo_check".to_string(),
+                "cargo_test".to_string(),
+                "repo_fix_empirical_gate".to_string(),
+            ],
+            empirical_gate: None,
+            empirical_gate_summary: None,
+            diff_bytes: Some(707),
+        };
         let queued = queue_item(
             "make Prof X work visible in the cockpit",
             WorkLoopProfile::Commit,
@@ -16026,6 +16210,7 @@ mod tests {
             "pid=123 profx_peer=1 ollama=up model=qwen3:8b-q4_k_m",
             "shell_sandbox=fallback-policy-only bwrap_installed=true bwrap_usable=false",
             &[event],
+            Some(&evolution),
             Some(&run),
             Some(&session),
             Some(&smoke),
@@ -16042,6 +16227,12 @@ mod tests {
         assert!(screen.contains("state IDLE"));
         assert!(screen.contains(
             "now   last work_loop.cycle.passed #10 Prof X operator run cycle 1/2 passed"
+        ));
+        assert!(screen.contains("Latest evolution artifact"));
+        assert!(screen.contains("rejections Rejected SkillDefinition(\"HandleActionBlocks\")"));
+        assert!(screen.contains("repo-fix bench timed out after 600s"));
+        assert!(screen.contains(
+            "artifact artifacts/evolution/rejections/2026-06-16/081201-test.json"
         ));
         assert!(screen.contains("progress [######......] 1/2"));
         assert!(screen.contains("operator:core run=12345678"));
@@ -16105,6 +16296,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             &[],
             std::slice::from_ref(&queued),
         );
@@ -16133,6 +16325,7 @@ mod tests {
                 .unwrap()
                 .contains("cargo run -- --observe-work")
         }));
+        assert!(value["latest_evolution_artifact"].is_null());
         assert!(value["latest_task_run"].is_null());
         assert!(value["commands"]
             .as_array()
@@ -16144,6 +16337,78 @@ mod tests {
                 .unwrap()
                 .contains("cargo run -- --repair-coding-sessions 10")
         }));
+    }
+
+    #[test]
+    fn latest_evolution_artifact_status_reads_empirical_gate_summary() {
+        let root = std::env::temp_dir().join(format!(
+            "px-latest-evolution-status-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let artifact_dir = root.join("artifacts/evolution/rejections/2026-06-16");
+        std::fs::create_dir_all(&artifact_dir).unwrap();
+        let artifact_path = artifact_dir.join("081201-test.json");
+        std::fs::write(
+            &artifact_path,
+            serde_json::json!({
+                "generated_at": "2026-06-16T08:12:01Z",
+                "artifact_id": "1d5d034b",
+                "status": "Rejected",
+                "target_component": "SkillDefinition(\"HandleActionBlocks\")",
+                "analysis": "empirical repo-fix gate rejected proposal",
+                "verification": {
+                    "accepted": false,
+                    "reason": "empirical repo-fix gate rejected proposal: repo-fix subset pass@1 baseline 0.750 candidate 0.500 delta -0.250 on 4 task(s)",
+                    "checks": ["cargo_check", "cargo_test", "repo_fix_empirical_gate"],
+                    "evidence": {
+                        "benchmark": "repo_fix_subset",
+                        "task_count": 4,
+                        "baseline_score": 0.75,
+                        "candidate_score": 0.5,
+                        "score_delta": -0.25,
+                        "passed": false
+                    }
+                },
+                "diff_bytes": 807
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let event = memd::events::AgentEvent {
+            id: 77,
+            timestamp: chrono::Utc::now(),
+            session_id: None,
+            task_id: None,
+            event_type: "evolution.rejected".to_string(),
+            summary: "evolution proposal rejected".to_string(),
+            payload: serde_json::json!({
+                "artifact_path": "artifacts/evolution/rejections/2026-06-16/081201-test.json",
+                "target_component": "SkillDefinition(\"HandleActionBlocks\")",
+            }),
+        };
+
+        let summary =
+            latest_evolution_artifact_status(&root, std::slice::from_ref(&event)).unwrap();
+        assert_eq!(summary.stage, "rejections");
+        assert_eq!(summary.status.as_deref(), Some("Rejected"));
+        assert_eq!(
+            summary.target_component.as_deref(),
+            Some("SkillDefinition(\"HandleActionBlocks\")")
+        );
+        assert!(summary
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("repo-fix subset pass@1 baseline 0.750 candidate 0.500 delta -0.250"));
+        assert_eq!(summary.checks.len(), 3);
+        assert_eq!(
+            summary.empirical_gate_summary.as_deref(),
+            Some("repo-fix 4 task(s) baseline 0.750 candidate 0.500 delta -0.250 reject")
+        );
+        assert_eq!(summary.diff_bytes, Some(807));
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

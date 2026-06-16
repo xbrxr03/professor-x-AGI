@@ -156,6 +156,7 @@ async fn api_status(State(st): State<AppState>) -> Json<serde_json::Value> {
 }
 
 fn status_payload(st: &AppState) -> Result<serde_json::Value> {
+    let repo_root = crate::default_repo_root();
     let latest_task_run = TaskRunStore::new(Arc::clone(&st.memory.db)).latest()?;
     let latest_run = WorkLoopRunStore::new(Arc::clone(&st.memory.db)).latest()?;
     let gate_store = WorkLoopGateStore::new(Arc::clone(&st.memory.db));
@@ -174,6 +175,9 @@ fn status_payload(st: &AppState) -> Result<serde_json::Value> {
         .flatten();
     let latest_smoke = CodingSmokeStore::new(Arc::clone(&st.memory.db)).latest()?;
     let work_events = st.events.work_tail(24)?;
+    let evolution_events = st.events.work_tail(200)?;
+    let latest_evolution_artifact =
+        crate::latest_evolution_artifact_status(&repo_root, &evolution_events);
 
     Ok(json!({
         "schema": "professor_x.web_status.v1",
@@ -182,6 +186,7 @@ fn status_payload(st: &AppState) -> Result<serde_json::Value> {
         "working": st.working.load(Ordering::Relaxed),
         "state": work_state(latest_run.as_ref(), latest_gate.as_ref(), st.working.load(Ordering::Relaxed)),
         "now": work_now(&work_events, latest_gate.as_ref(), latest_session.as_ref()),
+        "latest_evolution_artifact": latest_evolution_artifact,
         "latest_task_run": latest_task_run.as_ref().map(task_run_json),
         "current_run": latest_run.as_ref().map(run_json),
         "active_gate": latest_gate.as_ref().map(gate_json),
@@ -417,6 +422,7 @@ button{background:var(--panel2);border:1px solid var(--line);color:var(--fg);pad
       <section class=panel><h3>current run</h3><div id=run class=kv></div></section>
       <section class=panel><h3>active gate</h3><div id=gate class=kv></div></section>
       <section class=panel><h3>latest task</h3><div id=taskrun class=kv></div></section>
+      <section class=panel><h3>latest evolution</h3><div id=evolution class=kv></div></section>
       <section class=panel><h3>autonomy queue</h3><div id=queue></div></section>
       <section class=panel><h3>coding session</h3><div id=session class=kv></div></section>
       <section class="panel wide"><h3>operator commands</h3><div id=commands></div></section>
@@ -445,6 +451,7 @@ async function pollStatus(){try{let s=await(await fetch('/api/status')).json();i
  document.getElementById('run').innerHTML=s.current_run?kv(s.current_run,[['short_id','id'],['profile','profile'],['progress','progress'],['failed_cycles','failed'],['report_path','report']]):'<span class=s-dim>no run recorded</span>';
  document.getElementById('gate').innerHTML=s.active_gate?kv(s.active_gate,[['kind','kind'],['label','label'],['status','status'],['detail','detail'],['report_path','report']]):'<span class=s-dim>no gate recorded</span>';
  document.getElementById('taskrun').innerHTML=s.latest_task_run?kv(s.latest_task_run,[['short_id','id'],['status','status'],['failure_class','class'],['last_tool','tool'],['last_summary','summary']]):'<span class=s-dim>no task recorded</span>';
+ document.getElementById('evolution').innerHTML=s.latest_evolution_artifact?kv(s.latest_evolution_artifact,[['stage','stage'],['status','status'],['target_component','target'],['reason','reason'],['empirical_gate_summary','gate'],['artifact_path','artifact']]):'<span class=s-dim>no evolution artifact recorded</span>';
  document.getElementById('queue').innerHTML=(s.queue||[]).map(q=>`<div class=ev><span class=s-cyan>${esc(q.short_id)}</span> ${esc(q.status)} p${esc(q.priority)} ${esc(q.profile)} · ${esc(q.goal)}</div>`).join('')||'<span class=s-dim>queue empty</span>';
  document.getElementById('session').innerHTML=s.latest_coding_session?kv(s.latest_coding_session,[['short_id','id'],['status','status'],['goal','goal'],['session_report_path','report']]):'<span class=s-dim>no coding session recorded</span>';
  document.getElementById('commands').innerHTML=(s.commands||[]).map(c=>`<button title="${esc(c)}">${esc(c.replace('cargo run -- ',''))}</button>`).join('');
@@ -476,6 +483,7 @@ mod tests {
         assert!(INDEX_HTML.contains("current run"));
         assert!(INDEX_HTML.contains("active gate"));
         assert!(INDEX_HTML.contains("latest task"));
+        assert!(INDEX_HTML.contains("latest evolution"));
         assert!(INDEX_HTML.contains("autonomy queue"));
         assert!(INDEX_HTML.contains("coding session"));
     }
