@@ -146,6 +146,8 @@ struct CliArgs {
     self_rebuild_reexec: bool,
     /// Rebuild-only safety gate: confirm the committed tree builds release-clean; never re-exec.
     self_rebuild_check: bool,
+    /// Report whether an accepted autonomous commit still holds (vs reverted/missing) against HEAD.
+    rollback_verdict_commit: Option<String>,
     /// Internal: target of a hot-reload re-exec; prints the generation and exits (probe).
     self_reload_probe: bool,
     repo_fix_bench: bool,
@@ -346,6 +348,7 @@ where
         hiro_smoke: false,
         self_rebuild_reexec: false,
         self_rebuild_check: false,
+        rollback_verdict_commit: None,
         self_reload_probe: false,
         repo_fix_bench: false,
         evolve_on_repofix: None,
@@ -647,6 +650,10 @@ where
             "--self-rebuild-check" | "--verify-rebuild" => {
                 cli.self_rebuild_check = true;
                 i += 1;
+            }
+            "--rollback-verdict" if i + 1 < args.len() => {
+                cli.rollback_verdict_commit = Some(args[i + 1].clone());
+                i += 2;
             }
             "--self-reload-probe" => {
                 cli.self_reload_probe = true;
@@ -1283,6 +1290,10 @@ async fn main() -> Result<()> {
 
     if cli.self_rebuild_check {
         return run_self_rebuild_check(Arc::clone(&events)).await;
+    }
+
+    if let Some(commit) = cli.rollback_verdict_commit.clone() {
+        return run_rollback_verdict(Arc::clone(&events), commit).await;
     }
 
     if cli.self_rebuild_reexec {
@@ -2680,6 +2691,30 @@ async fn run_patch_apply_commit(events: Arc<EventStore>, patch_path: PathBuf) ->
     if !(report.accepted && report.applied) {
         anyhow::bail!("patch apply commit did not commit an accepted patch");
     }
+    Ok(())
+}
+
+/// Rollback monitoring: report whether an accepted autonomous `applied_commit` still holds
+/// against HEAD (vs reverted or missing). Pure git — surfaces the verdict for the operator.
+async fn run_rollback_verdict(events: Arc<EventStore>, commit: String) -> Result<()> {
+    use crate::evolved::rollback;
+    let repo_root = default_repo_root();
+    let verdict = rollback::applied_commit_verdict(&repo_root, &commit).await?;
+    println!("rollback verdict for {commit}: {}", verdict.status.as_str());
+    if let Some(resolved) = &verdict.resolved {
+        println!("  resolved: {resolved}");
+    }
+    println!("  present in HEAD: {}", verdict.present_in_head);
+    if let Some(by) = &verdict.reverted_by {
+        println!("  reverted by: {by}");
+    }
+    events.append(
+        None,
+        None,
+        "evolution.rollback.verdict",
+        format!("accepted commit {commit} verdict: {}", verdict.status.as_str()),
+        serde_json::to_value(&verdict).unwrap_or_default(),
+    )?;
     Ok(())
 }
 

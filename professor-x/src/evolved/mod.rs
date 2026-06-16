@@ -10,6 +10,7 @@ pub mod lcap;
 pub mod loop_runner;
 pub mod proposer;
 pub mod reflector;
+pub mod rollback;
 pub mod sleep;
 pub mod tracker;
 
