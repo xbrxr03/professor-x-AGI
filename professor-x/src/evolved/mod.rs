@@ -5,10 +5,12 @@ pub mod cognition_base;
 pub mod dhe;
 pub mod dmn;
 pub mod hiro;
+pub mod hot_reload;
 pub mod lcap;
 pub mod loop_runner;
 pub mod proposer;
 pub mod reflector;
+pub mod rollback;
 pub mod sleep;
 pub mod tracker;
 

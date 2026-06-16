@@ -9,10 +9,25 @@ analysis. Status: ☐ open · ◐ in progress · ✓ done.
   Removes a network/process dependency and speeds every embed (retrieve_ice,
   binding, cognition, case-based confidence). jcode runs vector inference locally
   with no external service.
-- ☐ **Persistent server + hot-reload** (HIGH, larger build). Mirror jcode's
+- ◐ **Persistent server + hot-reload** (HIGH, larger build). Mirror jcode's
   SelfDev/hot_exec: a persistent server so the evolution loop can apply a verified
   change *live* instead of requiring an operator restart. Closes the
   evolve→apply→measure loop without manual intervention.
+  **Landed (primitive):** `src/evolved/hot_reload.rs` + `--self-rebuild-reexec`
+  (alias `--hot-reload`). After a verified self-change is committed, it rebuilds
+  `cargo build --release` and `exec`s into the new binary (`--self-reload-probe`
+  confirms the relaunch). Structural safety: re-exec ONLY on a clean build (a broken
+  self-edit can't replace a working binary), a generation cap (`PROFESSOR_X_RELOAD_GENERATION`,
+  default 8) bounds reload storms, and the running binary is moved aside before relink to
+  avoid `ETXTBSY`. 4 unit tests on the decision policy; full suite 337 green.
+  Runnable safety gate `--self-rebuild-check` (alias `--verify-rebuild`) rebuilds the committed
+  tree release-clean WITHOUT re-exec — the mandatory precondition before any hot-reload, and
+  self-contained/verifiable (demonstrated live: OK, exit 0). It caught a real manifest-dir bug
+  (git root ≠ crate dir); `hot_reload::manifest_dir()` now resolves the layout from the running
+  binary's path.
+  **Remaining:** wire it as the operator loop's post-`operator_commit` step so the live loop
+  self-applies. That live re-exec is a self-modifying autonomous action — gated behind explicit
+  operator authorization (the auto-classifier blocks it until then).
 - ☐ **Swarm file-conflict handling** (MEDIUM). jcode's swarm-core gives agents
   shared-repo access with conflict avoidance. Prof X's sub-agents (`agent.delegate`)
   have no scope arbitration — add scope-locks so parallel sub-agents can't clobber.

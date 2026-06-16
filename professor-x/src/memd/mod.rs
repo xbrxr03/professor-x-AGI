@@ -1,4 +1,5 @@
 pub mod affect;
+pub mod autonomy_health;
 pub mod autonomy_queue;
 pub mod causal_traces;
 pub mod coding_sessions;

@@ -142,6 +142,20 @@ struct CliArgs {
     patch_apply_live_path: Option<PathBuf>,
     /// Validate HIRO task inventory and evaluator substrate and exit.
     hiro_smoke: bool,
+    /// Rebuild the release binary and re-exec into it (close the evolve→apply loop, no restart).
+    self_rebuild_reexec: bool,
+    /// Rebuild-only safety gate: confirm the committed tree builds release-clean; never re-exec.
+    self_rebuild_check: bool,
+    /// Report whether an accepted autonomous commit still holds (vs reverted/missing) against HEAD.
+    rollback_verdict_commit: Option<String>,
+    /// Rollback-safe revert: undo a bad accepted autonomous commit with a recorded git revert.
+    rollback_commit: Option<String>,
+    /// Verify every skill is a well-formed first-class runtime unit; exit non-zero on any invalid.
+    verify_skills: bool,
+    /// Print autonomy health + alerts from recent supervised runs; exit non-zero if unhealthy.
+    autonomy_health: bool,
+    /// Internal: target of a hot-reload re-exec; prints the generation and exits (probe).
+    self_reload_probe: bool,
     repo_fix_bench: bool,
     evolve_on_repofix: Option<u32>,
     evolve_skill_on_repofix: Option<u32>,
@@ -338,6 +352,13 @@ where
         patch_apply_path: None,
         patch_apply_live_path: None,
         hiro_smoke: false,
+        self_rebuild_reexec: false,
+        self_rebuild_check: false,
+        rollback_verdict_commit: None,
+        rollback_commit: None,
+        verify_skills: false,
+        autonomy_health: false,
+        self_reload_probe: false,
         repo_fix_bench: false,
         evolve_on_repofix: None,
         evolve_skill_on_repofix: None,
@@ -629,6 +650,34 @@ where
             }
             "--hiro-smoke" => {
                 cli.hiro_smoke = true;
+                i += 1;
+            }
+            "--self-rebuild-reexec" | "--hot-reload" => {
+                cli.self_rebuild_reexec = true;
+                i += 1;
+            }
+            "--self-rebuild-check" | "--verify-rebuild" => {
+                cli.self_rebuild_check = true;
+                i += 1;
+            }
+            "--rollback-verdict" if i + 1 < args.len() => {
+                cli.rollback_verdict_commit = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--rollback-commit" if i + 1 < args.len() => {
+                cli.rollback_commit = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--verify-skills" => {
+                cli.verify_skills = true;
+                i += 1;
+            }
+            "--autonomy-health" => {
+                cli.autonomy_health = true;
+                i += 1;
+            }
+            "--self-reload-probe" => {
+                cli.self_reload_probe = true;
                 i += 1;
             }
             "--repo-fix-bench" => {
@@ -1053,6 +1102,10 @@ async fn main() -> Result<()> {
         return print_work_status_json(Arc::clone(&memory), Arc::clone(&events), 16);
     }
 
+    if cli.autonomy_health {
+        return run_autonomy_health(Arc::clone(&memory));
+    }
+
     if let Some(limit) = cli.events_limit {
         return print_events(Arc::clone(&events), limit);
     }
@@ -1251,6 +1304,33 @@ async fn main() -> Result<()> {
 
     if cli.proposal_dry_run_live {
         return run_evolution_proposal_dry_run_live(Arc::clone(&events)).await;
+    }
+
+    if cli.verify_skills {
+        return run_verify_skills();
+    }
+
+    if cli.self_reload_probe {
+        // Target of a hot-reload re-exec: proves the freshly-built binary launched itself.
+        let generation = crate::evolved::hot_reload::current_generation();
+        println!("hot-reload probe: running as generation {generation} (re-exec succeeded)");
+        return Ok(());
+    }
+
+    if cli.self_rebuild_check {
+        return run_self_rebuild_check(Arc::clone(&events)).await;
+    }
+
+    if let Some(commit) = cli.rollback_verdict_commit.clone() {
+        return run_rollback_verdict(Arc::clone(&events), commit).await;
+    }
+
+    if let Some(commit) = cli.rollback_commit.clone() {
+        return run_rollback_commit(Arc::clone(&events), commit).await;
+    }
+
+    if cli.self_rebuild_reexec {
+        return run_self_rebuild_reexec(Arc::clone(&events)).await;
     }
 
     if let Some(path) = cli.patch_verify_path {
@@ -2645,6 +2725,227 @@ async fn run_patch_apply_commit(events: Arc<EventStore>, patch_path: PathBuf) ->
         anyhow::bail!("patch apply commit did not commit an accepted patch");
     }
     Ok(())
+}
+
+/// Rollback monitoring: report whether an accepted autonomous `applied_commit` still holds
+/// against HEAD (vs reverted or missing). Pure git — surfaces the verdict for the operator.
+async fn run_rollback_verdict(events: Arc<EventStore>, commit: String) -> Result<()> {
+    use crate::evolved::rollback;
+    let repo_root = default_repo_root();
+    let verdict = rollback::applied_commit_verdict(&repo_root, &commit).await?;
+    println!("rollback verdict for {commit}: {}", verdict.status.as_str());
+    if let Some(resolved) = &verdict.resolved {
+        println!("  resolved: {resolved}");
+    }
+    println!("  present in HEAD: {}", verdict.present_in_head);
+    if let Some(by) = &verdict.reverted_by {
+        println!("  reverted by: {by}");
+    }
+    events.append(
+        None,
+        None,
+        "evolution.rollback.verdict",
+        format!("accepted commit {commit} verdict: {}", verdict.status.as_str()),
+        serde_json::to_value(&verdict).unwrap_or_default(),
+    )?;
+    Ok(())
+}
+
+/// Autonomy health + alerts (item #5): aggregate recent supervised runs into a Healthy/Degraded/
+/// Unhealthy verdict a daemon or operator can act on; exit non-zero when unhealthy.
+fn run_autonomy_health(memory: Arc<MemoryManager>) -> Result<()> {
+    let runs = WorkLoopRunStore::new(Arc::clone(&memory.db)).recent(20)?;
+    let health = memd::autonomy_health::summarize_autonomy_health(&runs);
+    println!("autonomy health: {}", health.status.as_str());
+    println!(
+        "  runs={} cycles={} passed={} failed={} pass_rate={:.2} failing_streak={}",
+        health.runs,
+        health.total_cycles,
+        health.passed_cycles,
+        health.failed_cycles,
+        health.pass_rate,
+        health.consecutive_failed_runs,
+    );
+    if health.alerts.is_empty() {
+        println!("  alerts: none");
+    } else {
+        for alert in &health.alerts {
+            println!("  ALERT: {alert}");
+        }
+    }
+    if health.status == memd::autonomy_health::HealthStatus::Unhealthy {
+        anyhow::bail!("autonomy is unhealthy");
+    }
+    Ok(())
+}
+
+/// Verify every skill is a well-formed first-class runtime unit (item #4). Scans the skills dir,
+/// runs the structural verifier on each, prints a per-skill verdict, and exits non-zero if any
+/// skill is invalid — so a malformed/stub skill can't silently enter the runtime.
+fn run_verify_skills() -> Result<()> {
+    let skills_dir = ["skills", "professor-x/skills"]
+        .iter()
+        .map(PathBuf::from)
+        .find(|p| p.exists())
+        .unwrap_or_else(|| default_repo_root().join("professor-x/skills"));
+    let skills = toolbridge::skill_loader::scan_skills_dir(&skills_dir);
+    if skills.is_empty() {
+        println!("verify-skills: no skills found under {}", skills_dir.display());
+        return Ok(());
+    }
+    let mut failed = 0usize;
+    for (fm, path) in &skills {
+        let content = std::fs::read_to_string(path).unwrap_or_default();
+        let v = toolbridge::skill_loader::verify_skill(fm, &content, path);
+        if v.passed {
+            println!("  ok    {}", v.skill);
+        } else {
+            failed += 1;
+            let reasons = v
+                .checks
+                .iter()
+                .filter(|c| !c.passed)
+                .map(|c| format!("{}: {}", c.name, c.detail))
+                .collect::<Vec<_>>()
+                .join("; ");
+            println!("  FAIL  {} — {reasons}", v.skill);
+        }
+    }
+    println!("verify-skills: {}/{} valid", skills.len() - failed, skills.len());
+    if failed > 0 {
+        anyhow::bail!("{failed} skill(s) failed verification");
+    }
+    Ok(())
+}
+
+/// Rollback-safe revert: undo a bad accepted autonomous commit with a recorded git revert, then
+/// confirm the verdict flipped to reverted. The structural counterpart to autonomous acceptance.
+async fn run_rollback_commit(events: Arc<EventStore>, commit: String) -> Result<()> {
+    use crate::evolved::rollback;
+    let repo_root = default_repo_root();
+    let revert = rollback::revert_commit(&repo_root, &commit).await?;
+    let verdict = rollback::applied_commit_verdict(&repo_root, &commit).await?;
+    println!("rolled back {commit}: revert commit {revert}, verdict now {}", verdict.status.as_str());
+    events.append(
+        None,
+        None,
+        "evolution.rollback.reverted",
+        format!("rolled back accepted commit {commit} via revert {revert}"),
+        serde_json::json!({
+            "commit": commit,
+            "revert_commit": revert,
+            "verdict": verdict.status.as_str(),
+        }),
+    )?;
+    Ok(())
+}
+
+/// Rebuild-only safety gate: prove the committed source builds release-clean so a later
+/// hot-reload can never replace a working binary with a broken one. Never re-execs.
+async fn run_self_rebuild_check(events: Arc<EventStore>) -> Result<()> {
+    use crate::evolved::hot_reload;
+    let repo_root = default_repo_root();
+    println!("hot-reload check: rebuilding committed tree (release) — no re-exec…");
+    events.append(
+        None,
+        None,
+        "hot_reload.check.started",
+        "verifying the committed tree builds release-clean before any hot-reload",
+        serde_json::json!({
+            "harness_commit": git_head(&repo_root).unwrap_or_else(|_| "unknown".to_string()),
+        }),
+    )?;
+    match hot_reload::rebuild_release(&repo_root).await {
+        Ok(bin) => {
+            println!("hot-reload check: OK — release binary built at {}", bin.display());
+            println!("  the committed tree is safe to hot-reload (re-exec gated separately).");
+            events.append(
+                None,
+                None,
+                "hot_reload.check.passed",
+                "committed tree builds release-clean; safe to hot-reload",
+                serde_json::json!({ "binary": bin.display().to_string() }),
+            )?;
+            Ok(())
+        }
+        Err(err) => {
+            events.append(
+                None,
+                None,
+                "hot_reload.check.failed",
+                "committed tree does NOT build release-clean; hot-reload would be refused",
+                serde_json::json!({ "error": err.to_string() }),
+            )?;
+            Err(err)
+        }
+    }
+}
+
+/// Close the evolve→apply→measure loop with no operator restart: rebuild the release binary
+/// from the (already-committed) source and re-exec into it. Safety is structural — we only
+/// re-exec after a clean `cargo build --release`, and a generation cap bounds reloads.
+#[cfg(unix)]
+async fn run_self_rebuild_reexec(events: Arc<EventStore>) -> Result<()> {
+    use crate::evolved::hot_reload::{self, ReloadDecision, DEFAULT_MAX_GENERATIONS};
+    let repo_root = default_repo_root();
+    let generation = hot_reload::current_generation();
+    println!(
+        "hot-reload: rebuilding release binary at generation {generation} (no operator restart)…"
+    );
+    events.append(
+        None,
+        None,
+        "hot_reload.started",
+        "rebuilding release binary to apply a committed self-change without a restart",
+        serde_json::json!({
+            "generation": generation,
+            "max_generations": DEFAULT_MAX_GENERATIONS,
+            "harness_commit": git_head(&repo_root).unwrap_or_else(|_| "unknown".to_string()),
+        }),
+    )?;
+
+    // On a successful re-exec this call never returns (the process image is replaced by the
+    // freshly built binary running `--self-reload-probe`); we only fall through on a
+    // deliberate Stay decision (build failed / generation cap) or an exec error.
+    let decision = hot_reload::reload_after_commit(
+        &repo_root,
+        &["--self-reload-probe".to_string()],
+        DEFAULT_MAX_GENERATIONS,
+    )
+    .await?;
+
+    match decision {
+        ReloadDecision::StayBuildFailed => {
+            events.append(
+                None,
+                None,
+                "hot_reload.skipped",
+                "rebuild failed — kept the current binary, loop continues",
+                serde_json::json!({ "generation": generation, "reason": "build_failed" }),
+            )?;
+            anyhow::bail!("hot-reload: cargo build --release failed; kept the running binary");
+        }
+        ReloadDecision::StayGenerationCap { generation } => {
+            println!("hot-reload: generation cap reached ({generation}); not re-exec'ing.");
+            events.append(
+                None,
+                None,
+                "hot_reload.capped",
+                "generation cap reached — stopping auto-reload for this lineage",
+                serde_json::json!({ "generation": generation, "reason": "generation_cap" }),
+            )?;
+            Ok(())
+        }
+        ReloadDecision::Reexec { .. } => {
+            // Reached only if exec() itself failed (reload_after_commit would otherwise not return).
+            anyhow::bail!("hot-reload: re-exec into the rebuilt binary did not take effect");
+        }
+    }
+}
+
+#[cfg(not(unix))]
+async fn run_self_rebuild_reexec(_events: Arc<EventStore>) -> Result<()> {
+    anyhow::bail!("hot-reload (self-rebuild + re-exec) is only supported on Unix");
 }
 
 async fn run_patch_apply_commit_live(events: Arc<EventStore>, patch_path: PathBuf) -> Result<()> {
@@ -6751,9 +7052,23 @@ fn persist_coding_smoke_artifacts(
     task_id: uuid::Uuid,
     artifacts: &[String],
 ) -> Result<Vec<String>> {
+    // Default base "" makes `base.join("artifacts")` == "artifacts" — i.e. cwd-relative, exactly
+    // as before. Tests pass an explicit base instead of mutating the process-global cwd (which
+    // races with parallel tests).
+    persist_coding_smoke_artifacts_in(Path::new(""), workspace, task_id, artifacts)
+}
+
+fn persist_coding_smoke_artifacts_in(
+    base: &Path,
+    workspace: &Path,
+    task_id: uuid::Uuid,
+    artifacts: &[String],
+) -> Result<Vec<String>> {
     let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let task_short = short_fragment(&task_id.to_string()).to_string();
-    let dest_dir = PathBuf::from("artifacts")
+    // The returned/recorded path stays relative ("artifacts/coding-smoke/..."); `base` only
+    // decides where the bytes physically land (cwd in production, a temp dir under test).
+    let rel_dest_dir = PathBuf::from("artifacts")
         .join("coding-smoke")
         .join(date)
         .join(task_short)
@@ -6766,7 +7081,8 @@ fn persist_coding_smoke_artifacts(
             continue;
         }
         let relative = source.strip_prefix(workspace).unwrap_or(&source);
-        let destination = dest_dir.join(relative);
+        let rel_destination = rel_dest_dir.join(relative);
+        let destination = base.join(&rel_destination);
         if let Some(parent) = destination.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -6777,7 +7093,7 @@ fn persist_coding_smoke_artifacts(
                 destination.display()
             )
         })?;
-        durable.push(destination.to_string_lossy().to_string());
+        durable.push(rel_destination.to_string_lossy().to_string());
     }
     Ok(durable)
 }
@@ -12495,7 +12811,11 @@ fn render_work_status_json(
     let latest_evolution_artifact =
         latest_evolution_artifact_status(&repo_root, &recent_evolution_events);
 
-    Ok(format_work_status_json(
+    // Item #5: roll recent runs into an autonomy-health verdict + alerts, surfaced in status.
+    let recent_runs = WorkLoopRunStore::new(Arc::clone(&memory.db)).recent(20)?;
+    let health = memd::autonomy_health::summarize_autonomy_health(&recent_runs);
+
+    let mut value = format_work_status_json(
         &repo_root,
         &runtime_line,
         &safety_line,
@@ -12509,7 +12829,14 @@ fn render_work_status_json(
         latest_gate.as_ref(),
         &recent_gates,
         &recent_queue,
-    ))
+    );
+    if let serde_json::Value::Object(map) = &mut value {
+        map.insert(
+            "autonomy_health".to_string(),
+            serde_json::to_value(&health).unwrap_or(serde_json::Value::Null),
+        );
+    }
+    Ok(value)
 }
 
 fn render_work_cockpit(
@@ -12773,6 +13100,12 @@ struct EvolutionArtifactStatus {
     empirical_gate: Option<evolved::loop_runner::EmpiricalVerificationEvidence>,
     empirical_gate_summary: Option<String>,
     diff_bytes: Option<usize>,
+    /// The commit an accepted self-change landed as (from VerificationOutcome::applied_commit).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    applied_commit: Option<String>,
+    /// Rollback monitoring: does that accepted commit still hold against HEAD (held/reverted/missing)?
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rollback: Option<evolved::rollback::RollbackVerdict>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -12784,6 +13117,12 @@ struct StoredEvolutionArtifactStatus {
     analysis: Option<String>,
     verification: Option<evolved::loop_runner::VerificationOutcome>,
     diff_bytes: Option<usize>,
+    /// Accepted operator-commit / patch-verification artifacts store the landed commit at the
+    /// top level (with `applied: true`), not under `verification.applied_commit`.
+    #[serde(default)]
+    commit: Option<String>,
+    #[serde(default)]
+    applied: Option<bool>,
 }
 
 fn empirical_gate_summary(
@@ -12826,6 +13165,22 @@ fn evolution_artifact_status_from_event(
         if let Ok(stored) = serde_json::from_str::<StoredEvolutionArtifactStatus>(&raw) {
             let verification = stored.verification.clone();
             let evidence = verification.as_ref().and_then(|value| value.evidence.clone());
+            // Rollback monitoring: if this artifact recorded an accepted applied_commit, report
+            // whether that commit still holds against HEAD (held/reverted/missing).
+            let applied_commit = verification
+                .as_ref()
+                .and_then(|value| value.applied_commit.clone())
+                .or_else(|| {
+                    // Accepted operator-commit/patch artifacts: landed commit at top level.
+                    if stored.applied == Some(true) {
+                        stored.commit.clone()
+                    } else {
+                        None
+                    }
+                });
+            let rollback = applied_commit
+                .as_ref()
+                .map(|commit| evolved::rollback::applied_commit_verdict_blocking(repo_root, commit));
             let reason = verification
                 .as_ref()
                 .map(|value| value.reason.trim().to_string())
@@ -12849,6 +13204,8 @@ fn evolution_artifact_status_from_event(
                 empirical_gate_summary: evidence.as_ref().map(empirical_gate_summary),
                 empirical_gate: evidence,
                 diff_bytes: stored.diff_bytes,
+                applied_commit,
+                rollback,
             });
         }
     }
@@ -12870,6 +13227,8 @@ fn evolution_artifact_status_from_event(
         empirical_gate: None,
         empirical_gate_summary: None,
         diff_bytes: None,
+        applied_commit: None,
+        rollback: None,
     })
 }
 
@@ -14225,7 +14584,6 @@ mod tests {
 
     #[test]
     fn coding_smoke_artifacts_are_copied_into_repo_evidence() {
-        let original_cwd = std::env::current_dir().unwrap();
         let repo = std::env::temp_dir().join(format!("px-smoke-repo-{}", uuid::Uuid::new_v4()));
         let workspace =
             std::env::temp_dir().join(format!("px-smoke-workspace-{}", uuid::Uuid::new_v4()));
@@ -14244,10 +14602,12 @@ mod tests {
         std::fs::write(&command_artifact, "{}\n").unwrap();
         std::fs::write(&patch_artifact, "diff --git a/src/lib.rs b/src/lib.rs\n").unwrap();
         std::fs::create_dir_all(&repo).unwrap();
-        std::env::set_current_dir(&repo).unwrap();
 
+        // Use an explicit base dir instead of mutating the process-global cwd (which raced with
+        // parallel tests resolving cwd-relative paths — the source of the rare flake).
         let task_id = uuid::Uuid::new_v4();
-        let durable = persist_coding_smoke_artifacts(
+        let durable = persist_coding_smoke_artifacts_in(
+            &repo,
             &workspace,
             task_id,
             &[
@@ -14264,7 +14624,6 @@ mod tests {
         assert!(durable.iter().all(|path| !path.starts_with("/tmp/")));
         assert!(durable.iter().all(|path| repo.join(path).exists()));
 
-        std::env::set_current_dir(original_cwd).unwrap();
         let _ = std::fs::remove_dir_all(repo);
         let _ = std::fs::remove_dir_all(workspace);
     }
@@ -14678,8 +15037,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// Serializes tests that mutate the process-global PROFESSOR_X_CODING_SESSION_REPORT_DIR env
+    /// var so they cannot clobber each other's value when run in parallel.
+    static REPORT_DIR_ENV_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn persist_coding_session_terminal_report_replaces_pending_running_row() {
+        let _env_guard = REPORT_DIR_ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         let root =
             std::env::temp_dir().join(format!("px-session-terminal-{}", uuid::Uuid::new_v4()));
         let report_dir = root.join("reports");
@@ -14789,6 +15153,7 @@ mod tests {
 
     #[test]
     fn repair_stale_coding_sessions_reconciles_old_running_rows() {
+        let _env_guard = REPORT_DIR_ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         let root = std::env::temp_dir().join(format!("px-session-repair-{}", uuid::Uuid::new_v4()));
         let report_dir = root.join("reports");
         let data_dir = root.join("data");
@@ -16198,6 +16563,8 @@ mod tests {
             empirical_gate: None,
             empirical_gate_summary: None,
             diff_bytes: Some(707),
+            applied_commit: None,
+            rollback: None,
         };
         let queued = queue_item(
             "make Prof X work visible in the cockpit",
@@ -16337,6 +16704,80 @@ mod tests {
                 .unwrap()
                 .contains("cargo run -- --repair-coding-sessions 10")
         }));
+    }
+
+    #[test]
+    fn accepted_artifact_surfaces_applied_commit_and_rollback_verdict() {
+        let root = std::env::temp_dir().join(format!("px-rollback-status-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&root)
+                .output()
+                .unwrap()
+                .status
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "t@t"]);
+        git(&["config", "user.name", "t"]);
+        std::fs::write(root.join("seed.txt"), "x").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "accepted self-change"]);
+        let head = String::from_utf8_lossy(
+            &std::process::Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(&root)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .trim()
+        .to_string();
+
+        let artifact_dir = root.join("artifacts/evolution/accepted/2026-06-16");
+        std::fs::create_dir_all(&artifact_dir).unwrap();
+        let artifact_path = artifact_dir.join("operator-commit-000000.json");
+        std::fs::write(
+            &artifact_path,
+            serde_json::json!({
+                "generated_at": "2026-06-16T03:00:27Z",
+                "status": "Accepted",
+                "target_component": "SkillDefinition(\"X\")",
+                "accepted": true,
+                "applied": true,
+                "commit": head,
+                "reason": "sandbox verification passed and committed",
+                "diff_bytes": 452
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let event = memd::events::AgentEvent {
+            id: 91,
+            timestamp: chrono::Utc::now(),
+            session_id: None,
+            task_id: None,
+            event_type: "evolution.operator.committed".to_string(),
+            summary: "operator committed verified proposal".to_string(),
+            payload: serde_json::json!({
+                "artifact_path": "artifacts/evolution/accepted/2026-06-16/operator-commit-000000.json",
+            }),
+        };
+
+        let summary = latest_evolution_artifact_status(&root, std::slice::from_ref(&event)).unwrap();
+        assert_eq!(summary.applied_commit.as_deref(), Some(head.as_str()));
+        let rollback = summary.rollback.expect("accepted commit should carry a rollback verdict");
+        assert_eq!(
+            rollback.status,
+            evolved::rollback::RollbackStatus::Held,
+            "the commit is HEAD, so it must read as held: {rollback:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

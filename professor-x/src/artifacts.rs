@@ -259,6 +259,11 @@ impl ArtifactValidator {
             Some(path) => {
                 artifacts.push(path.to_string_lossy().to_string());
                 checks.push(check_path_root(kind, &path));
+                // Truth gates: the artifact must be produced by THIS run (fresh) and have
+                // real content (non-empty), or a stale/misplaced/placeholder file would
+                // silently credit a task that produced nothing.
+                checks.push(check_artifact_freshness(kind, &path, task.started_at));
+                checks.push(check_artifact_nonempty(kind, &path));
                 checks.extend(validate_required_fields(kind, &path));
             }
             None => {
@@ -488,6 +493,66 @@ fn check_path_root(kind: ArtifactKind, path: &Path) -> ArtifactCheck {
                 s
             ),
         )
+    }
+}
+
+/// Pure freshness decision: is `modified` recent enough to have been produced by a task that
+/// started at `started`? We allow a small skew because the task clock (Utc::now) and the
+/// filesystem mtime are independent sources. Factored out so it is unit-testable without
+/// touching the filesystem or manipulating mtimes.
+fn artifact_is_fresh(modified: DateTime<Utc>, started: DateTime<Utc>, skew_secs: i64) -> bool {
+    modified >= started - chrono::Duration::seconds(skew_secs)
+}
+
+/// Freshness gate: a real artifact is written *during or after* the task that claims it. A file
+/// whose mtime predates the task start was not produced by this run — it is stale or misplaced,
+/// and letting it pass would credit a task that produced nothing. When the task carries no start
+/// time we cannot anchor freshness, so we record an explicit (passing) "unanchored" note rather
+/// than fail back-compat tasks.
+fn check_artifact_freshness(
+    kind: ArtifactKind,
+    path: &Path,
+    started_at: Option<DateTime<Utc>>,
+) -> ArtifactCheck {
+    let name = format!("{}_freshness", kind.as_str());
+    let Some(started) = started_at else {
+        return ArtifactCheck::pass(name, "freshness unanchored: task has no start time");
+    };
+    let modified = match std::fs::metadata(path).and_then(|m| m.modified()) {
+        Ok(m) => DateTime::<Utc>::from(m),
+        Err(e) => return ArtifactCheck::fail(name, format!("cannot read artifact mtime: {e}")),
+    };
+    if artifact_is_fresh(modified, started, 5) {
+        ArtifactCheck::pass(
+            name,
+            format!(
+                "written {} (>= task start {})",
+                modified.to_rfc3339(),
+                started.to_rfc3339()
+            ),
+        )
+    } else {
+        ArtifactCheck::fail(
+            name,
+            format!(
+                "artifact mtime {} predates task start {} — not produced by this run (stale or misplaced)",
+                modified.to_rfc3339(),
+                started.to_rfc3339()
+            ),
+        )
+    }
+}
+
+/// Fake-output gate: a real artifact has content. A zero-length file is a placeholder, not a
+/// result, and must not pass the truth layer.
+fn check_artifact_nonempty(kind: ArtifactKind, path: &Path) -> ArtifactCheck {
+    let name = format!("{}_nonempty", kind.as_str());
+    match std::fs::metadata(path) {
+        Ok(meta) if meta.len() == 0 => {
+            ArtifactCheck::fail(name, "artifact file is empty (0 bytes)")
+        }
+        Ok(meta) => ArtifactCheck::pass(name, format!("artifact is {} bytes", meta.len())),
+        Err(e) => ArtifactCheck::fail(name, format!("cannot stat artifact: {e}")),
     }
 }
 
@@ -1055,6 +1120,49 @@ mod tests {
         .unwrap();
         let checks = validate_required_fields(ArtifactKind::HiroRun, &path);
         assert!(checks.iter().all(|c| c.passed), "checks: {:?}", checks);
+    }
+
+    #[test]
+    fn stale_artifact_fails_freshness_gate() {
+        // A file written before the task started was not produced by this run.
+        let started = Utc::now();
+        let modified = started - chrono::Duration::seconds(120);
+        assert!(
+            !artifact_is_fresh(modified, started, 5),
+            "an artifact 2 min older than task start must fail freshness"
+        );
+    }
+
+    #[test]
+    fn fresh_artifact_passes_freshness_gate() {
+        let started = Utc::now();
+        // Written just after start, and within the allowed skew when slightly before.
+        assert!(artifact_is_fresh(started + chrono::Duration::seconds(3), started, 5));
+        assert!(artifact_is_fresh(started - chrono::Duration::seconds(4), started, 5));
+        assert!(!artifact_is_fresh(started - chrono::Duration::seconds(6), started, 5));
+    }
+
+    #[test]
+    fn freshness_unanchored_when_task_has_no_start_time() {
+        let dir = tmp_dir("fresh-unanchored");
+        let path = dir.join("e.md");
+        fs::write(&path, "content").unwrap();
+        let check = check_artifact_freshness(ArtifactKind::ExperimentResult, &path, None);
+        assert!(check.passed, "no start time => unanchored pass, got {check:?}");
+        assert!(check.detail.contains("unanchored"));
+    }
+
+    #[test]
+    fn empty_artifact_fails_nonempty_gate() {
+        let dir = tmp_dir("empty");
+        let path = dir.join("run.json");
+        fs::write(&path, "").unwrap();
+        let check = check_artifact_nonempty(ArtifactKind::HiroRun, &path);
+        assert!(!check.passed, "0-byte artifact must fail, got {check:?}");
+
+        let path2 = dir.join("real.json");
+        fs::write(&path2, "{\"x\":1}").unwrap();
+        assert!(check_artifact_nonempty(ArtifactKind::HiroRun, &path2).passed);
     }
 
     #[test]
