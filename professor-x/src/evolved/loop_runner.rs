@@ -14,26 +14,50 @@ use anyhow::Result;
 use chrono::Utc;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::{info, warn};
 
 use crate::evolved::analyzer::Analyzer;
 use crate::evolved::cognition_base::CognitionStore;
-use crate::memd::self_authored_tests::SelfAuthoredTest;
-use crate::memd::metacognitive::{MetacognitiveEntry, MetacognitiveStore};
 use crate::evolved::proposer::{
     ChangeManifest, EvolutionNode, HarnessComponent, NodeDatabase, VerificationStatus,
 };
 use crate::evolved::tracker::OutcomeTracker;
+use crate::failure::{extract_failure_class, FailureClass};
 use crate::memd::events::EventStore;
 use crate::memd::free_energy::{compute_fed, FedRecord};
+use crate::memd::metacognitive::{MetacognitiveEntry, MetacognitiveStore};
+use crate::memd::self_authored_tests::SelfAuthoredTest;
 use crate::memd::MemoryManager;
 use crate::ollama::{ChatMessage, ModelOptions, OllamaClient};
+
+const REPO_FIX_GATE_TASK_LIMIT: usize = 4;
+const DEFAULT_REPO_FIX_GATE_TIMEOUT_SECS: u64 = 600;
+const EMPIRICAL_SCORE_TOLERANCE: f32 = 0.001;
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EmpiricalVerificationEvidence {
+    pub benchmark: String,
+    pub task_count: usize,
+    pub baseline_score: f32,
+    pub candidate_score: f32,
+    pub score_delta: f32,
+    pub passed: bool,
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct VerificationOutcome {
     pub accepted: bool,
     pub reason: String,
     pub checks: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<EmpiricalVerificationEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_commit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_commit: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -83,8 +107,110 @@ fn parse_dhe_from_patterns(patterns: &[String]) -> (u8, u8) {
                 return (layer, lever);
             }
         }
+        if let Some(class) = extract_failure_class(p) {
+            return failure_class_to_dhe(class);
+        }
     }
     (0, 3)
+}
+
+fn failure_class_to_dhe(class: FailureClass) -> (u8, u8) {
+    match class {
+        FailureClass::Retrieval => (1, 2),
+        FailureClass::Context => (2, 2),
+        FailureClass::ToolSelection | FailureClass::PolicyDenied => (3, 3),
+        FailureClass::ToolExecution => (4, 3),
+        FailureClass::Reasoning
+        | FailureClass::MaxSteps
+        | FailureClass::AnswerMissing
+        | FailureClass::ArtifactValidation
+        | FailureClass::Verification => (5, 1),
+        FailureClass::Cancelled | FailureClass::Unknown => (0, 3),
+    }
+}
+
+fn is_ephemeral_autonomy_skill_name(name: &str) -> bool {
+    [
+        "px-operator-goal-",
+        "px-operator-autocommit-",
+        "px-autonomous-patch-",
+        "sandbox_smoke_",
+    ]
+    .iter()
+    .any(|prefix| name.starts_with(prefix))
+}
+
+fn is_reusable_autonomy_target(component: &HarnessComponent) -> bool {
+    match component {
+        HarnessComponent::SkillDefinition(name) => !is_ephemeral_autonomy_skill_name(name),
+        _ => true,
+    }
+}
+
+fn diagnostic_component_hints(layer: u8) -> Vec<&'static str> {
+    match layer {
+        1 => vec![
+            "Target COMPONENT: SystemPrompt. Add concrete guidance for when the agent must recall prior work or consult memory before acting.",
+            "Target COMPONENT: HarnessConfig. Adjust context allocation or retrieval-related config so relevant memory is more likely to surface early.",
+        ],
+        2 => vec![
+            "Target COMPONENT: HarnessConfig. Adjust context budget, memory mix, or step budget so the agent can keep the right evidence in view and avoid context overload.",
+        ],
+        3 => vec![
+            "Target COMPONENT: SkillDefinition. Define a reusable skill that tells the agent which tool to choose, what preconditions to verify, and how to recover from a wrong initial tool choice. Do not emit an operator/autocommit provenance skill.",
+        ],
+        4 => vec![
+            "Target COMPONENT: SkillDefinition. Define a reusable skill for tool failure handling: inspect the observation, validate outputs, choose one bounded retry, and recover safely. Do not emit an operator/autocommit provenance skill.",
+        ],
+        5 => vec![
+            "Target COMPONENT: SystemPrompt. Add concise global guidance for final-answer discipline, bounded reasoning, and using observations to satisfy the task contract before finishing.",
+        ],
+        _ => vec![
+            "Target COMPONENT: SystemPrompt. Improve the system prompt that guides every task — add concrete guidance that addresses the failure patterns above.",
+            "Target COMPONENT: SkillDefinition. Define a NEW reusable skill (a markdown SKILL file) that captures the correct procedure for the failing task class.",
+            "Target COMPONENT: HarnessConfig. Adjust a config setting (e.g. context budget, max steps) that would reduce the failure patterns above.",
+        ],
+    }
+}
+
+fn component_matches_diagnostic_layer(component: &HarnessComponent, layer: u8) -> bool {
+    match layer {
+        0 => true,
+        1 => matches!(
+            component,
+            HarnessComponent::SystemPrompt | HarnessComponent::HarnessConfig
+        ),
+        2 => matches!(component, HarnessComponent::HarnessConfig),
+        3 | 4 => matches!(component, HarnessComponent::SkillDefinition(_)),
+        5 => matches!(component, HarnessComponent::SystemPrompt),
+        _ => true,
+    }
+}
+
+fn expected_component_summary(layer: u8) -> &'static str {
+    match layer {
+        1 => "SystemPrompt or HarnessConfig",
+        2 => "HarnessConfig",
+        3 | 4 => "SkillDefinition",
+        5 => "SystemPrompt",
+        _ => "an applyable component",
+    }
+}
+
+fn empirical_repo_fix_evidence(
+    task_count: usize,
+    baseline_score: f32,
+    candidate_score: f32,
+) -> EmpiricalVerificationEvidence {
+    let score_delta = candidate_score - baseline_score;
+    EmpiricalVerificationEvidence {
+        benchmark: "repo_fix_subset".to_string(),
+        task_count,
+        baseline_score,
+        candidate_score,
+        score_delta,
+        passed: score_delta >= -EMPIRICAL_SCORE_TOLERANCE,
+    }
 }
 
 pub async fn verify_node_in_sandbox(
@@ -101,14 +227,20 @@ pub async fn verify_node_in_sandbox(
                     reward_scan.reason, reward_scan.confidence
                 ),
                 checks: vec!["reward_hacking_scan".to_string()],
+                evidence: None,
+                sandbox_branch: None,
+                sandbox_commit: None,
+                applied_commit: None,
             },
             diff: String::new(),
         });
     }
 
+    let sandbox_branch = format!("px-evolve-verify-{}", uuid::Uuid::new_v4());
     let worktree = std::env::temp_dir().join(format!("px-evolve-{}", uuid::Uuid::new_v4()));
     let add = tokio::process::Command::new("git")
-        .args(["worktree", "add", "--detach"])
+        .args(["worktree", "add", "-b"])
+        .arg(&sandbox_branch)
         .arg(&worktree)
         .arg("HEAD")
         .current_dir(repo_root)
@@ -121,13 +253,22 @@ pub async fn verify_node_in_sandbox(
         );
     }
 
-    let result = verify_node_inside_worktree(&worktree, node).await;
+    let result = verify_node_inside_worktree(&worktree, &sandbox_branch, node).await;
     let cleanup = cleanup_worktree(repo_root, &worktree).await;
     if let Err(e) = cleanup {
         warn!(
             "evolved: failed to clean sandbox worktree {}: {e}",
             worktree.display()
         );
+    }
+    let keep_branch = matches!(&result, Ok(verification) if verification.outcome.accepted);
+    if !keep_branch {
+        if let Err(err) = cleanup_sandbox_branch_at(repo_root, Some(&sandbox_branch)).await {
+            warn!(
+                "evolved: failed to clean sandbox branch {}: {err}",
+                sandbox_branch
+            );
+        }
     }
     result
 }
@@ -143,6 +284,10 @@ pub async fn verify_diff_in_sandbox(repo_root: &Path, diff: &str) -> Result<Sand
                     reward_scan.reason, reward_scan.confidence
                 ),
                 checks: vec!["reward_hacking_scan".to_string()],
+                evidence: None,
+                sandbox_branch: None,
+                sandbox_commit: None,
+                applied_commit: None,
             },
             diff: String::new(),
         });
@@ -176,6 +321,7 @@ pub async fn verify_diff_in_sandbox(repo_root: &Path, diff: &str) -> Result<Sand
 
 async fn verify_node_inside_worktree(
     worktree: &Path,
+    sandbox_branch: &str,
     node: &EvolutionNode,
 ) -> Result<SandboxVerification> {
     let mut checks = vec![
@@ -192,6 +338,10 @@ async fn verify_node_inside_worktree(
                     node.target_component
                 ),
                 checks,
+                evidence: None,
+                sandbox_branch: None,
+                sandbox_commit: None,
+                applied_commit: None,
             },
             diff: String::new(),
         });
@@ -204,6 +354,10 @@ async fn verify_node_inside_worktree(
                 accepted: false,
                 reason: "proposal has no known changed paths".to_string(),
                 checks,
+                evidence: None,
+                sandbox_branch: None,
+                sandbox_commit: None,
+                applied_commit: None,
             },
             diff: String::new(),
         });
@@ -217,6 +371,10 @@ async fn verify_node_inside_worktree(
                 accepted: false,
                 reason: "verification rejected proposal: no material file diff".to_string(),
                 checks,
+                evidence: None,
+                sandbox_branch: None,
+                sandbox_commit: None,
+                applied_commit: None,
             },
             diff: String::new(),
         });
@@ -230,17 +388,53 @@ async fn verify_node_inside_worktree(
                 accepted: false,
                 reason: compile.reason,
                 checks,
+                evidence: None,
+                sandbox_branch: None,
+                sandbox_commit: None,
+                applied_commit: None,
+            },
+            diff: String::new(),
+        });
+    }
+
+    checks.push("cargo_test".to_string());
+    let regressions = run_regression_tests_at(worktree).await?;
+    if !regressions.accepted {
+        return Ok(SandboxVerification {
+            outcome: VerificationOutcome {
+                accepted: false,
+                reason: regressions.reason,
+                checks,
+                evidence: None,
+                sandbox_branch: None,
+                sandbox_commit: None,
+                applied_commit: None,
             },
             diff: String::new(),
         });
     }
 
     let diff = collect_diff_at(worktree, &paths).await?;
+    let sandbox_commit = create_sandbox_commit_at(
+        worktree,
+        &paths,
+        &format!(
+            "sandbox verify: {:?} - {}",
+            node.target_component,
+            node.motivation.chars().take(60).collect::<String>()
+        ),
+    )
+    .await?;
+    checks.push("sandbox_commit".to_string());
     Ok(SandboxVerification {
         outcome: VerificationOutcome {
             accepted: true,
             reason: "sandbox verification passed".to_string(),
             checks,
+            evidence: None,
+            sandbox_branch: Some(sandbox_branch.to_string()),
+            sandbox_commit: Some(sandbox_commit),
+            applied_commit: None,
         },
         diff,
     })
@@ -257,6 +451,10 @@ async fn verify_diff_inside_worktree(worktree: &Path, diff: &str) -> Result<Sand
                 accepted: false,
                 reason: "verification rejected patch: empty diff".to_string(),
                 checks,
+                evidence: None,
+                sandbox_branch: None,
+                sandbox_commit: None,
+                applied_commit: None,
             },
             diff: String::new(),
         });
@@ -270,6 +468,10 @@ async fn verify_diff_inside_worktree(worktree: &Path, diff: &str) -> Result<Sand
                 accepted: false,
                 reason: "verification rejected patch: no material file diff".to_string(),
                 checks,
+                evidence: None,
+                sandbox_branch: None,
+                sandbox_commit: None,
+                applied_commit: None,
             },
             diff: String::new(),
         });
@@ -283,6 +485,27 @@ async fn verify_diff_inside_worktree(worktree: &Path, diff: &str) -> Result<Sand
                 accepted: false,
                 reason: compile.reason,
                 checks,
+                evidence: None,
+                sandbox_branch: None,
+                sandbox_commit: None,
+                applied_commit: None,
+            },
+            diff: String::new(),
+        });
+    }
+
+    checks.push("cargo_test".to_string());
+    let regressions = run_regression_tests_at(worktree).await?;
+    if !regressions.accepted {
+        return Ok(SandboxVerification {
+            outcome: VerificationOutcome {
+                accepted: false,
+                reason: regressions.reason,
+                checks,
+                evidence: None,
+                sandbox_branch: None,
+                sandbox_commit: None,
+                applied_commit: None,
             },
             diff: String::new(),
         });
@@ -294,6 +517,10 @@ async fn verify_diff_inside_worktree(worktree: &Path, diff: &str) -> Result<Sand
             accepted: true,
             reason: "sandbox patch verification passed".to_string(),
             checks,
+            evidence: None,
+            sandbox_branch: None,
+            sandbox_commit: None,
+            applied_commit: None,
         },
         diff: verified_diff,
     })
@@ -350,8 +577,8 @@ fn apply_node_change_at(root: &Path, node: &EvolutionNode) -> Result<bool> {
             Ok(true)
         }
         HarnessComponent::SkillDefinition(name) => {
-            let path = component_relative_path(root, node)
-                .unwrap_or_else(|| skill_definition_path(name));
+            let path =
+                component_relative_path(root, node).unwrap_or_else(|| skill_definition_path(name));
             let content = sanitize_generated_content(&node.diff);
             // Existing skills may be revised but not gutted; new skills are free.
             preservation_guard(root, &path, &content, 0.4, &[])?;
@@ -523,6 +750,50 @@ async fn collect_diff_at(worktree: &Path, paths: &[PathBuf]) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+async fn create_sandbox_commit_at(
+    worktree: &Path,
+    paths: &[PathBuf],
+    message: &str,
+) -> Result<String> {
+    let mut add = tokio::process::Command::new("git");
+    add.arg("add").arg("--").current_dir(worktree);
+    for path in paths {
+        add.arg(path);
+    }
+    let add = add.output().await?;
+    if !add.status.success() {
+        anyhow::bail!(
+            "sandbox git add failed: {}",
+            String::from_utf8_lossy(&add.stderr)
+        );
+    }
+
+    let commit = tokio::process::Command::new("git")
+        .args(["commit", "-m", message])
+        .current_dir(worktree)
+        .output()
+        .await?;
+    if !commit.status.success() {
+        anyhow::bail!(
+            "sandbox git commit failed: {}",
+            String::from_utf8_lossy(&commit.stderr)
+        );
+    }
+
+    let head = tokio::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(worktree)
+        .output()
+        .await?;
+    if !head.status.success() {
+        anyhow::bail!(
+            "sandbox git rev-parse failed: {}",
+            String::from_utf8_lossy(&head.stderr)
+        );
+    }
+    Ok(String::from_utf8_lossy(&head.stdout).trim().to_string())
+}
+
 async fn apply_patch_to_index_at(worktree: &Path, diff: &str) -> Result<()> {
     let patch_path =
         std::env::temp_dir().join(format!("px-patch-verify-{}.diff", uuid::Uuid::new_v4()));
@@ -591,6 +862,10 @@ async fn run_compile_check_at(root: &Path) -> Result<VerificationOutcome> {
             accepted: true,
             reason: "no Cargo.toml found; compile check skipped".to_string(),
             checks: vec!["cargo_check_skipped".to_string()],
+            evidence: None,
+            sandbox_branch: None,
+            sandbox_commit: None,
+            applied_commit: None,
         });
     };
 
@@ -604,6 +879,10 @@ async fn run_compile_check_at(root: &Path) -> Result<VerificationOutcome> {
             accepted: true,
             reason: "cargo check passed".to_string(),
             checks: vec!["cargo_check".to_string()],
+            evidence: None,
+            sandbox_branch: None,
+            sandbox_commit: None,
+            applied_commit: None,
         });
     }
 
@@ -615,7 +894,252 @@ async fn run_compile_check_at(root: &Path) -> Result<VerificationOutcome> {
             stderr.lines().take(8).collect::<Vec<_>>().join(" ")
         ),
         checks: vec!["cargo_check".to_string()],
+        evidence: None,
+        sandbox_branch: None,
+        sandbox_commit: None,
+        applied_commit: None,
     })
+}
+
+async fn run_regression_tests_at(root: &Path) -> Result<VerificationOutcome> {
+    let current_dir = if root.join("professor-x/Cargo.toml").exists() {
+        root.join("professor-x")
+    } else if root.join("Cargo.toml").exists() {
+        root.to_path_buf()
+    } else {
+        return Ok(VerificationOutcome {
+            accepted: true,
+            reason: "no Cargo.toml found; regression tests skipped".to_string(),
+            checks: vec!["cargo_test_skipped".to_string()],
+            evidence: None,
+            sandbox_branch: None,
+            sandbox_commit: None,
+            applied_commit: None,
+        });
+    };
+
+    let output = tokio::process::Command::new("cargo")
+        .args(["test", "--quiet", "--bins"])
+        .current_dir(current_dir)
+        .output()
+        .await?;
+    if output.status.success() {
+        return Ok(VerificationOutcome {
+            accepted: true,
+            reason: "cargo test --bins passed".to_string(),
+            checks: vec!["cargo_test".to_string()],
+            evidence: None,
+            sandbox_branch: None,
+            sandbox_commit: None,
+            applied_commit: None,
+        });
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let detail = [stdout.as_ref(), stderr.as_ref()]
+        .into_iter()
+        .flat_map(|text| text.lines())
+        .filter(|line| !line.trim().is_empty())
+        .take(8)
+        .collect::<Vec<_>>()
+        .join(" ");
+    Ok(VerificationOutcome {
+        accepted: false,
+        reason: format!("cargo test --bins failed: {detail}"),
+        checks: vec!["cargo_test".to_string()],
+        evidence: None,
+        sandbox_branch: None,
+        sandbox_commit: None,
+        applied_commit: None,
+    })
+}
+
+fn repo_fix_gate_crate_dir(root: &Path) -> PathBuf {
+    if root.join("professor-x/Cargo.toml").exists() {
+        root.join("professor-x")
+    } else {
+        root.to_path_buf()
+    }
+}
+
+fn subset_repo_fix_manifest(json: &str, limit: usize) -> Result<String> {
+    let mut manifest: serde_json::Value = serde_json::from_str(json)?;
+    let tasks = manifest
+        .get_mut("tasks")
+        .and_then(|tasks| tasks.as_array_mut())
+        .ok_or_else(|| anyhow::anyhow!("repo-fix manifest missing tasks array"))?;
+    tasks.truncate(limit.max(1));
+    Ok(serde_json::to_string_pretty(&manifest)?)
+}
+
+fn parse_repo_fix_pass_at_1(output: &str) -> Option<f32> {
+    output.lines().rev().find_map(|line| {
+        line.strip_prefix("pass@1 = ")
+            .and_then(|rest| rest.split_whitespace().next())
+            .and_then(|value| value.parse::<f32>().ok())
+    })
+}
+
+fn repo_fix_gate_timeout_from_env(value: Option<&str>) -> Duration {
+    value
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .map(Duration::from_secs)
+        .unwrap_or_else(|| Duration::from_secs(DEFAULT_REPO_FIX_GATE_TIMEOUT_SECS))
+}
+
+fn repo_fix_gate_timeout() -> Duration {
+    repo_fix_gate_timeout_from_env(
+        std::env::var("PROFESSOR_X_REPO_FIX_GATE_TIMEOUT_SECS")
+            .ok()
+            .as_deref(),
+    )
+}
+
+async fn run_repo_fix_gate_binary(
+    binary: &Path,
+    current_dir: &Path,
+    manifest_path: &Path,
+    model: &str,
+) -> Result<f32> {
+    let temp_root = std::env::temp_dir().join(format!("px-repofix-gate-{}", uuid::Uuid::new_v4()));
+    let data_dir = temp_root.join("data");
+    let events_dir = temp_root.join("events");
+    let transcripts_dir = temp_root.join("transcripts");
+    let artifacts_dir = temp_root.join("artifacts");
+    std::fs::create_dir_all(&data_dir)?;
+    std::fs::create_dir_all(&events_dir)?;
+    std::fs::create_dir_all(&transcripts_dir)?;
+    std::fs::create_dir_all(&artifacts_dir)?;
+    let timeout = repo_fix_gate_timeout();
+    let mut command = tokio::process::Command::new(binary);
+    command
+        .args(["--repo-fix-bench", "--model", model])
+        .current_dir(current_dir)
+        .env("PROFESSOR_X_DATA_DIR", &data_dir)
+        .env("PROFESSOR_X_EVENT_LOG_DIR", &events_dir)
+        .env("PROFESSOR_X_TRANSCRIPT_DIR", &transcripts_dir)
+        .env("PROFESSOR_X_ARTIFACT_REPORT_DIR", &artifacts_dir)
+        .env("REPO_FIX_TASKS", manifest_path)
+        .kill_on_drop(true);
+
+    let output = match tokio::time::timeout(timeout, command.output()).await {
+        Ok(output) => output?,
+        Err(_) => {
+            let _ = std::fs::remove_dir_all(&temp_root);
+            anyhow::bail!("repo-fix bench timed out after {}s", timeout.as_secs());
+        }
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let score = parse_repo_fix_pass_at_1(&stdout).or_else(|| parse_repo_fix_pass_at_1(&stderr));
+    let _ = std::fs::remove_dir_all(&temp_root);
+
+    if let Some(score) = score {
+        return Ok(score);
+    }
+
+    let detail = [stdout.as_ref(), stderr.as_ref()]
+        .into_iter()
+        .flat_map(|text| text.lines())
+        .filter(|line| !line.trim().is_empty())
+        .take(10)
+        .collect::<Vec<_>>()
+        .join(" ");
+    anyhow::bail!("repo-fix bench did not report pass@1: {detail}");
+}
+
+async fn measure_repo_fix_empirical_gate(
+    repo_root: &Path,
+    diff: &str,
+    model: &str,
+) -> Result<EmpiricalVerificationEvidence> {
+    let crate_dir = repo_fix_gate_crate_dir(repo_root);
+    let manifest_json =
+        std::fs::read_to_string(crate_dir.join("scripts/benchmarks/repo_fix/tasks.json"))?;
+    let limited_manifest = subset_repo_fix_manifest(&manifest_json, REPO_FIX_GATE_TASK_LIMIT)?;
+    let manifest_path =
+        std::env::temp_dir().join(format!("px-repofix-subset-{}.json", uuid::Uuid::new_v4()));
+    std::fs::write(&manifest_path, limited_manifest)?;
+
+    let baseline_binary = std::env::current_exe()?;
+    let baseline_score =
+        run_repo_fix_gate_binary(&baseline_binary, &crate_dir, &manifest_path, model).await?;
+
+    let worktree = std::env::temp_dir().join(format!("px-evolve-measure-{}", uuid::Uuid::new_v4()));
+    let add = tokio::process::Command::new("git")
+        .args(["worktree", "add", "--detach"])
+        .arg(&worktree)
+        .arg("HEAD")
+        .current_dir(repo_root)
+        .output()
+        .await?;
+    if !add.status.success() {
+        let _ = std::fs::remove_file(&manifest_path);
+        anyhow::bail!(
+            "git worktree add failed for empirical gate: {}",
+            String::from_utf8_lossy(&add.stderr)
+        );
+    }
+
+    let outcome = async {
+        let patch_path =
+            std::env::temp_dir().join(format!("px-empirical-verify-{}.diff", uuid::Uuid::new_v4()));
+        std::fs::write(&patch_path, diff)?;
+        let apply = tokio::process::Command::new("git")
+            .args(["apply", "--recount", "-C1"])
+            .arg(&patch_path)
+            .current_dir(&worktree)
+            .output()
+            .await?;
+        let _ = std::fs::remove_file(&patch_path);
+        if !apply.status.success() {
+            anyhow::bail!(
+                "empirical gate patch apply failed: {}",
+                String::from_utf8_lossy(&apply.stderr)
+            );
+        }
+
+        let candidate_crate_dir = repo_fix_gate_crate_dir(&worktree);
+        let build = tokio::process::Command::new("cargo")
+            .args(["build", "--bins", "--quiet"])
+            .current_dir(&candidate_crate_dir)
+            .output()
+            .await?;
+        if !build.status.success() {
+            anyhow::bail!(
+                "empirical gate cargo build failed: {}",
+                String::from_utf8_lossy(&build.stderr)
+            );
+        }
+
+        let candidate_binary = candidate_crate_dir.join("target/debug/professor-x");
+        let candidate_score = run_repo_fix_gate_binary(
+            &candidate_binary,
+            &candidate_crate_dir,
+            &manifest_path,
+            model,
+        )
+        .await?;
+        Ok::<EmpiricalVerificationEvidence, anyhow::Error>(empirical_repo_fix_evidence(
+            REPO_FIX_GATE_TASK_LIMIT,
+            baseline_score,
+            candidate_score,
+        ))
+    }
+    .await;
+
+    let cleanup = cleanup_worktree(repo_root, &worktree).await;
+    let _ = std::fs::remove_file(&manifest_path);
+    if let Err(err) = cleanup {
+        warn!(
+            "evolved: failed to clean empirical gate worktree {}: {err}",
+            worktree.display()
+        );
+    }
+    outcome
 }
 
 async fn apply_verified_diff(repo_root: &Path, diff: &str) -> Result<()> {
@@ -654,6 +1178,26 @@ async fn apply_verified_diff(repo_root: &Path, diff: &str) -> Result<()> {
         );
     }
     Ok(())
+}
+
+async fn cherry_pick_verified_commit(repo_root: &Path, commit: &str) -> Result<String> {
+    let output = tokio::process::Command::new("git")
+        .args(["cherry-pick", "-x", commit])
+        .current_dir(repo_root)
+        .output()
+        .await?;
+    if !output.status.success() {
+        let _ = tokio::process::Command::new("git")
+            .args(["cherry-pick", "--abort"])
+            .current_dir(repo_root)
+            .output()
+            .await;
+        anyhow::bail!(
+            "verified sandbox commit cherry-pick failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    git_head(repo_root).await
 }
 
 fn evolution_artifact_root(repo_root: &Path) -> PathBuf {
@@ -734,6 +1278,31 @@ async fn cleanup_worktree(repo_root: &Path, worktree: &Path) -> Result<()> {
     Ok(())
 }
 
+async fn cleanup_sandbox_branch_at(repo_root: &Path, branch: Option<&str>) -> Result<()> {
+    let Some(branch) = branch.filter(|branch| !branch.trim().is_empty()) else {
+        return Ok(());
+    };
+    let remove = tokio::process::Command::new("git")
+        .args(["branch", "-D", branch])
+        .current_dir(repo_root)
+        .output()
+        .await?;
+    if !remove.status.success() {
+        anyhow::bail!(
+            "git branch -D {} failed: {}",
+            branch,
+            String::from_utf8_lossy(&remove.stderr)
+        );
+    }
+    Ok(())
+}
+
+fn applied_commit_from_results(results: &serde_json::Value) -> Option<String> {
+    serde_json::from_value::<VerificationOutcome>(results.clone())
+        .ok()
+        .and_then(|outcome| outcome.applied_commit)
+}
+
 fn default_repo_root() -> PathBuf {
     let mut dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     loop {
@@ -766,9 +1335,7 @@ pub fn flush_fed_to_memory(
     if let Err(e) = memory.free_energy.append(&record) {
         warn!("evolved: FED flush failed: {e}");
     } else {
-        info!(
-            "evolved: FED flushed — round={round} n={n} mae={mae:.4}"
-        );
+        info!("evolved: FED flushed — round={round} n={n} mae={mae:.4}");
     }
 }
 
@@ -836,7 +1403,13 @@ impl EvolvedLoop {
         );
 
         // Sample a node via UCB1 (ASI-Evolve)
-        let candidates = self.node_db.sample_ucb1(3)?;
+        let candidates = self
+            .node_db
+            .sample_ucb1(12)?
+            .into_iter()
+            .filter(|node| is_reusable_autonomy_target(&node.target_component))
+            .take(3)
+            .collect::<Vec<_>>();
 
         // Generate 3 proposals, run Elo tournament, commit winner
         // (Co-Scientist pattern — arXiv:2502.18864)
@@ -850,9 +1423,12 @@ impl EvolvedLoop {
         let proposals: Vec<EvolutionNode> = proposals
             .into_iter()
             .filter(|n| is_autonomously_applyable(&n.target_component))
+            .filter(|n| is_reusable_autonomy_target(&n.target_component))
             .collect();
         if proposals.is_empty() {
-            info!("evolved: no applyable proposals (all targeted non-mutable components)");
+            info!(
+                "evolved: no applyable reusable proposals (all targeted non-mutable or synthetic components)"
+            );
             return Ok(false);
         }
         let mut node = if proposals.len() == 1 {
@@ -898,14 +1474,14 @@ impl EvolvedLoop {
         if node.status == crate::evolved::proposer::NodeStatus::Accepted {
             let current_round = tracker.len() as u32;
             let (layer, _lever) = parse_dhe_from_patterns(&failure_patterns);
-            let primary_pattern = failure_patterns.first().map(|s| s.as_str()).unwrap_or("unknown");
+            let primary_pattern = failure_patterns
+                .first()
+                .map(|s| s.as_str())
+                .unwrap_or("unknown");
             // We re-derive the test from the node's diff text (contains the full Researcher output)
-            if let Some(test) = Self::parse_self_authored_test(
-                &node.diff,
-                current_round,
-                layer,
-                primary_pattern,
-            ) {
+            if let Some(test) =
+                Self::parse_self_authored_test(&node.diff, current_round, layer, primary_pattern)
+            {
                 match self.memory.self_authored_tests.insert(&test) {
                     Ok(id) => {
                         info!(
@@ -945,7 +1521,10 @@ impl EvolvedLoop {
                 let accepted_artifact = self.write_node_artifact(&node, "accepted")?;
                 self.emit_event(
                     "evolution.committed",
-                    format!("committed accepted evolution proposal {}", commit.as_deref().unwrap_or("without-new-commit")),
+                    format!(
+                        "committed accepted evolution proposal {}",
+                        commit.as_deref().unwrap_or("without-new-commit")
+                    ),
                     serde_json::json!({
                         "target_component": format!("{:?}", node.target_component),
                         "commit": commit,
@@ -1040,24 +1619,11 @@ impl EvolvedLoop {
         candidates: &[EvolutionNode],
         success_rate: f32,
     ) -> Result<Vec<EvolutionNode>> {
-        const N: usize = 3;
-        let mut proposals = Vec::with_capacity(N);
+        let (layer, _lever) = parse_dhe_from_patterns(failure_patterns);
+        let hints = diagnostic_component_hints(layer);
+        let mut proposals = Vec::with_capacity(hints.len());
 
-        for i in 0..N {
-            // Steer each proposal toward a DIFFERENT applyable component. Without
-            // this the Researcher fixates on ToolDescription (not applyable), and
-            // every proposal gets filtered, yielding no change. Assigning a
-            // distinct applyable component per proposal guarantees the tournament
-            // always has real, applyable candidates.
-            let diversity_hint = match i {
-                0 => "Target COMPONENT: SystemPrompt. Improve the system prompt that guides every task — \
-                      add concrete guidance that addresses the failure patterns above.",
-                1 => "Target COMPONENT: SkillDefinition. Define a NEW reusable skill (a markdown SKILL file) \
-                      that captures the correct procedure for the failing task class.",
-                2 => "Target COMPONENT: HarnessConfig. Adjust a config setting (e.g. context budget, max steps) \
-                      that would reduce the failure patterns above.",
-                _ => "",
-            };
+        for (i, diversity_hint) in hints.iter().enumerate() {
             match self
                 .researcher_propose_with_hint(
                     failure_patterns,
@@ -1069,15 +1635,20 @@ impl EvolvedLoop {
             {
                 Ok(Some(node)) => {
                     info!(
-                        "evolved: proposal {}/{N} — {:?}: {}",
+                        "evolved: proposal {}/{} — {:?}: {}",
                         i + 1,
+                        hints.len(),
                         node.target_component,
                         node.motivation.chars().take(60).collect::<String>()
                     );
                     proposals.push(node);
                 }
-                Ok(None) => info!("evolved: proposal {}/{N} — no actionable output", i + 1),
-                Err(e) => warn!("evolved: proposal {}/{N} failed: {e}", i + 1),
+                Ok(None) => info!(
+                    "evolved: proposal {}/{} — no actionable output",
+                    i + 1,
+                    hints.len()
+                ),
+                Err(e) => warn!("evolved: proposal {}/{} failed: {e}", i + 1, hints.len()),
             }
         }
 
@@ -1139,11 +1710,7 @@ impl EvolvedLoop {
 
     /// Ask the LLM which of two proposals is better.
     /// Returns 1.0 if A wins, 0.0 if B wins, 0.5 on tie/error.
-    async fn elo_compare(
-        &self,
-        a: &EvolutionNode,
-        b: &EvolutionNode,
-    ) -> Result<f32> {
+    async fn elo_compare(&self, a: &EvolutionNode, b: &EvolutionNode) -> Result<f32> {
         let prompt = format!(
             "Two harness improvement proposals are competing. \
              Judge which is more likely to improve the agent's task success rate.\n\n\
@@ -1204,7 +1771,10 @@ impl EvolvedLoop {
         // Retrieve top cognition items — prefer semantic search, fallback to keyword
         let query_text = format!(
             "harness improvement {} failure",
-            failure_patterns.first().map(|s| s.as_str()).unwrap_or("unknown")
+            failure_patterns
+                .first()
+                .map(|s| s.as_str())
+                .unwrap_or("unknown")
         );
         let cognition_items = if let Ok(vec) = self.ollama.embed(&query_text).await {
             let emb_store = crate::embeddings::EmbeddingStore::new(Arc::clone(&self.memory.db));
@@ -1213,12 +1783,16 @@ impl EvolvedLoop {
                 .search_semantic(&emb_store, &vec, 5)
                 .unwrap_or_default();
             if semantic.is_empty() {
-                self.cognition.query_top_k(&query_text, 5).unwrap_or_default()
+                self.cognition
+                    .query_top_k(&query_text, 5)
+                    .unwrap_or_default()
             } else {
                 semantic
             }
         } else {
-            self.cognition.query_top_k(&query_text, 5).unwrap_or_default()
+            self.cognition
+                .query_top_k(&query_text, 5)
+                .unwrap_or_default()
         };
         let cognition_context = cognition_items
             .iter()
@@ -1301,7 +1875,27 @@ impl EvolvedLoop {
             .await?;
 
         let (_, answer) = resp.split_thinking();
-        self.parse_researcher_output(&answer)
+        let mut node = match self.parse_researcher_output(&answer)? {
+            Some(node) => node,
+            None => return Ok(None),
+        };
+        let (layer, lever) = parse_dhe_from_patterns(failure_patterns);
+        if node.manifest.evidence_cited.is_empty() {
+            node.manifest.evidence_cited = failure_patterns.iter().take(3).cloned().collect();
+        }
+        if node.manifest.root_cause.trim().is_empty() {
+            node.manifest.root_cause = failure_patterns
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "no recorded failure pattern".to_string());
+        }
+        if layer != 0 && !node.manifest.root_cause.contains("[DHE:layer=") {
+            node.manifest.root_cause = format!(
+                "[DHE:layer={layer},lever={lever}] {}",
+                node.manifest.root_cause
+            );
+        }
+        Ok(Some(node))
     }
 
     fn parse_researcher_output(&self, text: &str) -> Result<Option<EvolutionNode>> {
@@ -1349,8 +1943,7 @@ impl EvolvedLoop {
         if description.trim().is_empty() || evaluator.trim().is_empty() {
             return None;
         }
-        let category = extract_field(text, "TEST_CATEGORY")
-            .unwrap_or_else(|| "other".to_string());
+        let category = extract_field(text, "TEST_CATEGORY").unwrap_or_else(|| "other".to_string());
         Some(SelfAuthoredTest::new(
             origin_round,
             origin_layer,
@@ -1366,6 +1959,33 @@ impl EvolvedLoop {
         node: &mut EvolutionNode,
         tracker: &OutcomeTracker,
     ) -> Result<()> {
+        let failure_patterns = tracker.failure_patterns(20);
+        let (pred_layer, pred_lever) = parse_dhe_from_patterns(&failure_patterns);
+
+        if pred_layer != 0
+            && !component_matches_diagnostic_layer(&node.target_component, pred_layer)
+        {
+            node.status = crate::evolved::proposer::NodeStatus::Rejected;
+            node.manifest.verification_status = VerificationStatus::Rejected;
+            node.analysis = format!(
+                "proposal targets {:?}, but dominant diagnostic layer {} / lever {} requires {}",
+                node.target_component,
+                pred_layer,
+                pred_lever,
+                expected_component_summary(pred_layer)
+            );
+            node.results = serde_json::to_value(VerificationOutcome {
+                accepted: false,
+                reason: node.analysis.clone(),
+                checks: vec!["dhe_component_alignment".to_string()],
+                evidence: None,
+                sandbox_branch: None,
+                sandbox_commit: None,
+                applied_commit: None,
+            })?;
+            return Ok(());
+        }
+
         // Safety check: Middleware/core modules require human approval
         if matches!(node.target_component, HarnessComponent::Middleware) {
             warn!("evolved: Engineer blocked — Middleware changes require human approval");
@@ -1376,6 +1996,10 @@ impl EvolvedLoop {
                 accepted: false,
                 reason: node.analysis.clone(),
                 checks: vec!["component_policy".to_string()],
+                evidence: None,
+                sandbox_branch: None,
+                sandbox_commit: None,
+                applied_commit: None,
             })?;
             return Ok(());
         }
@@ -1391,6 +2015,10 @@ impl EvolvedLoop {
                 accepted: false,
                 reason: node.analysis.clone(),
                 checks: vec!["main_worktree_clean".to_string()],
+                evidence: None,
+                sandbox_branch: None,
+                sandbox_commit: None,
+                applied_commit: None,
             })?;
             return Ok(());
         }
@@ -1411,7 +2039,68 @@ impl EvolvedLoop {
             return Ok(());
         }
 
-        let verification_outcome = verification.outcome.clone();
+        let mut verification_outcome = verification.outcome.clone();
+        let sandbox_branch = verification_outcome.sandbox_branch.clone();
+        match measure_repo_fix_empirical_gate(&repo_root, &verification.diff, self.ollama.model())
+            .await
+        {
+            Ok(evidence) => {
+                verification_outcome
+                    .checks
+                    .push("repo_fix_empirical_gate".to_string());
+                let evidence_summary = format!(
+                    "repo-fix subset pass@1 baseline {:.3} candidate {:.3} delta {:+.3} on {} task(s)",
+                    evidence.baseline_score,
+                    evidence.candidate_score,
+                    evidence.score_delta,
+                    evidence.task_count
+                );
+                verification_outcome.evidence = Some(evidence.clone());
+                if !evidence.passed {
+                    if let Err(err) =
+                        cleanup_sandbox_branch_at(&repo_root, sandbox_branch.as_deref()).await
+                    {
+                        warn!(
+                            "evolved: failed to clean rejected sandbox branch {:?}: {err}",
+                            sandbox_branch
+                        );
+                    }
+                    node.status = crate::evolved::proposer::NodeStatus::Rejected;
+                    node.manifest.verification_status = VerificationStatus::Rejected;
+                    node.manifest.verified_at = Some(Utc::now());
+                    node.analysis =
+                        format!("empirical repo-fix gate rejected proposal: {evidence_summary}");
+                    verification_outcome.accepted = false;
+                    verification_outcome.reason = node.analysis.clone();
+                    node.results = serde_json::to_value(verification_outcome)?;
+                    return Ok(());
+                }
+                verification_outcome.reason =
+                    format!("{}; {evidence_summary}", verification_outcome.reason);
+            }
+            Err(err) => {
+                if let Err(cleanup_err) =
+                    cleanup_sandbox_branch_at(&repo_root, sandbox_branch.as_deref()).await
+                {
+                    warn!(
+                        "evolved: failed to clean sandbox branch after empirical gate error {:?}: {cleanup_err}",
+                        sandbox_branch
+                    );
+                }
+                node.status = crate::evolved::proposer::NodeStatus::Rejected;
+                node.manifest.verification_status = VerificationStatus::Rejected;
+                node.manifest.verified_at = Some(Utc::now());
+                node.analysis = format!("empirical repo-fix gate failed: {err}");
+                verification_outcome.accepted = false;
+                verification_outcome
+                    .checks
+                    .push("repo_fix_empirical_gate".to_string());
+                verification_outcome.reason = node.analysis.clone();
+                verification_outcome.evidence = None;
+                node.results = serde_json::to_value(verification_outcome)?;
+                return Ok(());
+            }
+        }
         let prompt = Analyzer::build_prompt(
             &node.motivation,
             &node.diff,
@@ -1426,11 +2115,46 @@ impl EvolvedLoop {
         let (analysis, lesson) = Analyzer::parse_response(&answer);
         node.analysis = analysis.clone();
 
-        apply_verified_diff(&repo_root, &verification.diff).await?;
+        if let Some(sandbox_commit) = verification_outcome.sandbox_commit.clone() {
+            verification_outcome
+                .checks
+                .push("main_cherry_pick".to_string());
+            match cherry_pick_verified_commit(&repo_root, &sandbox_commit).await {
+                Ok(applied_commit) => {
+                    verification_outcome.applied_commit = Some(applied_commit);
+                }
+                Err(err) => {
+                    if let Err(cleanup_err) =
+                        cleanup_sandbox_branch_at(&repo_root, sandbox_branch.as_deref()).await
+                    {
+                        warn!(
+                            "evolved: failed to clean sandbox branch after cherry-pick failure {:?}: {cleanup_err}",
+                            sandbox_branch
+                        );
+                    }
+                    return Err(err);
+                }
+            }
+        } else {
+            apply_verified_diff(&repo_root, &verification.diff).await?;
+        }
+        if let Err(err) = cleanup_sandbox_branch_at(&repo_root, sandbox_branch.as_deref()).await {
+            warn!(
+                "evolved: failed to clean accepted sandbox branch {:?}: {err}",
+                sandbox_branch
+            );
+        }
 
         let recent_success = tracker.success_rate(5);
         node.status = crate::evolved::proposer::NodeStatus::Accepted;
-        node.score = (node.score + recent_success.max(0.1)) / 2.0;
+        node.score = verification_outcome
+            .evidence
+            .as_ref()
+            .map(|evidence| {
+                ((recent_success.max(0.1) + evidence.candidate_score.max(0.0)) / 2.0)
+                    .clamp(0.0, 1.0)
+            })
+            .unwrap_or_else(|| (node.score + recent_success.max(0.1)) / 2.0);
         node.results = serde_json::to_value(verification_outcome)?;
         node.manifest.verification_status = VerificationStatus::Confirmed;
         node.manifest.verified_at = Some(Utc::now());
@@ -1462,8 +2186,6 @@ impl EvolvedLoop {
         // computation meaningless. The round used here is the HIRO round at
         // attribution time when the runner supplies it; otherwise the
         // tracker-derived count is the best proxy available.
-        let failure_patterns = tracker.failure_patterns(20);
-        let (pred_layer, pred_lever) = parse_dhe_from_patterns(&failure_patterns);
         let component_name = format!("{:?}", node.target_component);
         let metacog_store = MetacognitiveStore::new(Arc::clone(&self.memory.db));
         // The loop runner doesn't carry an explicit HIRO-round counter at
@@ -1563,7 +2285,8 @@ impl EvolvedLoop {
                 self.compute_and_record_ics(round, &snap.text).await;
 
                 // ── Narrative self (Seed 6): add the next chapter ───────────
-                self.append_narrative_chapter(round, &behavior_summary).await;
+                self.append_narrative_chapter(round, &behavior_summary)
+                    .await;
             }
             Err(e) => warn!("evolved: failed to persist self-model update: {e}"),
         }
@@ -1574,11 +2297,7 @@ impl EvolvedLoop {
     /// theme. The agent checks whether its last anticipated arc came true (FED
     /// at the narrative level) and projects where the story heads next.
     async fn append_narrative_chapter(&self, round: u32, behavior_summary: &str) {
-        let prior_recap = self
-            .memory
-            .narrative
-            .story_recap(5)
-            .unwrap_or_default();
+        let prior_recap = self.memory.narrative.story_recap(5).unwrap_or_default();
         let prior_arc = self
             .memory
             .narrative
@@ -1621,7 +2340,10 @@ impl EvolvedLoop {
                     );
                     self.emit_event(
                         "evolution.narrative_chapter",
-                        format!("new life-story chapter at round {round}: {}", episode.chapter),
+                        format!(
+                            "new life-story chapter at round {round}: {}",
+                            episode.chapter
+                        ),
                         serde_json::json!({
                             "round": round,
                             "episode_id": id,
@@ -1674,9 +2396,7 @@ impl EvolvedLoop {
                          — identity drift is severe"
                     );
                 } else if score < 0.70 {
-                    warn!(
-                        "evolved: ICS below alert threshold (0.70) at round {round}: {score:.3}"
-                    );
+                    warn!("evolved: ICS below alert threshold (0.70) at round {round}: {score:.3}");
                 }
                 self.emit_event(
                     "evolution.ics_recorded",
@@ -1690,6 +2410,10 @@ impl EvolvedLoop {
     }
 
     async fn commit_node(&self, node: &EvolutionNode) -> Result<Option<String>> {
+        if let Some(commit) = applied_commit_from_results(&node.results) {
+            return Ok(Some(commit));
+        }
+
         let repo_root = default_repo_root();
         let paths = changed_paths_for_node_at(&repo_root, node);
         if paths.is_empty() {
@@ -1728,12 +2452,7 @@ impl EvolvedLoop {
         Ok(Some(git_head(&repo_root).await?))
     }
 
-    fn emit_event(
-        &self,
-        event_type: &str,
-        summary: impl AsRef<str>,
-        payload: serde_json::Value,
-    ) {
+    fn emit_event(&self, event_type: &str, summary: impl AsRef<str>, payload: serde_json::Value) {
         let Some(events) = &self.events else {
             return;
         };
@@ -1939,7 +2658,11 @@ mod tests {
             "[package]\nname = \"px-evolve-test\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
         )
         .unwrap();
-        std::fs::write(root.join("src/lib.rs"), "pub fn ok() -> bool { true }\n").unwrap();
+        std::fs::write(
+            root.join("src/main.rs"),
+            "fn ok() -> bool {\n    true\n}\n\nfn main() {\n    println!(\"{}\", ok());\n}\n\n#[cfg(test)]\nmod tests {\n    use super::ok;\n\n    #[test]\n    fn ok_stays_true() {\n        assert!(ok());\n    }\n}\n",
+        )
+        .unwrap();
         std::fs::write(
             root.join("skills/conductor/existing.md"),
             "When a tool fails, inspect the observation and retry with a narrower input.\n",
@@ -1968,6 +2691,87 @@ mod tests {
         );
     }
 
+    fn git_stdout(root: &Path, args: &[&str]) -> String {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    #[test]
+    fn subset_repo_fix_manifest_limits_task_count() {
+        let manifest = r#"{
+          "tasks": [
+            {"id": "fix_001"},
+            {"id": "fix_002"},
+            {"id": "fix_003"}
+          ]
+        }"#;
+
+        let subset = subset_repo_fix_manifest(manifest, 2).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&subset).unwrap();
+
+        assert_eq!(parsed["tasks"].as_array().unwrap().len(), 2);
+        assert_eq!(parsed["tasks"][0]["id"], "fix_001");
+        assert_eq!(parsed["tasks"][1]["id"], "fix_002");
+    }
+
+    #[test]
+    fn parse_repo_fix_pass_at_1_reads_bench_output() {
+        let output = "repo-fix fix_001 pre=1 post=0 -> PASS\n\n=== REPO-FIX BENCH ===\npass@1 = 0.750  (3/4 tasks)\n";
+
+        assert_eq!(parse_repo_fix_pass_at_1(output), Some(0.75));
+    }
+
+    #[test]
+    fn repo_fix_gate_timeout_defaults_when_env_missing_or_invalid() {
+        assert_eq!(
+            repo_fix_gate_timeout_from_env(None),
+            Duration::from_secs(DEFAULT_REPO_FIX_GATE_TIMEOUT_SECS)
+        );
+        assert_eq!(
+            repo_fix_gate_timeout_from_env(Some("0")),
+            Duration::from_secs(DEFAULT_REPO_FIX_GATE_TIMEOUT_SECS)
+        );
+        assert_eq!(
+            repo_fix_gate_timeout_from_env(Some("not-a-number")),
+            Duration::from_secs(DEFAULT_REPO_FIX_GATE_TIMEOUT_SECS)
+        );
+    }
+
+    #[test]
+    fn repo_fix_gate_timeout_respects_positive_override() {
+        assert_eq!(
+            repo_fix_gate_timeout_from_env(Some("42")),
+            Duration::from_secs(42)
+        );
+    }
+
+    #[test]
+    fn empirical_repo_fix_evidence_rejects_regression() {
+        let evidence = empirical_repo_fix_evidence(4, 0.75, 0.50);
+
+        assert_eq!(evidence.benchmark, "repo_fix_subset");
+        assert_eq!(evidence.score_delta, -0.25);
+        assert!(!evidence.passed);
+    }
+
+    #[test]
+    fn empirical_repo_fix_evidence_allows_no_regression() {
+        let evidence = empirical_repo_fix_evidence(4, 0.50, 0.50);
+
+        assert!(evidence.passed);
+        assert_eq!(evidence.score_delta, 0.0);
+    }
+
     #[tokio::test]
     async fn sandbox_verifier_accepts_safe_skill_change() {
         let root = temp_git_repo();
@@ -1979,8 +2783,61 @@ mod tests {
         let verified = verify_node_in_sandbox(&root, &node).await.unwrap();
 
         assert!(verified.outcome.accepted, "{}", verified.outcome.reason);
+        assert!(verified
+            .outcome
+            .checks
+            .iter()
+            .any(|check| check == "cargo_test"));
+        assert!(verified.outcome.sandbox_commit.is_some());
+        assert!(verified.outcome.sandbox_branch.is_some());
+        assert!(verified
+            .outcome
+            .checks
+            .iter()
+            .any(|check| check == "sandbox_commit"));
         assert!(verified.diff.contains("skills/conductor/fallback.md"));
         assert!(!root.join("skills/conductor/fallback.md").exists());
+        let sandbox_branch = verified.outcome.sandbox_branch.clone().unwrap();
+        assert_eq!(
+            git_stdout(&root, &["rev-parse", "--verify", &sandbox_branch]),
+            verified.outcome.sandbox_commit.clone().unwrap()
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn verified_sandbox_commit_can_be_cherry_picked_back_to_main() {
+        let root = temp_git_repo();
+        let node = skill_node(
+            "fallback",
+            "When a shell command fails, read stderr, choose one smaller diagnostic command, and retry once.\n",
+        );
+
+        let verified = verify_node_in_sandbox(&root, &node).await.unwrap();
+        let sandbox_commit = verified.outcome.sandbox_commit.clone().unwrap();
+        let sandbox_branch = verified.outcome.sandbox_branch.clone().unwrap();
+
+        let applied_commit = cherry_pick_verified_commit(&root, &sandbox_commit)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            applied_commit,
+            git_stdout(&root, &["rev-parse", "--short", "HEAD"])
+        );
+        let applied = std::fs::read_to_string(root.join("skills/conductor/fallback.md")).unwrap();
+        assert!(applied.contains("retry once"));
+
+        cleanup_sandbox_branch_at(&root, Some(&sandbox_branch))
+            .await
+            .unwrap();
+        let branch_check = std::process::Command::new("git")
+            .args(["rev-parse", "--verify", &sandbox_branch])
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert!(!branch_check.status.success());
 
         let _ = std::fs::remove_dir_all(root);
     }
@@ -2025,9 +2882,13 @@ mod tests {
         let verified = verify_diff_in_sandbox(&root, patch).await.unwrap();
 
         assert!(verified.outcome.accepted, "{}", verified.outcome.reason);
+        assert!(verified
+            .outcome
+            .checks
+            .iter()
+            .any(|check| check == "cargo_test"));
         assert!(verified.diff.contains("Record the fallback reason"));
-        let original =
-            std::fs::read_to_string(root.join("skills/conductor/existing.md")).unwrap();
+        let original = std::fs::read_to_string(root.join("skills/conductor/existing.md")).unwrap();
         assert!(!original.contains("Record the fallback reason"));
 
         let _ = std::fs::remove_dir_all(root);
@@ -2048,6 +2909,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn patch_sandbox_verifier_rejects_failing_bin_tests() {
+        let root = temp_git_repo();
+        let patch = "diff --git a/src/main.rs b/src/main.rs\n--- a/src/main.rs\n+++ b/src/main.rs\n@@ -1,6 +1,6 @@\n fn ok() -> bool {\n-    true\n+    false\n }\n \n fn main() {\n     println!(\"{}\", ok());\n";
+
+        let verified = verify_diff_in_sandbox(&root, patch).await.unwrap();
+
+        assert!(!verified.outcome.accepted);
+        assert!(verified.outcome.reason.contains("cargo test --bins failed"));
+        assert!(verified
+            .outcome
+            .checks
+            .iter()
+            .any(|check| check == "cargo_test"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
     async fn worktree_clean_ignores_runtime_observability_artifacts_only() {
         let root = temp_git_repo();
         std::fs::create_dir_all(root.join("artifacts/events")).unwrap();
@@ -2057,7 +2936,7 @@ mod tests {
 
         assert!(git_worktree_clean_at(&root).await.unwrap());
 
-        std::fs::write(root.join("src/lib.rs"), "pub fn ok() -> bool { false }\n").unwrap();
+        std::fs::write(root.join("src/main.rs"), "fn ok() -> bool { false }\n").unwrap();
         assert!(!git_worktree_clean_at(&root).await.unwrap());
 
         let _ = std::fs::remove_dir_all(root);
@@ -2089,10 +2968,64 @@ mod tests {
     }
 
     #[test]
+    fn reusable_autonomy_target_rejects_ephemeral_operator_skills() {
+        assert!(!is_reusable_autonomy_target(
+            &HarnessComponent::SkillDefinition(
+                "px-operator-goal-20260616-visible-work".to_string(),
+            )
+        ));
+        assert!(!is_reusable_autonomy_target(
+            &HarnessComponent::SkillDefinition("px-autonomous-patch-20260616-010101".to_string(),)
+        ));
+    }
+
+    #[test]
+    fn reusable_autonomy_target_keeps_real_skill_targets() {
+        assert!(is_reusable_autonomy_target(&HarnessComponent::SystemPrompt));
+        assert!(is_reusable_autonomy_target(
+            &HarnessComponent::HarnessConfig
+        ));
+        assert!(is_reusable_autonomy_target(
+            &HarnessComponent::SkillDefinition("retry-plan-generation".to_string(),)
+        ));
+    }
+
+    #[test]
     fn dhe_parser_reads_layer_and_lever() {
         let patterns = vec!["failure [DHE:layer=3,lever=2]".to_string()];
 
         assert_eq!(parse_dhe_from_patterns(&patterns), (3, 2));
+    }
+
+    #[test]
+    fn dhe_parser_reads_structured_failure_class() {
+        let patterns = vec!["[failure:context] output truncated under heavy context".to_string()];
+
+        assert_eq!(parse_dhe_from_patterns(&patterns), (2, 2));
+    }
+
+    #[test]
+    fn diagnostic_component_alignment_routes_context_failures_to_config() {
+        assert!(component_matches_diagnostic_layer(
+            &HarnessComponent::HarnessConfig,
+            2
+        ));
+        assert!(!component_matches_diagnostic_layer(
+            &HarnessComponent::SystemPrompt,
+            2
+        ));
+        assert!(!component_matches_diagnostic_layer(
+            &HarnessComponent::SkillDefinition("retry".to_string()),
+            2
+        ));
+    }
+
+    #[test]
+    fn diagnostic_component_hints_focus_reasoning_failures_on_prompt() {
+        let hints = diagnostic_component_hints(5);
+
+        assert_eq!(hints.len(), 1);
+        assert!(hints[0].contains("SystemPrompt"));
     }
 
     #[test]
@@ -2124,5 +3057,24 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn applied_commit_from_results_reads_verified_apply_commit() {
+        let value = serde_json::to_value(VerificationOutcome {
+            accepted: true,
+            reason: "ok".to_string(),
+            checks: vec!["sandbox_commit".to_string(), "main_cherry_pick".to_string()],
+            evidence: None,
+            sandbox_branch: Some("px-evolve-verify-123".to_string()),
+            sandbox_commit: Some("deadbeef".to_string()),
+            applied_commit: Some("abc1234".to_string()),
+        })
+        .unwrap();
+
+        assert_eq!(
+            applied_commit_from_results(&value).as_deref(),
+            Some("abc1234")
+        );
     }
 }

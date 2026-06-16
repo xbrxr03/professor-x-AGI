@@ -1280,7 +1280,10 @@ mod tests {
             tasks.push(task_with_id(&format!("pl_{i}"), HiroCategory::Planning));
         }
         for i in 0..6 {
-            tasks.push(task_with_id(&format!("sc_{i}"), HiroCategory::SelfCorrection));
+            tasks.push(task_with_id(
+                &format!("sc_{i}"),
+                HiroCategory::SelfCorrection,
+            ));
         }
         let sample = stratified_sample(tasks, 9);
         assert_eq!(sample.len(), 9);

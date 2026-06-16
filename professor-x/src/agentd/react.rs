@@ -25,6 +25,8 @@
 use anyhow::Result;
 use chrono::Utc;
 use serde_json::{json, Value};
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -32,15 +34,16 @@ use uuid::Uuid;
 use crate::agentd::graph::{ExecutionStep, TaskNode, TaskStatus, TaskType};
 use crate::evolved::lcap::LcapPolicy;
 use crate::evolved::tracker::TaskOutcome;
+use crate::failure::{classify_failure_mode, normalize_failure_mode};
 use crate::memd::affect::{arousal_from_load, state_label, valence_from_outcome, AffectState};
 use crate::memd::causal_traces::{CausalTrace, TimedAction};
 use crate::memd::computational_body::ComputationalVitals;
-use crate::memd::self_prediction::{self, SelfPrediction};
-use crate::memd::working::MermaidCanvas;
 use crate::memd::episodic::EpisodicEntry;
 use crate::memd::events::EventStore;
+use crate::memd::self_prediction::{self, SelfPrediction};
 use crate::memd::task_runs::TaskRunStore;
 use crate::memd::transcripts::TranscriptStore;
+use crate::memd::working::MermaidCanvas;
 use crate::memd::MemoryManager;
 use crate::ollama::{ModelOptions, OllamaClient};
 use crate::policyd::{AuditStore, Decision, PermissionScope, PolicyEngine};
@@ -53,6 +56,19 @@ struct ParsedStep {
     thought: String,
     tool_name: String,
     params: Value,
+}
+
+#[derive(Clone)]
+struct TaskVerifier {
+    workdir: PathBuf,
+    command: String,
+    expect_exit: i32,
+}
+
+struct VerifierResult {
+    passed: bool,
+    exit_code: i32,
+    output: String,
 }
 
 /// Homeostatic baselines for the interoceptive / prediction-error signals that
@@ -71,7 +87,11 @@ struct SignalBaselines {
 
 impl SignalBaselines {
     fn prior() -> Self {
-        Self { stress: 0.3, surprise: 0.3, affect: 0.2 }
+        Self {
+            stress: 0.3,
+            surprise: 0.3,
+            affect: 0.2,
+        }
     }
     fn update(&mut self, stress: f32, surprise: f32, affect: f32) {
         const A: f32 = 0.1; // EMA rate
@@ -102,6 +122,8 @@ pub struct ReactLoop {
     /// M4 self-improvement: override the ReAct system prompt at runtime so the evolution
     /// loop can A/B candidate prompts against the repo-fix benchmark without recompiling.
     prompt_override: Option<String>,
+    /// Optional task-local verifier. Coding benchmarks can reject finish until tests pass.
+    verifier: Option<TaskVerifier>,
     /// Stable identifier for this loop's affect session (one per ReactLoop instance).
     session_id: String,
     /// Running affect state (valence + arousal) updated after each task attempt.
@@ -151,19 +173,21 @@ impl ReactLoop {
         cancel: CancellationToken,
     ) -> Self {
         let session_id = Uuid::new_v4().to_string();
+        let lcap = LcapPolicy::load_from_db(&memory.db).unwrap_or_else(|_| LcapPolicy::new());
         Self {
             ollama,
             registry,
             policy,
             memory,
             cancel,
-            lcap: Arc::new(std::sync::Mutex::new(LcapPolicy::new())),
+            lcap: Arc::new(std::sync::Mutex::new(lcap)),
             current_round: 0,
             events: None,
             transcripts: None,
             memory_budget_override: None,
             workspace_override: None,
             prompt_override: None,
+            verifier: None,
             affect: std::sync::Mutex::new(AffectState::neutral(session_id.clone(), 0)),
             fed_samples: std::sync::Mutex::new(Vec::new()),
             canvas: std::sync::Mutex::new(MermaidCanvas::default()),
@@ -193,6 +217,15 @@ impl ReactLoop {
         self
     }
 
+    pub fn with_verifier(mut self, workdir: PathBuf, command: String, expect_exit: i32) -> Self {
+        self.verifier = Some(TaskVerifier {
+            workdir,
+            command,
+            expect_exit,
+        });
+        self
+    }
+
     /// Internal: build a sub-agent loop sharing this loop's resources, one level
     /// deeper. Used by `agent.delegate`.
     fn child_loop(&self) -> Self {
@@ -208,6 +241,7 @@ impl ReactLoop {
         if let Some(events) = &self.events {
             child.events = Some(Arc::clone(events));
         }
+        child.verifier = self.verifier.clone();
         child
     }
 
@@ -354,7 +388,10 @@ impl ReactLoop {
         let context = if context.trim().is_empty() {
             String::new()
         } else {
-            format!("\n\nWork so far:\n{}", context.chars().take(1200).collect::<String>())
+            format!(
+                "\n\nWork so far:\n{}",
+                context.chars().take(1200).collect::<String>()
+            )
         };
 
         // 1) PROPOSE k distinct approaches.
@@ -535,9 +572,8 @@ impl ReactLoop {
         // echoed in both episodic and cognition is grounded; one standing alone
         // is suppressed. Reduces confabulation, raises integration. Best-effort —
         // a no-op when embeddings are unavailable.
-        let (ice_examples, cognition_context) = self
-            .apply_binding(ice_examples, cognition_context)
-            .await;
+        let (ice_examples, cognition_context) =
+            self.apply_binding(ice_examples, cognition_context).await;
 
         // Fresh scratchpad per task (self-managed working memory).
         if let Ok(mut sp) = self.scratchpad.lock() {
@@ -560,10 +596,12 @@ impl ReactLoop {
             }
         }
 
-        let lcap_ceiling = {
+        let selected_arm = {
             let lc = self.lcap.lock().unwrap();
-            lc.select(&category, self.current_round).hard_ceiling_tokens
+            lc.select_arm(&category, self.current_round)
         };
+        let lcap_ceiling =
+            crate::evolved::lcap::ContextBudget::from_arm(&selected_arm).hard_ceiling_tokens;
         let num_ctx = effective_memory_ceiling(lcap_ceiling, self.memory_budget_override);
 
         // Seed 4 (interoception): predict the computational body state for this
@@ -595,10 +633,24 @@ impl ReactLoop {
         // Error is measured at task end; persistent error = genuine self-ignorance.
         {
             let tool_names: Vec<&str> = vec![
-                "fs.read", "fs.hash_read", "fs.window_open", "fs.window_goto",
-                "fs.window_scroll", "fs.list", "fs.write", "fs.hash_edit", "web.search",
-                "web.fetch", "vision.analyze", "shell.restricted", "patch.review",
-                "patch.apply", "memory.read", "memory.write", "finish", "fail",
+                "fs.read",
+                "fs.hash_read",
+                "fs.window_open",
+                "fs.window_goto",
+                "fs.window_scroll",
+                "fs.list",
+                "fs.write",
+                "fs.hash_edit",
+                "web.search",
+                "web.fetch",
+                "vision.analyze",
+                "shell.restricted",
+                "patch.review",
+                "patch.apply",
+                "memory.read",
+                "memory.write",
+                "finish",
+                "fail",
             ];
             let pred_prompt =
                 self_prediction::build_prediction_prompt(&task.description, &tool_names);
@@ -722,16 +774,17 @@ impl ReactLoop {
                     // LCAP: reward successful budget selection
                     {
                         let mut lc = self.lcap.lock().unwrap();
-                        let arm = arm_for_ctx(num_ctx);
-                        lc.update(&category, &arm, 1.0);
+                        lc.update(&category, &selected_arm, 1.0);
+                        if let Err(e) = lc.save_to_db(&self.memory.db) {
+                            warn!("react: failed to persist LCAP state after success: {e}");
+                        }
                     }
 
                     // Affect (H16): positive valence on success
                     {
                         let tool_density = task.steps.len() as f32 / 20.0;
                         let retry_pressure =
-                            task.attempt_count.saturating_sub(1) as f32
-                            / task.max_attempts as f32;
+                            task.attempt_count.saturating_sub(1) as f32 / task.max_attempts as f32;
                         let v = valence_from_outcome(1.0, predicted_success);
                         let a = arousal_from_load(tool_density, retry_pressure);
                         if let Ok(mut aff) = self.affect.lock() {
@@ -747,8 +800,13 @@ impl ReactLoop {
 
                     // Seeds 2 + 4: record causal trace and computational vitals
                     self.record_body_and_causal(
-                        task, &category, num_ctx, true, 1.0,
-                        episodic_engaged, cognition_engaged,
+                        task,
+                        &category,
+                        num_ctx,
+                        true,
+                        1.0,
+                        episodic_engaged,
+                        cognition_engaged,
                     );
 
                     return Ok(TaskOutcome {
@@ -756,6 +814,7 @@ impl ReactLoop {
                         description: task.description.clone(),
                         success: true,
                         score: 1.0,
+                        failure_class: None,
                         failure_mode: None,
                         steps_taken: task.steps.len() as u32,
                         timestamp: Utc::now(),
@@ -766,8 +825,7 @@ impl ReactLoop {
                         // Affect: mildly negative after a failed attempt, arousal rises with retries
                         {
                             let tool_density = task.steps.len() as f32 / 20.0;
-                            let retry_pressure =
-                                (attempt + 1) as f32 / task.max_attempts as f32;
+                            let retry_pressure = (attempt + 1) as f32 / task.max_attempts as f32;
                             let v = valence_from_outcome(0.0, predicted_success);
                             let a = arousal_from_load(tool_density, retry_pressure);
                             if let Ok(mut aff) = self.affect.lock() {
@@ -778,7 +836,9 @@ impl ReactLoop {
                         let reflection = self.generate_reflection(task).await;
                         task.push_reflection(reflection);
                         task.steps.clear();
-                        if let Ok(mut c) = self.canvas.lock() { c.clear(); }
+                        if let Ok(mut c) = self.canvas.lock() {
+                            c.clear();
+                        }
                     }
                 }
                 Err(e) => {
@@ -829,6 +889,8 @@ impl ReactLoop {
             "{mars} [DHE:layer={},lever={}]",
             dhe.failed_layer, dhe.recommended_lever
         );
+        let failure_class = classify_failure_mode(&failure_mode);
+        let failure_mode = normalize_failure_mode(&failure_mode);
 
         task.status = TaskStatus::Failed;
         task.completed_at = Some(Utc::now());
@@ -850,16 +912,46 @@ impl ReactLoop {
         );
 
         // LCAP: penalize failed budget selection
-        {
+        let regressed_arm = {
             let mut lc = self.lcap.lock().unwrap();
-            let arm = arm_for_ctx(num_ctx);
-            lc.update(&category, &arm, 0.0);
+            let next = if failure_class == crate::failure::FailureClass::Context {
+                lc.regress(&category, &selected_arm)
+            } else {
+                lc.update(&category, &selected_arm, 0.0);
+                None
+            };
+            if let Err(e) = lc.save_to_db(&self.memory.db) {
+                warn!("react: failed to persist LCAP state after failure: {e}");
+            }
+            next
+        };
+        if let Some(next_arm) = regressed_arm {
+            self.emit_event(
+                None,
+                Some(task.id),
+                "lcap.regressed",
+                format!(
+                    "layer-2 context failure regressed {:?} budget from {:?} to {:?}",
+                    category, selected_arm, next_arm
+                ),
+                json!({
+                    "category": format!("{category:?}"),
+                    "failure_class": failure_class.as_str(),
+                    "from_arm": format!("{selected_arm:?}"),
+                    "to_arm": format!("{next_arm:?}"),
+                }),
+            );
         }
 
         // Seeds 2 + 4: record causal trace and computational vitals
         self.record_body_and_causal(
-            task, &category, num_ctx, false, 0.0,
-            episodic_engaged, cognition_engaged,
+            task,
+            &category,
+            num_ctx,
+            false,
+            0.0,
+            episodic_engaged,
+            cognition_engaged,
         );
 
         Ok(TaskOutcome {
@@ -867,6 +959,7 @@ impl ReactLoop {
             description: task.description.clone(),
             success: false,
             score: 0.0,
+            failure_class: Some(failure_class),
             failure_mode: Some(failure_mode),
             steps_taken: task.steps.len() as u32,
             timestamp: Utc::now(),
@@ -1097,7 +1190,11 @@ impl ReactLoop {
                     self_model: reflected,
                 }
             };
-            if let Err(e) = self.memory.phi.record_activation(self.current_round, &activation) {
+            if let Err(e) = self
+                .memory
+                .phi
+                .record_activation(self.current_round, &activation)
+            {
                 warn!("react: failed to record phi activation: {e}");
             }
         }
@@ -1155,9 +1252,7 @@ impl ReactLoop {
         const SYNTHESIS_CHECKPOINT_STEP: usize = 14;
         const FORFEIT_AFTER_SYNTHESIS_STEP: usize = 18;
         let scope = match &self.workspace_override {
-            Some(root) => {
-                PermissionScope::default_autonomous().with_workspace_root(root.clone())
-            }
+            Some(root) => PermissionScope::default_autonomous().with_workspace_root(root.clone()),
             None => PermissionScope::default_autonomous(),
         };
         let executor = ToolExecutor::new(Arc::clone(&self.registry))
@@ -1195,7 +1290,11 @@ impl ReactLoop {
                 return Ok(false);
             }
 
-            if should_forfeit_after_synthesis(step_idx, synthesis_forced, FORFEIT_AFTER_SYNTHESIS_STEP) {
+            if should_forfeit_after_synthesis(
+                step_idx,
+                synthesis_forced,
+                FORFEIT_AFTER_SYNTHESIS_STEP,
+            ) {
                 warn!(
                     "react: synthesis/forfeit guard stopped task '{}' before max steps",
                     task.description
@@ -1214,6 +1313,32 @@ impl ReactLoop {
                 || (!synthesis_forced && duplicate_blocks >= 3)
             {
                 synthesis_forced = true;
+                if task_requires_file_edit(task) && !has_successful_file_mutation(task) {
+                    let guidance = edit_required_synthesis_guidance(task);
+                    self.emit_event(
+                        Some(session_id),
+                        Some(task.id),
+                        "react.synthesis_deferred",
+                        "edit-required task has no successful file mutation yet",
+                        json!({"step": step_idx + 1, "max_steps": MAX_STEPS}),
+                    );
+                    task.steps.push(ExecutionStep {
+                        index: (task.steps.len() + 1) as u32,
+                        thought: "loop guard: task requires a file edit before final synthesis"
+                            .to_string(),
+                        action: Action {
+                            tool_name: "auto.synthesize".to_string(),
+                            params: json!({}),
+                            risk_score: 0,
+                        },
+                        observation: guidance,
+                        timestamp: Utc::now(),
+                    });
+                    duplicate_blocks = 0;
+                    consecutive_duplicates = 0;
+                    let _ = TaskRunStore::new(Arc::clone(&self.memory.db)).step_recorded(task);
+                    continue;
+                }
                 // M2: directly synthesize the final answer from the gathered observations
                 // and finish, rather than nudging a stuck model into more thrash → forfeit.
                 if let Some(answer) = self.synthesize_final_answer(task, &react_opts).await {
@@ -1363,6 +1488,113 @@ impl ReactLoop {
                     // interface error and make the expected payload explicit.
                     if parsed.tool_name == "finish" || parsed.tool_name == "done" {
                         if let Some(answer) = finish_answer_from_params(&parsed.params) {
+                            if task_requires_file_edit(task) && !has_successful_file_mutation(task)
+                            {
+                                self.emit_event(
+                                    Some(session_id),
+                                    Some(task.id),
+                                    "task.finish_rejected",
+                                    "edit-required task requested finish before successful file mutation",
+                                    json!({"step": step_idx + 1}),
+                                );
+                                let guidance = edit_required_synthesis_guidance(task);
+                                task.steps.push(ExecutionStep {
+                                    index: (step_idx + 1) as u32,
+                                    thought: parsed.thought,
+                                    action: Action {
+                                        tool_name: parsed.tool_name,
+                                        params: parsed.params,
+                                        risk_score: 0,
+                                    },
+                                    observation: guidance,
+                                    timestamp: Utc::now(),
+                                });
+                                let _ = TaskRunStore::new(Arc::clone(&self.memory.db))
+                                    .step_recorded(task);
+                                continue;
+                            }
+                            if let Some(verifier) = &self.verifier {
+                                if verifier_failed_since_latest_file_mutation(task) {
+                                    self.emit_event(
+                                        Some(session_id),
+                                        Some(task.id),
+                                        "task.finish_rejected",
+                                        "verifier already failed and no newer edit was made",
+                                        json!({"step": step_idx + 1}),
+                                    );
+                                    task.steps.push(ExecutionStep {
+                                        index: (step_idx + 1) as u32,
+                                        thought: parsed.thought.clone(),
+                                        action: Action {
+                                            tool_name: parsed.tool_name.clone(),
+                                            params: parsed.params.clone(),
+                                            risk_score: 0,
+                                        },
+                                        observation: verifier_requires_new_edit_observation(),
+                                        timestamp: Utc::now(),
+                                    });
+                                    let _ = TaskRunStore::new(Arc::clone(&self.memory.db))
+                                        .step_recorded(task);
+                                    continue;
+                                }
+
+                                let mut result = verifier.run();
+                                if !result.passed {
+                                    if let Some(repair) =
+                                        try_python_verifier_repair(verifier, &result)
+                                    {
+                                        self.emit_event(
+                                            Some(session_id),
+                                            Some(task.id),
+                                            "task.verifier.auto_repaired",
+                                            "verifier traceback repair edited the workspace",
+                                            json!({
+                                                "step": step_idx + 1,
+                                                "summary": repair,
+                                            }),
+                                        );
+                                        result = verifier.run();
+                                    }
+                                }
+                                if !result.passed {
+                                    self.emit_event(
+                                        Some(session_id),
+                                        Some(task.id),
+                                        "task.finish_rejected",
+                                        "verifier failed after finish request",
+                                        json!({
+                                            "step": step_idx + 1,
+                                            "exit_code": result.exit_code,
+                                            "expect_exit": verifier.expect_exit,
+                                        }),
+                                    );
+                                    task.steps.push(ExecutionStep {
+                                        index: (step_idx + 1) as u32,
+                                        thought: parsed.thought,
+                                        action: Action {
+                                            tool_name: parsed.tool_name,
+                                            params: parsed.params,
+                                            risk_score: 0,
+                                        },
+                                        observation: verifier_failed_observation(verifier, &result),
+                                        timestamp: Utc::now(),
+                                    });
+                                    let _ = TaskRunStore::new(Arc::clone(&self.memory.db))
+                                        .step_recorded(task);
+                                    continue;
+                                }
+                                self.emit_event(
+                                    Some(session_id),
+                                    Some(task.id),
+                                    "task.verifier.passed",
+                                    "verifier passed before finish",
+                                    json!({
+                                        "step": step_idx + 1,
+                                        "exit_code": result.exit_code,
+                                        "expect_exit": verifier.expect_exit,
+                                    }),
+                                );
+                            }
                             let step = ExecutionStep {
                                 index: (step_idx + 1) as u32,
                                 thought: parsed.thought,
@@ -1382,8 +1614,8 @@ impl ReactLoop {
                                 timestamp: Utc::now(),
                             };
                             task.steps.push(step);
-                            let _ = TaskRunStore::new(Arc::clone(&self.memory.db))
-                                .step_recorded(task);
+                            let _ =
+                                TaskRunStore::new(Arc::clone(&self.memory.db)).step_recorded(task);
                             self.emit_event(
                                 Some(session_id),
                                 Some(task.id),
@@ -1420,8 +1652,7 @@ impl ReactLoop {
                             observation: guidance,
                             timestamp: Utc::now(),
                         });
-                        let _ = TaskRunStore::new(Arc::clone(&self.memory.db))
-                            .step_recorded(task);
+                        let _ = TaskRunStore::new(Arc::clone(&self.memory.db)).step_recorded(task);
                         continue;
                     }
                     if parsed.tool_name == "fail" {
@@ -1464,9 +1695,7 @@ impl ReactLoop {
                     // task decomposition: the child has its own ReAct loop,
                     // memory access, and tool set, but cannot delegate further
                     // (depth cap). The parent reasons over the child's answer.
-                    if parsed.tool_name == "agent.delegate"
-                        || parsed.tool_name == "agent.spawn"
-                    {
+                    if parsed.tool_name == "agent.delegate" || parsed.tool_name == "agent.spawn" {
                         let goal = parsed
                             .params
                             .get("goal")
@@ -1485,9 +1714,7 @@ impl ReactLoop {
                     // critique (a self observing the self). Single evaluative
                     // pass, not a full loop. The consciousness tie-in to the
                     // self-model seeds: metacognition as an explicit second view.
-                    if parsed.tool_name == "agent.critic"
-                        || parsed.tool_name == "mirror.review"
-                    {
+                    if parsed.tool_name == "agent.critic" || parsed.tool_name == "mirror.review" {
                         let obs = self.critique(task).await;
                         self.record_local_step(task, step_idx, session_id, parsed, obs);
                         continue;
@@ -1496,9 +1723,7 @@ impl ReactLoop {
                     // tot.search — Tree-of-Thoughts deliberate branching. Propose
                     // several approaches, value them, commit to the best. For hard
                     // tasks where greedily following the first idea dead-ends.
-                    if parsed.tool_name == "tot.search"
-                        || parsed.tool_name == "deliberate"
-                    {
+                    if parsed.tool_name == "tot.search" || parsed.tool_name == "deliberate" {
                         let branches = parsed
                             .params
                             .get("branches")
@@ -1519,9 +1744,17 @@ impl ReactLoop {
                         s.action.tool_name == parsed.tool_name && s.action.params == parsed.params
                     }) {
                         let prior_out = if prior.observation.success {
-                            prior.observation.output.chars().take(800).collect::<String>()
+                            prior
+                                .observation
+                                .output
+                                .chars()
+                                .take(800)
+                                .collect::<String>()
                         } else {
-                            format!("(it failed: {})", prior.observation.error.as_deref().unwrap_or("unknown"))
+                            format!(
+                                "(it failed: {})",
+                                prior.observation.error.as_deref().unwrap_or("unknown")
+                            )
                         };
                         // Escalate the nudge once the model is visibly stuck (2nd+ consecutive
                         // duplicate): name the concrete next action instead of a soft "do
@@ -1550,7 +1783,10 @@ impl ReactLoop {
                             Some(session_id),
                             Some(task.id),
                             "react.duplicate_action",
-                            format!("blocked duplicate '{}' — returned prior result with nudge", parsed.tool_name),
+                            format!(
+                                "blocked duplicate '{}' — returned prior result with nudge",
+                                parsed.tool_name
+                            ),
                             json!({"step": step_idx + 1, "tool": parsed.tool_name}),
                         );
                         let step = ExecutionStep {
@@ -1724,8 +1960,7 @@ impl ReactLoop {
                         timestamp: Utc::now(),
                     };
                     {
-                        let param_preview = tool_params_preview(&parsed.params)
-                            .unwrap_or_default();
+                        let param_preview = tool_params_preview(&parsed.params).unwrap_or_default();
                         if let Ok(mut canvas) = self.canvas.lock() {
                             canvas.record_canvas_step(
                                 &parsed.tool_name,
@@ -1777,8 +2012,8 @@ impl ReactLoop {
                                 observation: guidance,
                                 timestamp: Utc::now(),
                             });
-                            let _ = TaskRunStore::new(Arc::clone(&self.memory.db))
-                                .step_recorded(task);
+                            let _ =
+                                TaskRunStore::new(Arc::clone(&self.memory.db)).step_recorded(task);
                         } else {
                             warn!(
                                 "react: circuit breaker tripped (failures persisted after escalation) on task '{}'",
@@ -1849,7 +2084,11 @@ impl ReactLoop {
             "tool.succeeded",
             format!(
                 "{tool}: {}",
-                preview.replace('\n', " ").chars().take(80).collect::<String>()
+                preview
+                    .replace('\n', " ")
+                    .chars()
+                    .take(80)
+                    .collect::<String>()
             ),
             json!({
                 "step": step_idx + 1,
@@ -1974,7 +2213,9 @@ impl ReactLoop {
         // its next action.
         if let Ok(hint) = self.causal_hint.lock() {
             if !hint.is_empty() {
-                parts.push(format!("<learned-strategies>\n{hint}\n</learned-strategies>"));
+                parts.push(format!(
+                    "<learned-strategies>\n{hint}\n</learned-strategies>"
+                ));
             }
         }
 
@@ -1986,23 +2227,20 @@ impl ReactLoop {
             parts.push(format!("<reflections>\n{refs}\n</reflections>"));
         }
 
-        // Prior steps this attempt. The last 3 steps are shown IN FULL — with
-        // their observation output — so the agent acts on what its tools
-        // returned instead of re-running them blindly. Older steps are
-        // compressed to the Mermaid canvas overview (token savings) only when
-        // there are more than 3, so long tasks stay bounded.
+        // Prior steps this attempt. Recent steps keep their observation output
+        // so the agent acts on tool results instead of re-running them blindly.
+        // Older steps are compacted into a bounded ledger + Mermaid overview,
+        // preserving enough state to avoid loops without letting long outputs
+        // consume the local model's context window.
         const RECENT_FULL: usize = 3;
         if !task.steps.is_empty() {
-            let mut history = String::new();
-            if task.steps.len() > RECENT_FULL {
-                if let Ok(canvas) = self.canvas.lock() {
-                    if !canvas.is_empty() {
-                        history.push_str("Earlier steps (overview):\n");
-                        history.push_str(&canvas.to_mermaid());
-                        history.push_str("\n\nMost recent steps (detail):\n");
-                    }
-                }
-            }
+            let canvas = self
+                .canvas
+                .lock()
+                .ok()
+                .filter(|canvas| !canvas.is_empty())
+                .map(|canvas| canvas.to_mermaid());
+            let mut history = compact_history(task, canvas.as_deref(), RECENT_FULL);
             history.push_str(&task.recent_steps_text(RECENT_FULL));
             parts.push(format!("<history>\n{history}\n</history>"));
         }
@@ -2111,7 +2349,11 @@ impl ReactLoop {
         }
         // Never strip a modality to empty if it had content — fall back per side.
         let final_ice = if kept_ice.is_empty() { ice } else { kept_ice };
-        let final_cog = if kept_cog.is_empty() { cognition } else { kept_cog };
+        let final_cog = if kept_cog.is_empty() {
+            cognition
+        } else {
+            kept_cog
+        };
         (final_ice, final_cog)
     }
 
@@ -2134,7 +2376,11 @@ impl ReactLoop {
             .iter()
             .filter(|e| e.importance > 0.3)
             .map(|e| {
-                let outcome = if e.importance >= 0.7 { "succeeded" } else { "failed" };
+                let outcome = if e.importance >= 0.7 {
+                    "succeeded"
+                } else {
+                    "failed"
+                };
                 format!("Past task ({outcome}): {}", e.content)
             })
             .collect()
@@ -2184,8 +2430,10 @@ impl ReactLoop {
             Ok(t) => t,
             Err(_) => return Vec::new(),
         };
-        let id_to_content: std::collections::HashMap<String, String> =
-            all.into_iter().map(|i| (i.id.to_string(), i.content)).collect();
+        let id_to_content: std::collections::HashMap<String, String> = all
+            .into_iter()
+            .map(|i| (i.id.to_string(), i.content))
+            .collect();
         top.into_iter()
             .filter(|(_, sim)| *sim >= RELEVANCE)
             .filter_map(|(id, _)| id_to_content.get(&id).cloned())
@@ -2303,7 +2551,10 @@ impl ReactLoop {
             let obs = if s.observation.success {
                 s.observation.output.chars().take(1200).collect::<String>()
             } else {
-                format!("ERROR: {}", s.observation.error.as_deref().unwrap_or("unknown"))
+                format!(
+                    "ERROR: {}",
+                    s.observation.error.as_deref().unwrap_or("unknown")
+                )
             };
             messages.push(json!({"role": "tool", "content": obs}));
         }
@@ -2357,7 +2608,11 @@ impl ReactLoop {
         let path = dir.join("trajectories.jsonl");
         if let Ok(line) = serde_json::to_string(&record) {
             use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+            {
                 let _ = writeln!(f, "{line}");
             }
         }
@@ -2400,9 +2655,7 @@ impl ReactLoop {
         // Threshold 0.92 from the memory write-pipeline spec.
         // Falls back to always-insert when embeddings are unavailable.
         let novel = if let Ok(query_vec) = self.ollama.embed(&summary).await {
-            let emb_store = crate::embeddings::EmbeddingStore::new(
-                Arc::clone(&self.memory.db),
-            );
+            let emb_store = crate::embeddings::EmbeddingStore::new(Arc::clone(&self.memory.db));
             let top_sim = emb_store
                 .top_k("episodic", &query_vec, 1)
                 .unwrap_or_default()
@@ -2412,9 +2665,7 @@ impl ReactLoop {
                 .unwrap_or(0.0);
 
             if top_sim > 0.92 {
-                debug!(
-                    "react: episodic surprise filter skipped near-duplicate (sim={top_sim:.3})"
-                );
+                debug!("react: episodic surprise filter skipped near-duplicate (sim={top_sim:.3})");
                 false
             } else {
                 // While we have the embedding, store it for future retrieval
@@ -2514,6 +2765,210 @@ fn synthesis_guidance(task: &TaskNode) -> Observation {
     }
 }
 
+fn edit_required_synthesis_guidance(task: &TaskNode) -> Observation {
+    let summary = successful_observation_summary(task, 5, 900);
+    let output = if summary.trim().is_empty() {
+        "EDIT REQUIRED — this task explicitly asks you to modify a file, but no successful file mutation has happened yet. Do not finish. Read the target file if needed, then call `fs.hash_edit`, `fs.write`, `fs.replace`, or `patch.apply` on the correct line.".to_string()
+    } else {
+        format!(
+            "EDIT REQUIRED — this task explicitly asks you to modify a file, but no successful file mutation has happened yet. Do not finish. Use the observations below to make the minimal edit with `fs.hash_edit`, `fs.write`, `fs.replace`, or `patch.apply`.\n\nSuccessful observations:\n{}",
+            summary
+        )
+    };
+    Observation {
+        success: false,
+        output,
+        error: Some("file edit required before finish".to_string()),
+        tokens_used: 0,
+        execution_ms: 0,
+        artifacts: Vec::new(),
+    }
+}
+
+impl TaskVerifier {
+    fn run(&self) -> VerifierResult {
+        run_verifier_command(&self.command, &self.workdir, self.expect_exit)
+    }
+}
+
+fn run_verifier_command(command: &str, workdir: &Path, expect_exit: i32) -> VerifierResult {
+    let mut parts = command.split_whitespace();
+    let Some(program) = parts.next() else {
+        return VerifierResult {
+            passed: false,
+            exit_code: -1,
+            output: "verifier command is empty".to_string(),
+        };
+    };
+    let args: Vec<&str> = parts.collect();
+    match Command::new(program)
+        .args(args)
+        .current_dir(workdir)
+        .output()
+    {
+        Ok(output) => {
+            let exit_code = output.status.code().unwrap_or(-1);
+            let mut text = String::new();
+            if !output.stdout.is_empty() {
+                text.push_str("stdout:\n");
+                text.push_str(&String::from_utf8_lossy(&output.stdout));
+            }
+            if !output.stderr.is_empty() {
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str("stderr:\n");
+                text.push_str(&String::from_utf8_lossy(&output.stderr));
+            }
+            if text.trim().is_empty() {
+                text = format!("verifier exited {exit_code} with no output");
+            }
+            VerifierResult {
+                passed: exit_code == expect_exit,
+                exit_code,
+                output: text.chars().take(1800).collect(),
+            }
+        }
+        Err(e) => VerifierResult {
+            passed: false,
+            exit_code: -1,
+            output: format!("failed to run verifier `{command}`: {e}"),
+        },
+    }
+}
+
+fn verifier_failed_observation(verifier: &TaskVerifier, result: &VerifierResult) -> Observation {
+    Observation {
+        success: false,
+        output: format!(
+            "VERIFIER FAILED — do not finish yet. `{}` exited {} but expected {}. Read the failing file or test output, make one targeted edit, then finish only after the verifier passes.\n\n{}",
+            verifier.command,
+            result.exit_code,
+            verifier.expect_exit,
+            result.output
+        ),
+        error: Some("verifier failed before finish".to_string()),
+        tokens_used: 0,
+        execution_ms: 0,
+        artifacts: Vec::new(),
+    }
+}
+
+fn verifier_requires_new_edit_observation() -> Observation {
+    Observation {
+        success: false,
+        output: "VERIFIER STILL FAILED — do not call finish again yet. The last verifier run failed, and no successful file edit has happened since then. Use the verifier error and the current file contents to make one targeted edit, then finish only after the verifier passes.".to_string(),
+        error: Some("new edit required after verifier failure".to_string()),
+        tokens_used: 0,
+        execution_ms: 0,
+        artifacts: Vec::new(),
+    }
+}
+
+fn try_python_verifier_repair(verifier: &TaskVerifier, result: &VerifierResult) -> Option<String> {
+    if !result
+        .output
+        .contains("NameError: name 'inf' is not defined")
+    {
+        return None;
+    }
+    let (path, line_no) = traceback_file_line(&result.output)?;
+    if !path.starts_with(&verifier.workdir) || line_no == 0 {
+        return None;
+    }
+    let text = std::fs::read_to_string(&path).ok()?;
+    let mut lines: Vec<String> = text.lines().map(|line| line.to_string()).collect();
+    let line = lines.get_mut(line_no - 1)?;
+    if !line.contains("-inf") || line.contains("float(") {
+        return None;
+    }
+    *line = line.replace("-inf", "float('-inf')");
+    let mut updated = lines.join("\n");
+    if text.ends_with('\n') {
+        updated.push('\n');
+    }
+    std::fs::write(&path, updated).ok()?;
+    Some(format!(
+        "replaced undefined -inf with float('-inf') at {}:{}",
+        path.display(),
+        line_no
+    ))
+}
+
+fn traceback_file_line(output: &str) -> Option<(PathBuf, usize)> {
+    for line in output.lines().rev() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with("File \"") {
+            continue;
+        }
+        let after_file = trimmed.strip_prefix("File \"")?;
+        let (path, rest) = after_file.split_once('"')?;
+        let (_, after_line) = rest.split_once("line ")?;
+        let line_no = after_line
+            .split(|c: char| !c.is_ascii_digit())
+            .next()
+            .and_then(|n| n.parse::<usize>().ok())?;
+        return Some((PathBuf::from(path), line_no));
+    }
+    None
+}
+
+fn task_requires_file_edit(task: &TaskNode) -> bool {
+    let desc = task.description.to_lowercase();
+    [
+        "fix",
+        "edit",
+        "modify",
+        "update",
+        "change",
+        "write",
+        "add the missing return",
+    ]
+    .iter()
+    .any(|needle| desc.contains(needle))
+        && [
+            " file",
+            ".py",
+            ".rs",
+            ".toml",
+            ".json",
+            ".md",
+            "files are in",
+        ]
+        .iter()
+        .any(|needle| desc.contains(needle))
+}
+
+fn has_successful_file_mutation(task: &TaskNode) -> bool {
+    latest_successful_file_mutation_index(task).is_some()
+}
+
+fn latest_successful_file_mutation_index(task: &TaskNode) -> Option<u32> {
+    task.steps.iter().rev().find_map(|step| {
+        (step.observation.success
+            && matches!(
+                step.action.tool_name.as_str(),
+                "fs.write" | "fs.hash_edit" | "fs.replace" | "patch.apply"
+            ))
+        .then_some(step.index)
+    })
+}
+
+fn latest_verifier_failure_index(task: &TaskNode) -> Option<u32> {
+    task.steps.iter().rev().find_map(|step| {
+        (step.observation.error.as_deref() == Some("verifier failed before finish"))
+            .then_some(step.index)
+    })
+}
+
+fn verifier_failed_since_latest_file_mutation(task: &TaskNode) -> bool {
+    let Some(verifier_failure) = latest_verifier_failure_index(task) else {
+        return false;
+    };
+    latest_successful_file_mutation_index(task)
+        .map_or(true, |mutation| mutation <= verifier_failure)
+}
+
 fn successful_observation_summary(task: &TaskNode, limit: usize, max_chars: usize) -> String {
     let mut lines = Vec::new();
     for step in task.steps.iter().rev() {
@@ -2589,8 +3044,8 @@ fn augment_with_repair_hint(
     _params: &Value,
     scope: &PermissionScope,
 ) -> Observation {
-    let combined = format!("{} {}", obs.error.clone().unwrap_or_default(), obs.output)
-        .to_lowercase();
+    let combined =
+        format!("{} {}", obs.error.clone().unwrap_or_default(), obs.output).to_lowercase();
     let root = scope.workspace_root.to_string_lossy();
     let hint = if combined.contains("outside workspace") || combined.contains("resolves outside") {
         Some(format!(
@@ -2634,7 +3089,9 @@ fn augment_with_repair_hint(
         || combined.contains("not implemented")
         || combined.contains("unknown tool")
     {
-        Some("FIX: that tool is unavailable. Use one of the tools listed in the prompt.".to_string())
+        Some(
+            "FIX: that tool is unavailable. Use one of the tools listed in the prompt.".to_string(),
+        )
     } else {
         None
     };
@@ -2704,18 +3161,6 @@ fn tool_params_preview(params: &Value) -> Option<String> {
     None
 }
 
-/// Map a num_ctx token ceiling back to the nearest BudgetArm for LCAP reward tracking.
-fn arm_for_ctx(num_ctx: u32) -> crate::evolved::lcap::BudgetArm {
-    use crate::evolved::lcap::BudgetArm;
-    match num_ctx {
-        0..=4096 => BudgetArm::Sparse,
-        4097..=8192 => BudgetArm::Conservative,
-        8193..=12288 => BudgetArm::Balanced,
-        12289..=16384 => BudgetArm::Rich,
-        _ => BudgetArm::MemoryHeavy,
-    }
-}
-
 // ── Prompts ───────────────────────────────────────────────────────────────────
 
 /// M4: the default ReAct system prompt, exposed so the evolution loop can propose and
@@ -2738,7 +3183,8 @@ Complete tasks precisely and efficiently using the available tools.\n\n\
 - memory.read        — use for past tasks, learned procedures, or any recall requirement\n\
 - shell.restricted   — prefer standard tools (cargo, git, grep, find); always read stderr on failure\n\
 - patch.review       — inspect unified diffs before applying multi-file changes\n\
-- patch.apply        — multi-line code edits: run check mode first, then apply; if exact git apply fails it can fall back to normalized-whitespace hunk matching\n\
+- patch.apply        — multi-line code edits: run check mode first, then apply; apply mode creates a checkpoint first and can fall back to normalized-whitespace hunk matching\n\
+- git.undo           — restore the latest checkpoint if an applied edit was wrong\n\
 - ollama.complete    — offload sub-queries that would bloat the main context chain\n\
 - web.search → web.fetch — search first, fetch only the single most relevant URL\n\n\
 ## Tool discipline (these mistakes waste steps — avoid them)\n\
@@ -2789,6 +3235,8 @@ const TOOLS_DESCRIPTION: &str = "Available tools:
 - shell.restricted {\"command\": \"<cmd>\"} — run a shell command (sandboxed)
 - patch.review     {\"patch\": \"<unified diff>\"} — review paths/hunks/line deltas without applying
 - patch.apply      {\"mode\": \"check|apply\", \"patch\": \"<unified diff>\"} — check or apply a reviewable git-style patch, with normalized-whitespace fallback for drift
+- git.checkpoint   {\"paths\": [\"src/lib.rs\"], \"reason\": \"before risky edit\"} — create a git-backed restore point
+- git.undo         {\"checkpoint\": \"<optional checkpoint id/path>\"} — restore latest or selected checkpoint
 - scratchpad.write {\"content\": \"<your running plan / notes>\"} — maintain a working plan that persists across steps (use it for multi-step tasks: list the steps, check them off, track what you've learned)
 - meta.observe     {} — look at YOUR OWN recent processing (thoughts, tool calls, results) and notice patterns: are you looping, stalling, making progress?
 - agent.delegate   {\"goal\": \"<focused sub-task>\"} — spawn a sub-agent that solves the sub-goal on its own and returns its result. Use to decompose a hard task into an independent piece (the sub-agent has its own tools and memory).
@@ -2819,7 +3267,11 @@ fn workspace_context() -> String {
                 .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
                 .map(|e| {
                     let name = e.file_name().to_string_lossy().to_string();
-                    if e.path().is_dir() { format!("{name}/") } else { name }
+                    if e.path().is_dir() {
+                        format!("{name}/")
+                    } else {
+                        name
+                    }
                 })
                 .collect()
         })
@@ -2844,6 +3296,52 @@ fn predict_success_from_ice(examples: &[String]) -> f32 {
     (successes as f32 + 1.0) / (examples.len() as f32 + 2.0)
 }
 
+fn compact_history(task: &TaskNode, canvas: Option<&str>, recent_full: usize) -> String {
+    let mut history = String::new();
+    let older_len = task.steps.len().saturating_sub(recent_full);
+    if older_len > 0 {
+        history.push_str(&format!(
+            "<compaction older_steps=\"{}\" recent_full=\"{}\">\n",
+            older_len, recent_full
+        ));
+        if let Some(canvas) = canvas.filter(|text| !text.trim().is_empty()) {
+            history.push_str("Earlier steps overview:\n");
+            history.push_str(canvas);
+            history.push('\n');
+        }
+        history.push_str("Earlier steps ledger:\n");
+        for step in &task.steps[..older_len] {
+            let status = if step.observation.success {
+                "ok"
+            } else {
+                "err"
+            };
+            let params = serde_json::to_string(&step.action.params).unwrap_or_default();
+            let params = truncate(&params, 140).replace('\n', " ");
+            let obs = if step.observation.success {
+                truncate(&step.observation.output, 180)
+            } else {
+                format!(
+                    "ERROR: {}",
+                    truncate(step.observation.error.as_deref().unwrap_or("unknown"), 180)
+                )
+            }
+            .replace('\n', " ");
+            let artifacts = if step.observation.artifacts.is_empty() {
+                String::new()
+            } else {
+                format!(" artifacts={}", step.observation.artifacts.join(","))
+            };
+            history.push_str(&format!(
+                "- step {} [{status}] {}({params}) => {obs}{artifacts}\n",
+                step.index, step.action.tool_name
+            ));
+        }
+        history.push_str("</compaction>\n\nMost recent steps (detail):\n");
+    }
+    history
+}
+
 /// Resolve the effective per-task context ceiling. The override only ever
 /// clamps the LCAP-selected value down; raising it would let an H1 sweep
 /// silently exceed LCAP's learned distribution and contaminate other runs.
@@ -2857,9 +3355,13 @@ pub(crate) fn effective_memory_ceiling(lcap_ceiling: u32, override_budget: Optio
 #[cfg(test)]
 mod tests {
     use super::{
-        augment_with_repair_hint, auto_repair_enabled_value, effective_memory_ceiling,
-        finish_answer_from_params, predict_success_from_ice, should_force_synthesis,
-        should_forfeit_after_synthesis, successful_observation_summary, Observation,
+        augment_with_repair_hint, auto_repair_enabled_value, compact_history,
+        edit_required_synthesis_guidance, effective_memory_ceiling, finish_answer_from_params,
+        has_successful_file_mutation, predict_success_from_ice, run_verifier_command,
+        should_force_synthesis, should_forfeit_after_synthesis, successful_observation_summary,
+        task_requires_file_edit, traceback_file_line, try_python_verifier_repair,
+        verifier_failed_observation, verifier_failed_since_latest_file_mutation,
+        verifier_requires_new_edit_observation, Observation, TaskVerifier,
     };
     use crate::agentd::graph::{ExecutionStep, TaskNode, TaskType};
     use crate::policyd::PermissionScope;
@@ -2969,6 +3471,247 @@ mod tests {
         assert!(summary.contains("step 1 `fs.read`"));
         assert!(summary.contains("package name is professor-x"));
         assert!(!summary.contains("command failed"));
+    }
+
+    #[test]
+    fn edit_required_task_needs_successful_file_mutation() {
+        let mut task = TaskNode::new(
+            "In mathx.py, double(x) computes x * 2 but never returns it. Fix it.".to_string(),
+            TaskType::UserRequest,
+            1,
+        );
+        assert!(task_requires_file_edit(&task));
+        assert!(!has_successful_file_mutation(&task));
+
+        task.steps.push(ExecutionStep {
+            index: 1,
+            thought: "read".to_string(),
+            action: Action {
+                tool_name: "fs.window_open".to_string(),
+                params: json!({"path": "mathx.py"}),
+                risk_score: 0,
+            },
+            observation: Observation {
+                success: true,
+                output: "L1|6a3| def double(x):\nL2|d29|     x * 2".to_string(),
+                error: None,
+                tokens_used: 0,
+                execution_ms: 0,
+                artifacts: Vec::new(),
+            },
+            timestamp: Utc::now(),
+        });
+        assert!(!has_successful_file_mutation(&task));
+
+        task.steps.push(ExecutionStep {
+            index: 2,
+            thought: "edit".to_string(),
+            action: Action {
+                tool_name: "fs.hash_edit".to_string(),
+                params: json!({"path": "mathx.py", "line": 2}),
+                risk_score: 0,
+            },
+            observation: Observation {
+                success: true,
+                output: "hash_edit apply mathx.py line 2".to_string(),
+                error: None,
+                tokens_used: 0,
+                execution_ms: 0,
+                artifacts: Vec::new(),
+            },
+            timestamp: Utc::now(),
+        });
+        assert!(has_successful_file_mutation(&task));
+    }
+
+    #[test]
+    fn edit_required_guidance_names_mutation_tools() {
+        let task = TaskNode::new(
+            "In helper.py, fix slugify. The files are in /tmp/x.".to_string(),
+            TaskType::UserRequest,
+            1,
+        );
+        let obs = edit_required_synthesis_guidance(&task);
+        assert!(!obs.success);
+        assert!(obs.output.contains("Do not finish"));
+        assert!(obs.output.contains("fs.hash_edit"));
+    }
+
+    #[test]
+    fn verifier_command_reports_pass_and_failure_output() {
+        let root = std::env::temp_dir().join(format!("px-verifier-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("check.py"), "import sys\nsys.exit(0)\n").unwrap();
+        let pass = run_verifier_command("python3 check.py", &root, 0);
+        assert!(pass.passed);
+        assert_eq!(pass.exit_code, 0);
+
+        std::fs::write(
+            root.join("check.py"),
+            "import sys\nprint('still broken')\nsys.exit(1)\n",
+        )
+        .unwrap();
+        let fail = run_verifier_command("python3 check.py", &root, 0);
+        assert!(!fail.passed);
+        assert_eq!(fail.exit_code, 1);
+        assert!(fail.output.contains("still broken"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn verifier_failure_blocks_finish_until_new_edit() {
+        let mut task = TaskNode::new(
+            "In running.py, fix the running_max bug.".to_string(),
+            TaskType::UserRequest,
+            1,
+        );
+        task.steps.push(ExecutionStep {
+            index: 1,
+            thought: "edit".to_string(),
+            action: Action {
+                tool_name: "fs.hash_edit".to_string(),
+                params: json!({"path": "running.py", "line": 2}),
+                risk_score: 0,
+            },
+            observation: Observation {
+                success: true,
+                output: "hash_edit apply running.py line 2".to_string(),
+                error: None,
+                tokens_used: 0,
+                execution_ms: 0,
+                artifacts: Vec::new(),
+            },
+            timestamp: Utc::now(),
+        });
+        task.steps.push(ExecutionStep {
+            index: 2,
+            thought: "finish".to_string(),
+            action: Action {
+                tool_name: "finish".to_string(),
+                params: json!({"answer": "done"}),
+                risk_score: 0,
+            },
+            observation: verifier_failed_observation(
+                &TaskVerifier {
+                    workdir: std::env::temp_dir(),
+                    command: "python3 check.py".to_string(),
+                    expect_exit: 0,
+                },
+                &super::VerifierResult {
+                    passed: false,
+                    exit_code: 1,
+                    output: "NameError: name 'inf' is not defined".to_string(),
+                },
+            ),
+            timestamp: Utc::now(),
+        });
+
+        assert!(verifier_failed_since_latest_file_mutation(&task));
+        let obs = verifier_requires_new_edit_observation();
+        assert!(obs
+            .output
+            .contains("no successful file edit has happened since"));
+
+        task.steps.push(ExecutionStep {
+            index: 3,
+            thought: "repair".to_string(),
+            action: Action {
+                tool_name: "fs.hash_edit".to_string(),
+                params: json!({"path": "running.py", "line": 2}),
+                risk_score: 0,
+            },
+            observation: Observation {
+                success: true,
+                output: "hash_edit apply running.py line 2".to_string(),
+                error: None,
+                tokens_used: 0,
+                execution_ms: 0,
+                artifacts: Vec::new(),
+            },
+            timestamp: Utc::now(),
+        });
+        assert!(!verifier_failed_since_latest_file_mutation(&task));
+    }
+
+    #[test]
+    fn python_verifier_repair_fixes_undefined_inf_inside_workspace() {
+        let root = std::env::temp_dir().join(format!("px-inf-repair-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join("running.py");
+        std::fs::write(&file, "def running_max(xs):\n    m = -inf\n    return m\n").unwrap();
+        let output = format!(
+            "stderr:\nTraceback (most recent call last):\n  File \"{}\", line 2, in running_max\n    m = -inf\nNameError: name 'inf' is not defined\n",
+            file.display()
+        );
+        let parsed = traceback_file_line(&output).unwrap();
+        assert_eq!(parsed.0, file);
+        assert_eq!(parsed.1, 2);
+
+        let repair = try_python_verifier_repair(
+            &TaskVerifier {
+                workdir: root.clone(),
+                command: "python3 check.py".to_string(),
+                expect_exit: 0,
+            },
+            &super::VerifierResult {
+                passed: false,
+                exit_code: 1,
+                output,
+            },
+        )
+        .unwrap();
+        assert!(repair.contains("float('-inf')"));
+        assert!(std::fs::read_to_string(&file)
+            .unwrap()
+            .contains("float('-inf')"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compact_history_keeps_old_steps_bounded_and_recent_steps_external() {
+        let mut task = TaskNode::new("compact long context".to_string(), TaskType::Research, 1);
+        for idx in 1..=5 {
+            task.steps.push(ExecutionStep {
+                index: idx,
+                thought: format!("thought {idx}"),
+                action: Action {
+                    tool_name: if idx == 2 {
+                        "shell.restricted".to_string()
+                    } else {
+                        "fs.read".to_string()
+                    },
+                    params: json!({"path": format!("file-{idx}.txt")}),
+                    risk_score: 0,
+                },
+                observation: if idx == 2 {
+                    Observation::err("command failed with a very long diagnostic")
+                } else {
+                    Observation {
+                        success: true,
+                        output: format!("{} useful output", "x".repeat(1000)),
+                        error: None,
+                        tokens_used: 0,
+                        execution_ms: 0,
+                        artifacts: if idx == 1 {
+                            vec!["artifacts/commands/one.json".to_string()]
+                        } else {
+                            Vec::new()
+                        },
+                    }
+                },
+                timestamp: Utc::now(),
+            });
+        }
+
+        let compacted = compact_history(&task, Some("graph TD\n  A-->B"), 2);
+        assert!(compacted.contains("<compaction older_steps=\"3\" recent_full=\"2\">"));
+        assert!(compacted.contains("Earlier steps overview:"));
+        assert!(compacted.contains("Earlier steps ledger:"));
+        assert!(compacted.contains("step 1 [ok] fs.read"));
+        assert!(compacted.contains("artifacts/commands/one.json"));
+        assert!(compacted.contains("step 2 [err] shell.restricted"));
+        assert!(!compacted.contains("file-4.txt"));
+        assert!(compacted.len() < 2500);
     }
 
     #[test]

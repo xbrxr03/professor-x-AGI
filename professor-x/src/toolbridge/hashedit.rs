@@ -85,8 +85,12 @@ fn apply_by_line(content: &str, line: usize, new_text: &str) -> Result<String> {
     let mut lines = split_preserving_trailing_newline(content);
     let idx = line - 1;
     let Some(current) = lines.get_mut(idx) else {
-        bail!("line {line} is outside file; file has {} line(s)", lines.len());
+        bail!(
+            "line {line} is outside file; file has {} line(s)",
+            lines.len()
+        );
     };
+    reject_obvious_python_wrong_line_edit(current, new_text)?;
     *current = new_text.to_string();
     Ok(join_preserving_final_newline(
         &lines,
@@ -122,11 +126,34 @@ pub fn hash_edit_content(
         );
     }
 
+    reject_obvious_python_wrong_line_edit(current, new_text)?;
     *current = new_text.to_string();
     Ok(join_preserving_final_newline(
         &lines,
         content.ends_with('\n'),
     ))
+}
+
+fn reject_obvious_python_wrong_line_edit(current: &str, new_text: &str) -> Result<()> {
+    let current_trimmed = current.trim_start();
+    let new_trimmed = new_text.trim_start();
+    let new_is_indented = new_text.starts_with(' ') || new_text.starts_with('\t');
+    if current_trimmed.starts_with("def ")
+        && current_trimmed.ends_with(':')
+        && new_is_indented
+        && (new_trimmed.starts_with("return ")
+            || new_trimmed.starts_with("raise ")
+            || new_trimmed.starts_with("if ")
+            || new_trimmed.starts_with("for ")
+            || new_trimmed.starts_with("while "))
+    {
+        bail!(
+            "refusing likely wrong-line Python edit: attempted to replace function definition `{}` with indented body `{}`; edit the function body line instead",
+            current_trimmed,
+            new_trimmed
+        );
+    }
+    Ok(())
 }
 
 pub fn line_hash(line: &str, chars: usize) -> String {
@@ -173,5 +200,25 @@ mod tests {
     fn hash_edit_rejects_stale_hash_without_change() {
         let err = hash_edit_content("alpha\nbeta\n", 2, "bad", "gamma").unwrap_err();
         assert!(err.to_string().contains("stale line hash"));
+    }
+
+    #[test]
+    fn hash_edit_rejects_python_def_replaced_by_indented_body() {
+        let hash = line_hash("def mul(a, b):", 3);
+        let err = hash_edit_content(
+            "def mul(a, b):\n    return a + b\n",
+            1,
+            &hash,
+            "    return a * b",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("wrong-line Python edit"));
+    }
+
+    #[test]
+    fn hash_edit_line_fallback_rejects_python_def_replaced_by_indented_body() {
+        let err =
+            apply_by_line("def mul(a, b):\n    return a + b\n", 1, "    return a * b").unwrap_err();
+        assert!(err.to_string().contains("wrong-line Python edit"));
     }
 }

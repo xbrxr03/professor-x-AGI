@@ -2,18 +2,19 @@ mod agentd;
 mod artifacts;
 mod embeddings;
 mod evolved;
+mod failure;
 mod local_embed;
-mod serve;
-mod tui;
-mod util;
 mod memd;
 mod observer;
 mod ollama;
 mod policyd;
+mod serve;
 mod toolbridge;
+mod tui;
+mod util;
 
 use anyhow::{Context, Result};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -27,28 +28,33 @@ use agentd::graph::{ExecutionStep, TaskStatus};
 use agentd::react::ReactLoop;
 use agentd::{TaskNode, TaskQueue, TaskType};
 use artifacts::ArtifactValidator;
-use evolved::CognitionStore;
 use evolved::cognition_base::CognitionItem;
 use evolved::hiro::load_task_inventory;
 use evolved::proposer::{ChangeManifest, EvolutionNode, HarnessComponent, VerificationStatus};
 use evolved::tracker::{OutcomeTracker, TaskOutcome};
 use evolved::verify_diff_in_sandbox;
 use evolved::verify_node_in_sandbox;
+use evolved::CognitionStore;
 use evolved::{EvolvedLoop, HiroRunner};
-use memd::MemoryManager;
-use memd::pinned::PinnedEntry;
+use failure::{classify_failure_mode, normalize_failure_mode, FailureClass};
 use memd::autonomy_queue::{autonomy_queue_brief, AutonomyQueueItem, AutonomyQueueStore};
-use memd::coding_sessions::{CodingSessionRecord, CodingSessionStore};
+use memd::coding_sessions::{
+    display_status as coding_session_display_status, stale_candidate, CodingSessionRecord,
+    CodingSessionStaleCandidate, CodingSessionStore,
+};
 use memd::coding_smoke::{CodingSmokeRecord, CodingSmokeStore};
 use memd::events::EventStore;
+use memd::pinned::PinnedEntry;
 use memd::task_runs::{TaskRun, TaskRunStore};
 use memd::transcripts::{TranscriptStore, TranscriptSummary};
 use memd::work_loops::{
     WorkLoopGateRecord, WorkLoopGateStore, WorkLoopPlannedJob, WorkLoopRunRecord, WorkLoopRunStore,
     WorkLoopSmokeRecord,
 };
+use memd::MemoryManager;
 use policyd::{AuditStore, Decision, PermissionScope, PolicyEngine};
 use toolbridge::executor::{Action, Observation};
+use toolbridge::shell_sandbox::shell_sandbox_posture_line;
 use toolbridge::{ToolExecutor, ToolRegistry};
 
 // ── CLI args ──────────────────────────────────────────────────────────────────
@@ -76,6 +82,8 @@ struct CliArgs {
     dry_run_daily: bool,
     /// Print current daemon/scheduler/event status and exit.
     status: bool,
+    /// Print a machine-readable one-shot Prof X work status JSON document.
+    status_json: bool,
     /// Print the last N agent events and exit.
     events_limit: Option<usize>,
     /// Print the last N work/task/tool events and exit.
@@ -161,6 +169,8 @@ struct CliArgs {
     skill_patch_commit_live_goal: Option<String>,
     /// Print the last N coding-agent sessions and exit.
     coding_sessions_limit: Option<usize>,
+    /// Reconcile stale coding-agent sessions that never wrote a terminal report.
+    repair_coding_sessions_limit: Option<usize>,
     /// Review one coding-agent session by id prefix, or 'latest'.
     coding_session_review: Option<String>,
     /// Publish one coding-agent session evidence bundle by id prefix, or 'latest'.
@@ -299,6 +309,7 @@ where
         memory_budget: None,
         dry_run_daily: false,
         status: false,
+        status_json: false,
         events_limit: None,
         work_feed_limit: None,
         transcripts_limit: None,
@@ -343,6 +354,7 @@ where
         skill_patch_live_goal: None,
         skill_patch_commit_live_goal: None,
         coding_sessions_limit: None,
+        repair_coding_sessions_limit: None,
         coding_session_review: None,
         coding_session_publish: None,
         supervised_loop_cycles: None,
@@ -432,6 +444,10 @@ where
             }
             "--status" => {
                 cli.status = true;
+                i += 1;
+            }
+            "--status-json" | "--prof-x-status-json" | "--work-status-json" => {
+                cli.status_json = true;
                 i += 1;
             }
             "--events" => {
@@ -694,6 +710,14 @@ where
                 cli.coding_sessions_limit = Some(limit.unwrap_or(10));
                 i += if limit.is_some() { 2 } else { 1 };
             }
+            "--repair-coding-sessions" | "--prof-x-code-repair" => {
+                let limit = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .and_then(|next| next.parse::<usize>().ok());
+                cli.repair_coding_sessions_limit = Some(limit.unwrap_or(10));
+                i += if limit.is_some() { 2 } else { 1 };
+            }
             "--coding-session-review" | "--prof-x-code-review" | "--session-review" => {
                 let value = args
                     .get(i + 1)
@@ -826,7 +850,7 @@ where
                     .get(i + 1)
                     .filter(|next| !next.starts_with("--"))
                     .and_then(|next| next.parse::<u32>().ok());
-                cli.operator_run_commit_cycles = Some(cycles.unwrap_or(5));
+                cli.operator_run_commit_cycles = Some(cycles.unwrap_or(6));
                 i += if cycles.is_some() { 2 } else { 1 };
             }
             "--operator-run-publish" | "--operator-run-commit-publish" => {
@@ -834,7 +858,7 @@ where
                     .get(i + 1)
                     .filter(|next| !next.starts_with("--"))
                     .and_then(|next| next.parse::<u32>().ok());
-                cli.operator_run_commit_cycles = Some(cycles.unwrap_or(5));
+                cli.operator_run_commit_cycles = Some(cycles.unwrap_or(6));
                 cli.publish_after_run = true;
                 i += if cycles.is_some() { 2 } else { 1 };
             }
@@ -843,7 +867,7 @@ where
                     .get(i + 1)
                     .filter(|next| !next.starts_with("--"))
                     .and_then(|next| next.parse::<u32>().ok());
-                cli.operator_run_live_cycles = Some(cycles.unwrap_or(5));
+                cli.operator_run_live_cycles = Some(cycles.unwrap_or(6));
                 i += if cycles.is_some() { 2 } else { 1 };
             }
             "--operator-run-publish-live"
@@ -853,7 +877,7 @@ where
                     .get(i + 1)
                     .filter(|next| !next.starts_with("--"))
                     .and_then(|next| next.parse::<u32>().ok());
-                cli.operator_run_live_cycles = Some(cycles.unwrap_or(5));
+                cli.operator_run_live_cycles = Some(cycles.unwrap_or(6));
                 cli.publish_after_run = true;
                 i += if cycles.is_some() { 2 } else { 1 };
             }
@@ -874,7 +898,7 @@ where
                     .get(i + 1)
                     .filter(|next| !next.starts_with("--"))
                     .and_then(|next| next.parse::<u32>().ok());
-                cli.autonomous_run_commit_cycles = Some(cycles.unwrap_or(5));
+                cli.autonomous_run_commit_cycles = Some(cycles.unwrap_or(6));
                 i += if cycles.is_some() { 2 } else { 1 };
             }
             "--autonomous-run-publish"
@@ -885,7 +909,7 @@ where
                     .get(i + 1)
                     .filter(|next| !next.starts_with("--"))
                     .and_then(|next| next.parse::<u32>().ok());
-                cli.autonomous_run_commit_cycles = Some(cycles.unwrap_or(5));
+                cli.autonomous_run_commit_cycles = Some(cycles.unwrap_or(6));
                 cli.publish_after_run = true;
                 i += if cycles.is_some() { 2 } else { 1 };
             }
@@ -951,11 +975,13 @@ async fn main() -> Result<()> {
     }
 
     let inspect_mode = cli.status
+        || cli.status_json
         || cli.events_limit.is_some()
         || cli.work_feed_limit.is_some()
         || cli.transcripts_limit.is_some()
         || cli.task_runs_limit.is_some()
         || cli.coding_sessions_limit.is_some()
+        || cli.repair_coding_sessions_limit.is_some()
         || cli.coding_session_review.is_some()
         || cli.autonomy_queue_limit.is_some()
         || cli.autonomy_enqueue_goal.is_some()
@@ -971,6 +997,7 @@ async fn main() -> Result<()> {
         || cli.publish_run.is_some()
         || cli.watch
         || cli.watch_work
+        || cli.work_cockpit_once
         || cli.observe_work_limit.is_some()
         || cli.observe
         || cli.lab
@@ -1022,6 +1049,10 @@ async fn main() -> Result<()> {
         return observer::print_snapshot(Arc::clone(&memory), Arc::clone(&events));
     }
 
+    if cli.status_json {
+        return print_work_status_json(Arc::clone(&memory), Arc::clone(&events), 16);
+    }
+
     if let Some(limit) = cli.events_limit {
         return print_events(Arc::clone(&events), limit);
     }
@@ -1040,6 +1071,10 @@ async fn main() -> Result<()> {
 
     if let Some(limit) = cli.coding_sessions_limit {
         return print_coding_sessions(Arc::clone(&memory), limit);
+    }
+
+    if let Some(limit) = cli.repair_coding_sessions_limit {
+        return repair_stale_coding_sessions(Arc::clone(&memory), Arc::clone(&events), limit);
     }
 
     if let Some(session_ref) = cli.coding_session_review {
@@ -1508,7 +1543,10 @@ async fn main() -> Result<()> {
                 if let Err(e) = memory.pinned.upsert(&entry) {
                     warn!("startup: failed to seed pinned identity: {e}");
                 } else {
-                    info!("startup: pinned identity seeded from {}", persona_path.display());
+                    info!(
+                        "startup: pinned identity seeded from {}",
+                        persona_path.display()
+                    );
                 }
                 // ── self-model: seed round-0 Strange Loop snapshot ──────────
                 if let Err(e) = memory.self_model.seed_if_empty(content) {
@@ -1532,7 +1570,11 @@ async fn main() -> Result<()> {
     // installed" = "best this machine can do"); else the 8B default.
     let ollama = {
         let probe = ollama::OllamaClient::new("http://localhost:11434");
-        let chosen = match cli.model.clone().or_else(|| std::env::var("PROFESSOR_X_MODEL").ok()) {
+        let chosen = match cli
+            .model
+            .clone()
+            .or_else(|| std::env::var("PROFESSOR_X_MODEL").ok())
+        {
             Some(m) => m,
             None => probe
                 .best_local_model()
@@ -1697,6 +1739,7 @@ async fn main() -> Result<()> {
             Arc::clone(&policy),
             Arc::clone(&memory),
             Arc::clone(&events),
+            Arc::clone(&transcripts),
             cancel,
         )
         .await;
@@ -1784,7 +1827,13 @@ async fn main() -> Result<()> {
         if std::env::args().len() == 1 && std::io::stdin().is_terminal() {
             ensure_folder_trusted();
             return run_interactive_tasks(
-                ollama, registry, policy, memory, events, transcripts, cancel,
+                ollama,
+                registry,
+                policy,
+                memory,
+                events,
+                transcripts,
+                cancel,
             )
             .await;
         }
@@ -1838,7 +1887,11 @@ fn ensure_folder_trusted() {
     let ans = line.trim().to_lowercase();
     if ans == "y" || ans == "yes" {
         let _ = std::fs::create_dir_all(&dir);
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&trust_file) {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&trust_file)
+        {
             let _ = writeln!(f, "{cwd}");
         }
         println!("  ✓ trusted.\n");
@@ -2633,7 +2686,13 @@ async fn run_patch_apply_commit_live(events: Arc<EventStore>, patch_path: PathBu
     }
 }
 
-fn write_autonomous_patch_apply_smoke_patch() -> Result<PathBuf> {
+fn write_patch_apply_commit_patch(operator_goal: Option<&str>) -> Result<PathBuf> {
+    if let Some(goal) = operator_goal
+        .map(normalize_operator_goal)
+        .filter(|goal| !goal.is_empty())
+    {
+        return Ok(write_operator_skill_patch(&goal)?.patch_path);
+    }
     let skill_name = format!(
         "px-autonomous-patch-{}",
         chrono::Utc::now().format("%Y%m%d-%H%M%S")
@@ -2685,7 +2744,11 @@ fn write_operator_skill_patch(goal: &str) -> Result<OperatorSkillPatch> {
 fn operator_skill_session_goal(patch: &OperatorSkillPatch, commit: bool) -> String {
     format!(
         "operator goal skill session: {} goal='{}' skill={} path={} patch={}",
-        if commit { "verify, apply, and commit" } else { "verify" },
+        if commit {
+            "verify, apply, and commit"
+        } else {
+            "verify"
+        },
         patch.goal,
         patch.skill_name,
         patch.skill_path.display(),
@@ -2961,10 +3024,7 @@ fn operator_proposal_node(skill_name: &str, operator_goal: Option<&str>) -> Evol
         HarnessComponent::SkillDefinition(skill_name.to_string()),
         body.clone(),
         ChangeManifest {
-            evidence_cited: vec![
-                "autonomy-queue".to_string(),
-                "operator-goal".to_string(),
-            ],
+            evidence_cited: vec!["autonomy-queue".to_string(), "operator-goal".to_string()],
             root_cause: goal
                 .as_ref()
                 .map(|goal| format!("queued operator goal needs a durable reusable skill: {goal}"))
@@ -3559,6 +3619,15 @@ struct CodingSessionReport {
     failure_reason: Option<String>,
 }
 
+struct RepoPatchCommitCodingSessionOutcome {
+    passed: bool,
+    session_id: String,
+    session_report_path: PathBuf,
+    evidence_path: PathBuf,
+    verification: PatchVerificationReport,
+    verification_path: PathBuf,
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SupervisedLoopReport {
     run_id: String,
@@ -3929,10 +3998,11 @@ fn plan_next_autonomy_queue_item(recent_runs: &[WorkLoopRunRecord]) -> AutonomyQ
         };
     }
 
-    if !operator_runs
-        .iter()
-        .any(|run| run.smoke_records.iter().any(|record| record.kind == "proposal_dry_run" && record.passed))
-    {
+    if !operator_runs.iter().any(|run| {
+        run.smoke_records
+            .iter()
+            .any(|record| record.kind == "proposal_dry_run" && record.passed)
+    }) {
         return AutonomyQueuePlan {
             goal: "complete core autonomy coverage: coding smoke, evolution smoke, HIRO smoke, and proposal dry-run".to_string(),
             kind: "operator_run".to_string(),
@@ -3943,17 +4013,31 @@ fn plan_next_autonomy_queue_item(recent_runs: &[WorkLoopRunRecord]) -> AutonomyQ
         };
     }
 
-    if !operator_runs
-        .iter()
-        .any(|run| run.smoke_records.iter().any(|record| record.kind == "patch_apply_commit" && record.passed))
-    {
+    let has_patch_apply_commit = operator_runs.iter().any(|run| {
+        run.smoke_records
+            .iter()
+            .any(|record| record.kind == "patch_apply_commit" && record.passed)
+    });
+    let has_operator_commit = operator_runs.iter().any(|run| {
+        run.smoke_records
+            .iter()
+            .any(|record| record.kind == "operator_commit" && record.passed)
+    });
+    if !has_patch_apply_commit || !has_operator_commit {
+        let reason = if !has_patch_apply_commit {
+            "core proposal dry-run evidence exists but no passed patch_apply_commit gate is recorded"
+                .to_string()
+        } else {
+            "verified patch apply evidence exists but no passed operator_commit gate is recorded"
+                .to_string()
+        };
         return AutonomyQueuePlan {
-            goal: "advance to commit-capable autonomy: run verified patch apply and commit gate after core safety coverage".to_string(),
+            goal: "advance to commit-capable autonomy: run verified patch apply and final operator commit gates after core safety coverage".to_string(),
             kind: "operator_run".to_string(),
             profile: WorkLoopProfile::Commit,
-            cycles: 5,
+            cycles: 6,
             priority: 60,
-            reason: "core proposal dry-run evidence exists but no passed patch_apply_commit gate is recorded".to_string(),
+            reason,
         };
     }
 
@@ -4146,7 +4230,7 @@ fn enqueue_operator_autonomy_goal(
     let cycles = match profile {
         WorkLoopProfile::Basic => 1,
         WorkLoopProfile::Core => 4,
-        WorkLoopProfile::Commit => 5,
+        WorkLoopProfile::Commit => 6,
     };
     let priority = match profile {
         WorkLoopProfile::Basic => 45,
@@ -4310,8 +4394,7 @@ async fn run_autonomy_queue_steps(
         )
         .await;
         let latest_run = WorkLoopRunStore::new(Arc::clone(&memory.db)).latest()?;
-        let new_run = latest_run
-            .filter(|run| Some(run.run_id.clone()) != before_run);
+        let new_run = latest_run.filter(|run| Some(run.run_id.clone()) != before_run);
         match result {
             Ok(()) => {
                 store.mark_finished(
@@ -4325,7 +4408,10 @@ async fn run_autonomy_queue_steps(
                     None,
                     None,
                     "autonomy.queue.completed",
-                    format!("completed autonomous queue item {}", short_fragment(&item.id)),
+                    format!(
+                        "completed autonomous queue item {}",
+                        short_fragment(&item.id)
+                    ),
                     serde_json::json!({
                         "queue_id": item.id,
                         "result_run_id": new_run.as_ref().map(|run| run.run_id.clone()),
@@ -4349,7 +4435,11 @@ async fn run_autonomy_queue_steps(
                     None,
                     None,
                     "autonomy.queue.failed",
-                    format!("failed autonomous queue item {}: {}", short_fragment(&item.id), truncate(&reason, 100)),
+                    format!(
+                        "failed autonomous queue item {}: {}",
+                        short_fragment(&item.id),
+                        truncate(&reason, 100)
+                    ),
                     serde_json::json!({
                         "queue_id": item.id,
                         "result_run_id": new_run.as_ref().map(|run| run.run_id.clone()),
@@ -4535,7 +4625,10 @@ fn print_latest_live_run_summary(
     };
     let run_ref = short_fragment(&run.run_id);
     println!("Professor X live run complete");
-    println!("{}", format_run_log_entry(&run, run_ledger_path(&run).as_deref()));
+    println!(
+        "{}",
+        format_run_log_entry(&run, run_ledger_path(&run).as_deref())
+    );
     println!("  L watch latest cargo run -- --observe-work");
     println!("  L replay latest cargo run -- --replay {run_ref}");
     println!("  L review latest cargo run -- --run-review {run_ref}");
@@ -4675,13 +4768,7 @@ async fn run_supervised_loop(
         let detail = cycle_record.map(|record| record.detail.clone());
         let commit = cycle_record.and_then(smoke_record_commit);
 
-        gate_store.finish(
-            &run_id,
-            cycle,
-            passed,
-            cycle_record,
-            error.as_deref(),
-        )?;
+        gate_store.finish(&run_id, cycle, passed, cycle_record, error.as_deref())?;
 
         events.append(
             None,
@@ -4919,26 +5006,30 @@ async fn run_work_loop_job(
             })
         }
         WorkLoopJob::PatchApplyCommit => {
-            let patch_path = write_autonomous_patch_apply_smoke_patch()?;
-            let (report, path) = execute_patch_apply_commit(
+            let operator_goal = context.and_then(|ctx| ctx.operator_goal.clone());
+            let patch_path = write_patch_apply_commit_patch(operator_goal.as_deref())?;
+            let outcome = execute_repo_patch_commit_coding_session_with_goal(
+                policy,
+                memory,
                 Arc::clone(&events),
                 patch_path,
-                context.and_then(|ctx| ctx.operator_goal.clone()),
+                operator_goal,
             )
             .await?;
             Ok(WorkLoopSmokeRecord {
                 cycle: 0,
                 kind: job.kind().to_string(),
                 smoke_id: None,
-                passed: report.accepted && report.applied && report.commit.is_some(),
-                report_path: path.display().to_string(),
+                passed: outcome.passed,
+                report_path: outcome.verification_path.display().to_string(),
                 transcript_path: None,
-                workspace: report.workspace,
+                workspace: outcome.verification.workspace,
                 detail: format!(
-                    "{} check(s), commit={}, diff_bytes={}",
-                    report.checks.len(),
-                    report.commit.as_deref().unwrap_or("none"),
-                    report.diff_bytes
+                    "{} check(s), commit={}, diff_bytes={}, session={}",
+                    outcome.verification.checks.len(),
+                    outcome.verification.commit.as_deref().unwrap_or("none"),
+                    outcome.verification.diff_bytes,
+                    short_fragment(&outcome.session_id),
                 ),
             })
         }
@@ -4968,7 +5059,10 @@ async fn run_work_loop_job(
 }
 
 fn smoke_record_commit(record: &WorkLoopSmokeRecord) -> Option<String> {
-    if !matches!(record.kind.as_str(), "patch_apply_commit" | "operator_commit") {
+    if !matches!(
+        record.kind.as_str(),
+        "patch_apply_commit" | "operator_commit"
+    ) {
         return None;
     }
     let path = resolve_report_reference(&default_repo_root(), &record.report_path);
@@ -4990,7 +5084,10 @@ fn work_timeline_entry(event: &memd::events::AgentEvent) -> WorkTimelineEntry {
         timestamp: event.timestamp.to_rfc3339(),
         label: work_event_label(&event.event_type).to_string(),
         action: event_action(event).to_string(),
-        task_id: event.task_id.as_ref().map(|id| short_fragment(id).to_string()),
+        task_id: event
+            .task_id
+            .as_ref()
+            .map(|id| short_fragment(id).to_string()),
         run_id: event.payload["run_id"]
             .as_str()
             .map(|run| short_fragment(run).to_string()),
@@ -5001,7 +5098,9 @@ fn work_timeline_entry(event: &memd::events::AgentEvent) -> WorkTimelineEntry {
         passed: event.payload["passed"].as_bool(),
         summary: event.summary.clone(),
         detail: event_detail_for_timeline(event),
-        report_path: event.payload["report_path"].as_str().map(ToString::to_string),
+        report_path: event.payload["report_path"]
+            .as_str()
+            .map(ToString::to_string),
         transcript_path: event.payload["transcript_path"]
             .as_str()
             .map(ToString::to_string),
@@ -5640,54 +5739,14 @@ async fn run_coding_session_inner(
             .unwrap_or_default(),
         failure_reason,
     };
-    let (report_path, evidence_path) = finalize_coding_session_report(&mut report)?;
-
-    CodingSessionStore::new(Arc::clone(&memory.db)).insert(&CodingSessionRecord {
-        id: session_id.clone(),
+    let (report_path, _evidence_path) = persist_coding_session_terminal_report(
+        Arc::clone(&memory),
+        Arc::clone(&events),
+        uuid::Uuid::parse_str(&session_id)?,
         generated_at,
-        goal: requested_goal,
-        exercise: exercise.name.to_string(),
-        status: report.status.clone(),
-        workspace: report.workspace.clone(),
-        smoke_id: report.smoke_id,
-        smoke_report_path: report.smoke_report_path.clone(),
-        session_report_path: report_path.display().to_string(),
-        transcript_path: report.transcript_path.clone(),
-        artifacts: report.artifacts.clone(),
-        checks: report.checks.clone(),
-        plan_steps,
-        step_outcomes,
-        failure_reason: report.failure_reason.clone(),
-        recorded_at: chrono::Utc::now(),
-    })?;
-
-    events.append(
-        None,
-        None,
-        "coding.session.evidence_written",
-        format!(
-            "coding session evidence written to {}",
-            evidence_path.display()
-        ),
-        serde_json::json!({
-            "session_id": session_id.clone(),
-            "exercise": exercise.name,
-            "session_report_path": report_path.display().to_string(),
-            "evidence_path": evidence_path.display().to_string(),
-            "artifacts": report.artifacts.clone(),
-        }),
-    )?;
-
-    events.append(
-        None,
-        None,
-        if passed {
-            "coding.session.passed"
-        } else {
-            "coding.session.failed"
-        },
-        format!("coding session report written to {}", report_path.display()),
-        serde_json::to_value(&report)?,
+        &mut report,
+        "coding session evidence written to",
+        "coding session report written to",
     )?;
 
     if print_summary {
@@ -5879,11 +5938,110 @@ async fn run_repo_patch_coding_session_with_goal(
         }),
     )?;
     if gate.decision != Decision::Allow {
+        let step_outcomes = vec![format!(
+            "policy gate denied patch.apply check mode: {}",
+            truncate(&gate.reason, 160)
+        )];
+        for (index, outcome) in step_outcomes.iter().enumerate() {
+            events.append(
+                Some(session_id),
+                None,
+                "coding.session.outcome",
+                format!("outcome {}: {}", index + 1, truncate(outcome, 100)),
+                serde_json::json!({
+                    "session_id": session_key.clone(),
+                    "outcome_step": index + 1,
+                    "outcome_total": step_outcomes.len(),
+                    "outcome": outcome,
+                }),
+            )?;
+        }
+        let mut report = CodingSessionReport {
+            id: session_key.clone(),
+            generated_at: generated_at.to_rfc3339(),
+            goal: goal.clone(),
+            requested_goal: goal.clone(),
+            exercise: "repo_patch_verify".to_string(),
+            status: "failed".to_string(),
+            workspace: Some("repo-root sandbox verification".to_string()),
+            smoke_id: None,
+            smoke_report_path: None,
+            session_report_path: None,
+            transcript_path: None,
+            checks: Vec::new(),
+            plan_steps: plan_steps.clone(),
+            step_outcomes,
+            artifacts: vec![patch_path.display().to_string()],
+            failure_reason: Some(format!("policy denied repo patch: {}", gate.reason)),
+        };
+        let _ = persist_coding_session_terminal_report(
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            session_id,
+            generated_at,
+            &mut report,
+            "repo patch coding-session evidence written to",
+            "repo patch coding-session report written to",
+        )?;
         anyhow::bail!("policy denied repo patch: {}", gate.reason);
     }
 
     let (verification, verification_path) =
-        execute_patch_verify(Arc::clone(&events), patch_path.clone()).await?;
+        match execute_patch_verify(Arc::clone(&events), patch_path.clone()).await {
+            Ok(result) => result,
+            Err(err) => {
+                let reason = err.to_string();
+                let step_outcomes = vec![
+                    "policy gate allowed patch.apply check".to_string(),
+                    format!(
+                        "verify path aborted before verification artifact: {}",
+                        truncate(&reason, 160)
+                    ),
+                ];
+                for (index, outcome) in step_outcomes.iter().enumerate() {
+                    events.append(
+                        Some(session_id),
+                        None,
+                        "coding.session.outcome",
+                        format!("outcome {}: {}", index + 1, truncate(outcome, 100)),
+                        serde_json::json!({
+                            "session_id": session_key.clone(),
+                            "outcome_step": index + 1,
+                            "outcome_total": step_outcomes.len(),
+                            "outcome": outcome,
+                        }),
+                    )?;
+                }
+                let mut report = CodingSessionReport {
+                    id: session_key.clone(),
+                    generated_at: generated_at.to_rfc3339(),
+                    goal: goal.clone(),
+                    requested_goal: goal.clone(),
+                    exercise: "repo_patch_verify".to_string(),
+                    status: "failed".to_string(),
+                    workspace: Some("repo-root sandbox verification".to_string()),
+                    smoke_id: None,
+                    smoke_report_path: None,
+                    session_report_path: None,
+                    transcript_path: None,
+                    checks: Vec::new(),
+                    plan_steps: plan_steps.clone(),
+                    step_outcomes,
+                    artifacts: vec![patch_path.display().to_string()],
+                    failure_reason: Some(reason),
+                };
+                let _ = persist_coding_session_terminal_report(
+                    Arc::clone(&memory),
+                    Arc::clone(&events),
+                    session_id,
+                    generated_at,
+                    &mut report,
+                    "repo patch coding-session evidence written to",
+                    "repo patch coding-session report written to",
+                )?;
+                return Err(err);
+            }
+        };
     let passed = verification.accepted;
     let checks = verification.checks.clone();
     let step_outcomes = vec![
@@ -5936,57 +6094,14 @@ async fn run_repo_patch_coding_session_with_goal(
             Some(verification.reason.clone())
         },
     };
-    let (report_path, evidence_path) = finalize_coding_session_report(&mut report)?;
-
-    CodingSessionStore::new(Arc::clone(&memory.db)).insert(&CodingSessionRecord {
-        id: session_key.clone(),
+    let (report_path, _evidence_path) = persist_coding_session_terminal_report(
+        Arc::clone(&memory),
+        Arc::clone(&events),
+        session_id,
         generated_at,
-        goal,
-        exercise: "repo_patch_verify".to_string(),
-        status: report.status.clone(),
-        workspace: report.workspace.clone(),
-        smoke_id: None,
-        smoke_report_path: None,
-        session_report_path: report_path.display().to_string(),
-        transcript_path: None,
-        artifacts: report.artifacts.clone(),
-        checks: report.checks.clone(),
-        plan_steps,
-        step_outcomes,
-        failure_reason: report.failure_reason.clone(),
-        recorded_at: chrono::Utc::now(),
-    })?;
-
-    events.append(
-        Some(session_id),
-        None,
-        "coding.session.evidence_written",
-        format!(
-            "repo patch coding-session evidence written to {}",
-            evidence_path.display()
-        ),
-        serde_json::json!({
-            "session_id": session_key.clone(),
-            "exercise": "repo_patch_verify",
-            "session_report_path": report_path.display().to_string(),
-            "evidence_path": evidence_path.display().to_string(),
-            "artifacts": report.artifacts.clone(),
-        }),
-    )?;
-
-    events.append(
-        Some(session_id),
-        None,
-        if passed {
-            "coding.session.passed"
-        } else {
-            "coding.session.failed"
-        },
-        format!(
-            "repo patch coding-session report written to {}",
-            report_path.display()
-        ),
-        serde_json::to_value(&report)?,
+        &mut report,
+        "repo patch coding-session evidence written to",
+        "repo patch coding-session report written to",
     )?;
 
     println!(
@@ -6080,6 +6195,51 @@ async fn run_repo_patch_commit_coding_session_with_goal(
     patch_path: PathBuf,
     session_goal: Option<String>,
 ) -> Result<()> {
+    let outcome = execute_repo_patch_commit_coding_session_with_goal(
+        policy,
+        memory,
+        events,
+        patch_path,
+        session_goal,
+    )
+    .await?;
+    println!(
+        "Repo patch commit coding session: {}",
+        if outcome.passed { "passed" } else { "failed" }
+    );
+    println!("  session: {}", outcome.session_id);
+    println!("  report: {}", outcome.session_report_path.display());
+    println!("  evidence: {}", outcome.evidence_path.display());
+    println!("  verification: {}", outcome.verification_path.display());
+    println!("  patch: {}", outcome.verification.patch_path);
+    println!("  checks: {}", outcome.verification.checks.join(", "));
+    println!(
+        "  commit: {}",
+        outcome.verification.commit.as_deref().unwrap_or("none")
+    );
+    println!(
+        "  report commit: {}",
+        outcome
+            .verification
+            .report_commit
+            .as_deref()
+            .unwrap_or("none")
+    );
+    println!("  reason: {}", outcome.verification.reason);
+
+    if !outcome.passed {
+        anyhow::bail!("repo patch commit coding session failed");
+    }
+    Ok(())
+}
+
+async fn execute_repo_patch_commit_coding_session_with_goal(
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    patch_path: PathBuf,
+    session_goal: Option<String>,
+) -> Result<RepoPatchCommitCodingSessionOutcome> {
     let session_id = uuid::Uuid::new_v4();
     let session_key = session_id.to_string();
     let generated_at = chrono::Utc::now();
@@ -6181,11 +6341,115 @@ async fn run_repo_patch_commit_coding_session_with_goal(
         }),
     )?;
     if gate.decision != Decision::Allow {
+        let step_outcomes = vec![format!(
+            "policy gate denied patch.apply apply mode: {}",
+            truncate(&gate.reason, 160)
+        )];
+        for (index, outcome) in step_outcomes.iter().enumerate() {
+            events.append(
+                Some(session_id),
+                None,
+                "coding.session.outcome",
+                format!("outcome {}: {}", index + 1, truncate(outcome, 100)),
+                serde_json::json!({
+                    "session_id": session_key.clone(),
+                    "outcome_step": index + 1,
+                    "outcome_total": step_outcomes.len(),
+                    "outcome": outcome,
+                }),
+            )?;
+        }
+        let mut report = CodingSessionReport {
+            id: session_key.clone(),
+            generated_at: generated_at.to_rfc3339(),
+            goal: goal.clone(),
+            requested_goal: goal.clone(),
+            exercise: "repo_patch_apply_commit".to_string(),
+            status: "failed".to_string(),
+            workspace: Some("repo-root verified apply commit".to_string()),
+            smoke_id: None,
+            smoke_report_path: None,
+            session_report_path: None,
+            transcript_path: None,
+            checks: Vec::new(),
+            plan_steps: plan_steps.clone(),
+            step_outcomes,
+            artifacts: vec![patch_path.display().to_string()],
+            failure_reason: Some(format!("policy denied repo patch commit: {}", gate.reason)),
+        };
+        let _ = persist_coding_session_terminal_report(
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            session_id,
+            generated_at,
+            &mut report,
+            "repo patch commit coding-session evidence written to",
+            "repo patch commit coding-session report written to",
+        )?;
         anyhow::bail!("policy denied repo patch commit: {}", gate.reason);
     }
 
-    let (verification, verification_path) =
-        execute_patch_apply_commit(Arc::clone(&events), patch_path.clone(), None).await?;
+    let (verification, verification_path) = match execute_patch_apply_commit(
+        Arc::clone(&events),
+        patch_path.clone(),
+        Some(goal.clone()),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(err) => {
+            let reason = err.to_string();
+            let step_outcomes = vec![
+                "policy gate allowed patch.apply apply mode".to_string(),
+                format!(
+                    "apply path aborted before verification artifact: {}",
+                    truncate(&reason, 160)
+                ),
+            ];
+            for (index, outcome) in step_outcomes.iter().enumerate() {
+                events.append(
+                    Some(session_id),
+                    None,
+                    "coding.session.outcome",
+                    format!("outcome {}: {}", index + 1, truncate(outcome, 100)),
+                    serde_json::json!({
+                        "session_id": session_key.clone(),
+                        "outcome_step": index + 1,
+                        "outcome_total": step_outcomes.len(),
+                        "outcome": outcome,
+                    }),
+                )?;
+            }
+            let mut report = CodingSessionReport {
+                id: session_key.clone(),
+                generated_at: generated_at.to_rfc3339(),
+                goal: goal.clone(),
+                requested_goal: goal.clone(),
+                exercise: "repo_patch_apply_commit".to_string(),
+                status: "failed".to_string(),
+                workspace: Some("repo-root verified apply commit".to_string()),
+                smoke_id: None,
+                smoke_report_path: None,
+                session_report_path: None,
+                transcript_path: None,
+                checks: Vec::new(),
+                plan_steps: plan_steps.clone(),
+                step_outcomes,
+                artifacts: vec![patch_path.display().to_string()],
+                failure_reason: Some(reason.clone()),
+            };
+            let _ = persist_coding_session_terminal_report(
+                Arc::clone(&memory),
+                Arc::clone(&events),
+                session_id,
+                generated_at,
+                &mut report,
+                "repo patch commit coding-session evidence written to",
+                "repo patch commit coding-session report written to",
+            )?;
+            return Err(err);
+        }
+    };
     let passed = verification.accepted && verification.applied && verification.commit.is_some();
     let checks = verification.checks.clone();
     let step_outcomes = vec![
@@ -6220,7 +6484,7 @@ async fn run_repo_patch_commit_coding_session_with_goal(
             "coding.session.outcome",
             format!("outcome {}: {}", index + 1, truncate(outcome, 100)),
             serde_json::json!({
-                "session_id": session_key,
+                "session_id": session_key.clone(),
                 "outcome_step": index + 1,
                 "outcome_total": step_outcomes.len(),
                 "outcome": outcome,
@@ -6250,76 +6514,24 @@ async fn run_repo_patch_commit_coding_session_with_goal(
             Some(verification.reason.clone())
         },
     };
-    let (report_path, evidence_path) = finalize_coding_session_report(&mut report)?;
-
-    CodingSessionStore::new(Arc::clone(&memory.db)).insert(&CodingSessionRecord {
-        id: session_key.clone(),
+    let (report_path, evidence_path) = persist_coding_session_terminal_report(
+        Arc::clone(&memory),
+        Arc::clone(&events),
+        session_id,
         generated_at,
-        goal,
-        exercise: "repo_patch_apply_commit".to_string(),
-        status: report.status.clone(),
-        workspace: report.workspace.clone(),
-        smoke_id: None,
-        smoke_report_path: None,
-        session_report_path: report_path.display().to_string(),
-        transcript_path: None,
-        artifacts: report.artifacts.clone(),
-        checks: report.checks.clone(),
-        plan_steps,
-        step_outcomes,
-        failure_reason: report.failure_reason.clone(),
-        recorded_at: chrono::Utc::now(),
-    })?;
-
-    events.append(
-        Some(session_id),
-        None,
-        "coding.session.evidence_written",
-        format!(
-            "repo patch commit coding-session evidence written to {}",
-            evidence_path.display()
-        ),
-        serde_json::json!({
-            "session_id": session_key.clone(),
-            "exercise": "repo_patch_apply_commit",
-            "session_report_path": report_path.display().to_string(),
-            "evidence_path": evidence_path.display().to_string(),
-            "artifacts": report.artifacts.clone(),
-        }),
+        &mut report,
+        "repo patch commit coding-session evidence written to",
+        "repo patch commit coding-session report written to",
     )?;
 
-    events.append(
-        Some(session_id),
-        None,
-        if passed {
-            "coding.session.passed"
-        } else {
-            "coding.session.failed"
-        },
-        format!(
-            "repo patch commit coding-session report written to {}",
-            report_path.display()
-        ),
-        serde_json::to_value(&report)?,
-    )?;
-
-    println!(
-        "Repo patch commit coding session: {}",
-        if passed { "passed" } else { "failed" }
-    );
-    println!("  session: {session_key}");
-    println!("  report: {}", report_path.display());
-    println!("  verification: {}", verification_path.display());
-    println!("  patch: {}", verification.patch_path);
-    println!("  checks: {}", report.checks.join(", "));
-    println!("  commit: {}", verification.commit.as_deref().unwrap_or("none"));
-    println!("  report commit: {}", verification.report_commit.as_deref().unwrap_or("none"));
-    println!("  reason: {}", verification.reason);
-
-    if !passed {
-        anyhow::bail!("repo patch commit coding session failed");
-    }
-    Ok(())
+    Ok(RepoPatchCommitCodingSessionOutcome {
+        passed,
+        session_id: session_key,
+        session_report_path: report_path,
+        evidence_path,
+        verification,
+        verification_path,
+    })
 }
 
 async fn run_repo_patch_commit_coding_session_live(
@@ -6600,6 +6812,65 @@ fn write_coding_session_report(report: &CodingSessionReport) -> Result<PathBuf> 
     Ok(path)
 }
 
+fn persist_coding_session_terminal_report(
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    session_id: uuid::Uuid,
+    generated_at: chrono::DateTime<chrono::Utc>,
+    report: &mut CodingSessionReport,
+    evidence_summary_prefix: &str,
+    report_summary_prefix: &str,
+) -> Result<(PathBuf, PathBuf)> {
+    let (report_path, evidence_path) = finalize_coding_session_report(report)?;
+
+    CodingSessionStore::new(Arc::clone(&memory.db)).insert(&CodingSessionRecord {
+        id: report.id.clone(),
+        generated_at,
+        goal: report.requested_goal.clone(),
+        exercise: report.exercise.clone(),
+        status: report.status.clone(),
+        workspace: report.workspace.clone(),
+        smoke_id: report.smoke_id,
+        smoke_report_path: report.smoke_report_path.clone(),
+        session_report_path: report_path.display().to_string(),
+        transcript_path: report.transcript_path.clone(),
+        artifacts: report.artifacts.clone(),
+        checks: report.checks.clone(),
+        plan_steps: report.plan_steps.clone(),
+        step_outcomes: report.step_outcomes.clone(),
+        failure_reason: report.failure_reason.clone(),
+        recorded_at: chrono::Utc::now(),
+    })?;
+
+    events.append(
+        Some(session_id),
+        None,
+        "coding.session.evidence_written",
+        format!("{evidence_summary_prefix} {}", evidence_path.display()),
+        serde_json::json!({
+            "session_id": report.id.clone(),
+            "exercise": report.exercise.clone(),
+            "session_report_path": report_path.display().to_string(),
+            "evidence_path": evidence_path.display().to_string(),
+            "artifacts": report.artifacts.clone(),
+        }),
+    )?;
+
+    events.append(
+        Some(session_id),
+        None,
+        if report.status == "passed" {
+            "coding.session.passed"
+        } else {
+            "coding.session.failed"
+        },
+        format!("{report_summary_prefix} {}", report_path.display()),
+        serde_json::to_value(&report)?,
+    )?;
+
+    Ok((report_path, evidence_path))
+}
+
 fn finalize_coding_session_report(report: &mut CodingSessionReport) -> Result<(PathBuf, PathBuf)> {
     let report_path = write_coding_session_report(report)?;
     let evidence_path = attach_coding_session_evidence(report, &report_path)?;
@@ -6613,7 +6884,11 @@ fn attach_coding_session_evidence(
     report.session_report_path = Some(report_path.display().to_string());
     let evidence_path = write_coding_session_evidence(report, report_path)?;
     let evidence_path_text = evidence_path.display().to_string();
-    if !report.artifacts.iter().any(|path| path == &evidence_path_text) {
+    if !report
+        .artifacts
+        .iter()
+        .any(|path| path == &evidence_path_text)
+    {
         report.artifacts.push(evidence_path_text);
     }
     std::fs::write(report_path, serde_json::to_string_pretty(report)?)?;
@@ -6743,7 +7018,10 @@ fn write_work_loop_journal(report: &SupervisedLoopReport) -> Result<PathBuf> {
                 .join(completed_at.format("%Y-%m-%d").to_string())
         });
     std::fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("prof-x-journal-{}.md", short_fragment(&report.run_id)));
+    let path = dir.join(format!(
+        "prof-x-journal-{}.md",
+        short_fragment(&report.run_id)
+    ));
     let commit_id = git_head(&repo_root).unwrap_or_else(|_| "unknown".to_string());
     std::fs::write(
         &path,
@@ -6752,13 +7030,13 @@ fn write_work_loop_journal(report: &SupervisedLoopReport) -> Result<PathBuf> {
     Ok(path)
 }
 
-fn format_work_loop_ledger(
-    report: &SupervisedLoopReport,
-    report_path: &std::path::Path,
-) -> String {
+fn format_work_loop_ledger(report: &SupervisedLoopReport, report_path: &std::path::Path) -> String {
     let repo_root = default_repo_root();
     let mut out = Vec::new();
-    out.push(format!("# Professor X Run {}", short_fragment(&report.run_id)));
+    out.push(format!(
+        "# Professor X Run {}",
+        short_fragment(&report.run_id)
+    ));
     out.push(String::new());
     out.push(format!("- run_id: `{}`", report.run_id));
     out.push(format!("- kind: `{}`", report.run_kind));
@@ -6836,7 +7114,10 @@ fn format_work_loop_ledger(
             ));
         }
         if report.timeline.len() > 80 {
-            out.push(format!("- ... {} more event(s)", report.timeline.len() - 80));
+            out.push(format!(
+                "- ... {} more event(s)",
+                report.timeline.len() - 80
+            ));
         }
     }
     out.push(String::new());
@@ -6854,7 +7135,10 @@ fn format_work_loop_journal_markdown(
         .filter(|text| !text.is_empty())
         .unwrap_or_else(|| "clean".to_string());
     let mut lines = vec![
-        format!("# Professor X Work Journal - {}", short_fragment(&report.run_id)),
+        format!(
+            "# Professor X Work Journal - {}",
+            short_fragment(&report.run_id)
+        ),
         String::new(),
         "## Run Context".to_string(),
         format!("- generated_at: {}", timestamp.to_rfc3339()),
@@ -6863,7 +7147,8 @@ fn format_work_loop_journal_markdown(
         format!("- profile: {}", report.profile),
         format!("- harness_commit: {commit_id}"),
         format!("- git: {git_line}"),
-        format!("- cycles: {}/{} completed, {} passed, {} failed",
+        format!(
+            "- cycles: {}/{} completed, {} passed, {} failed",
             report.completed_cycles,
             report.requested_cycles,
             report.passed_cycles,
@@ -6985,12 +7270,19 @@ fn outcomes_from_recent_runs(memory: &Arc<MemoryManager>, limit: usize) -> Vec<T
         .filter(|r| matches!(r.status.as_str(), "Complete" | "Failed"))
         .map(|r| {
             let success = r.status == "Complete";
+            let failure_mode = r.failure_mode.map(|mode| normalize_failure_mode(&mode));
             TaskOutcome {
                 task_id: uuid::Uuid::parse_str(&r.task_id).unwrap_or_else(|_| uuid::Uuid::new_v4()),
                 description: r.description,
                 success,
                 score: r.outcome_score.unwrap_or(if success { 1.0 } else { 0.0 }),
-                failure_mode: r.failure_mode,
+                failure_class: if success {
+                    None
+                } else {
+                    r.failure_class
+                        .or_else(|| failure_mode.as_deref().map(classify_failure_mode))
+                },
+                failure_mode,
                 steps_taken: r.step_count as u32,
                 timestamp: r.completed_at.unwrap_or(r.updated_at),
             }
@@ -7010,7 +7302,9 @@ fn outcomes_from_hiro_attempts(memory: &Arc<MemoryManager>) -> Vec<TaskOutcome> 
         .query_row("SELECT MAX(round) FROM hiro_attempts", [], |r| r.get(0))
         .ok()
         .flatten();
-    let Some(round) = latest else { return Vec::new() };
+    let Some(round) = latest else {
+        return Vec::new();
+    };
 
     let mut stmt = match db.prepare(
         "SELECT task_id, category, passed, failure_reason, duration_ms
@@ -7045,15 +7339,26 @@ fn outcomes_from_hiro_attempts(memory: &Arc<MemoryManager>) -> Vec<TaskOutcome> 
     }
 
     agg.into_iter()
-        .map(|(task_id, (category, passed, failure_reason, dur))| TaskOutcome {
-            task_id: uuid::Uuid::new_v4(),
-            description: format!("HIRO {category} task {task_id}"),
-            success: passed,
-            score: if passed { 1.0 } else { 0.0 },
-            failure_mode: if passed { None } else { failure_reason },
-            steps_taken: 0,
-            timestamp: chrono::Utc::now() - chrono::Duration::milliseconds(dur),
-        })
+        .map(
+            |(task_id, (category, passed, failure_reason, dur))| TaskOutcome {
+                task_id: uuid::Uuid::new_v4(),
+                description: format!("HIRO {category} task {task_id}"),
+                success: passed,
+                score: if passed { 1.0 } else { 0.0 },
+                failure_class: if passed {
+                    None
+                } else {
+                    failure_reason.as_deref().map(classify_failure_mode)
+                },
+                failure_mode: if passed {
+                    None
+                } else {
+                    failure_reason.map(|reason| normalize_failure_mode(&reason))
+                },
+                steps_taken: 0,
+                timestamp: chrono::Utc::now() - chrono::Duration::milliseconds(dur),
+            },
+        )
         .collect()
 }
 
@@ -7103,7 +7408,11 @@ async fn run_live_evolution_cycle(
     let applied = evolved.run_cycle(&tracker).await?;
     println!(
         "Result: {}",
-        if applied { "APPLIED a harness change" } else { "no change this cycle" }
+        if applied {
+            "APPLIED a harness change"
+        } else {
+            "no change this cycle"
+        }
     );
     println!("  watch: ./prof-x-stream.py     artifacts: find artifacts/evolution -type f | sort");
     Ok(())
@@ -7131,7 +7440,14 @@ async fn run_evolve_forever(
 
     println!("evolve-forever: establishing baseline on {measure_limit} tasks (frozen harness)...");
     let mut best = measure_block(
-        &ollama, &registry, &policy, &memory, &events, &cancel, round, measure_limit,
+        &ollama,
+        &registry,
+        &policy,
+        &memory,
+        &events,
+        &cancel,
+        round,
+        measure_limit,
     )
     .await?;
     round += 1;
@@ -7152,8 +7468,12 @@ async fn run_evolve_forever(
 
         let head_before = git_head(&repo_root)?;
         // 1. evolve (commits a verified, identity-safe change if one wins)
-        run_live_evolution_cycle(Arc::clone(&ollama), Arc::clone(&memory), Arc::clone(&events))
-            .await?;
+        run_live_evolution_cycle(
+            Arc::clone(&ollama),
+            Arc::clone(&memory),
+            Arc::clone(&events),
+        )
+        .await?;
         let head_after = git_head(&repo_root)?;
         if head_after == head_before {
             println!("  no change applied this block — continuing\n");
@@ -7163,7 +7483,14 @@ async fn run_evolve_forever(
 
         // 2. measure
         let p = measure_block(
-            &ollama, &registry, &policy, &memory, &events, &cancel, round, measure_limit,
+            &ollama,
+            &registry,
+            &policy,
+            &memory,
+            &events,
+            &cancel,
+            round,
+            measure_limit,
         )
         .await?;
         round += 1;
@@ -7259,7 +7586,13 @@ async fn generate_curriculum(
     let tool_catalog = tool_lines.join("\n");
 
     // Dedup against what already exists (normalized).
-    let norm = |s: &str| s.trim().to_lowercase().split_whitespace().collect::<Vec<_>>().join(" ");
+    let norm = |s: &str| {
+        s.trim()
+            .to_lowercase()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
     let mut existing: std::collections::HashSet<String> = memory
         .self_authored_tests
         .all()?
@@ -7415,10 +7748,30 @@ fn curriculum_is_destructive(description: &str) -> bool {
     let d = description.to_lowercase();
     // Writing to /tmp is explicitly allowed; only flag destructive verbs.
     const DANGER: &[&str] = &[
-        "delete", "remove", " rm ", "rm -", "unlink", "overwrite", "truncate",
-        "drop table", "wipe", "erase", "purge", "destroy", "format ",
-        "git reset", "git clean", "git push", "force push", "shred",
-        "move all", "rename all", "chmod -r", "chown -r", "> /", "rmdir",
+        "delete",
+        "remove",
+        " rm ",
+        "rm -",
+        "unlink",
+        "overwrite",
+        "truncate",
+        "drop table",
+        "wipe",
+        "erase",
+        "purge",
+        "destroy",
+        "format ",
+        "git reset",
+        "git clean",
+        "git push",
+        "force push",
+        "shred",
+        "move all",
+        "rename all",
+        "chmod -r",
+        "chown -r",
+        "> /",
+        "rmdir",
     ];
     DANGER.iter().any(|k| d.contains(k))
 }
@@ -7451,7 +7804,10 @@ async fn run_self_authored_tests(
         println!("No self-authored tests yet — they accrue as Professor X evolves.");
         return Ok(());
     }
-    println!("Running {} self-authored test(s) — the agent-authored benchmark\n", tests.len());
+    println!(
+        "Running {} self-authored test(s) — the agent-authored benchmark\n",
+        tests.len()
+    );
 
     let mut passed = 0usize;
     for test in &tests {
@@ -7572,6 +7928,11 @@ fn seeded_evolution_outcomes() -> Vec<TaskOutcome> {
                 description: format!("seeded evolution calibration task {}", i + 1),
                 success,
                 score: if success { 0.82 } else { 0.18 },
+                failure_class: if success {
+                    None
+                } else {
+                    Some(FailureClass::ToolSelection)
+                },
                 failure_mode: if success {
                     None
                 } else {
@@ -7784,7 +8145,10 @@ async fn run_daemon(
                                         );
                                         outcome.success = false;
                                         outcome.score = 0.0;
-                                        outcome.failure_mode = Some(failure);
+                                        outcome.failure_class =
+                                            Some(classify_failure_mode(&failure));
+                                        outcome.failure_mode =
+                                            Some(normalize_failure_mode(&failure));
                                     }
                                 }
                                 Ok(None) => {}
@@ -7920,6 +8284,9 @@ async fn run_single_task(
     if let Some(ref fm) = outcome.failure_mode {
         info!("failure_mode: {fm}");
     }
+    if let Some(class) = outcome.failure_class {
+        info!("failure_class: {}", class.as_str());
+    }
     Ok(())
 }
 
@@ -7928,6 +8295,43 @@ async fn run_single_task(
 /// after the agent's edit (no LLM-judge — see docs/research/eval-trust.md for why).
 /// Measure repo-fix pass@1 once, optionally with a candidate system-prompt override.
 /// Returns (passed, ran). Shared by `--repo-fix-bench` and the M4 evolution loop.
+#[derive(Debug, Clone, serde::Serialize)]
+struct RepoFixTaskResult {
+    id: String,
+    description: String,
+    setup: String,
+    verify_cmd: String,
+    pre_exit: i32,
+    post_exit: i32,
+    expect_exit: i32,
+    passed: bool,
+    made_edit: bool,
+    workdir: Option<String>,
+    transcript_path: Option<String>,
+    diff_summary: String,
+}
+
+#[derive(Debug, Clone)]
+struct RepoFixMeasureResult {
+    passed: usize,
+    ran: usize,
+    failures: Vec<(String, String, bool)>,
+    tasks: Vec<RepoFixTaskResult>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct RepoFixBenchArtifact {
+    run_id: String,
+    recorded_at: String,
+    harness_commit: String,
+    manifest_path: String,
+    model: String,
+    passed: usize,
+    ran: usize,
+    pass_at_1: f64,
+    tasks: Vec<RepoFixTaskResult>,
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn repo_fix_measure(
     ollama: &Arc<ollama::OllamaClient>,
@@ -7935,10 +8339,11 @@ async fn repo_fix_measure(
     policy: &Arc<PolicyEngine>,
     memory: &Arc<MemoryManager>,
     events: &Arc<EventStore>,
+    transcripts: Option<Arc<TranscriptStore>>,
     cancel: &CancellationToken,
     prompt_override: Option<&str>,
     verbose: bool,
-) -> Result<(usize, usize, Vec<(String, String, bool)>)> {
+) -> Result<RepoFixMeasureResult> {
     use std::process::Command;
 
     #[derive(serde::Deserialize)]
@@ -7981,6 +8386,7 @@ async fn repo_fix_measure(
     let mut ran = 0usize;
     // Failure-aware evolution: (task_id, description, made_edit) for each failed task.
     let mut failures: Vec<(String, String, bool)> = Vec::new();
+    let mut task_results = Vec::new();
     for task in &file.tasks {
         let workdir = std::env::temp_dir().join(format!(
             "px-repofix-{}-{}-{}",
@@ -8013,14 +8419,50 @@ async fn repo_fix_measure(
             cancel.clone(),
         )
         .with_events(Arc::clone(events))
-        .with_workspace_root(workdir.clone());
+        .with_workspace_root(workdir.clone())
+        .with_verifier(workdir.clone(), task.verify_cmd.clone(), task.expect_exit);
         if let Some(p) = prompt_override {
             react = react.with_prompt_override(p.to_string());
+        }
+        if let Some(t) = &transcripts {
+            react = react.with_transcripts(Arc::clone(t));
         }
         let _ = react.run(&mut node).await;
 
         let post = run_verify(&task.verify_cmd, &workdir);
         let ok = post == task.expect_exit;
+        let diff_summary =
+            repo_fix_source_diff_summary(std::path::Path::new(&task.setup), &workdir);
+        let made_edit = !diff_summary.trim().is_empty();
+        let transcript_path = transcripts
+            .as_ref()
+            .and_then(|store| {
+                store
+                    .get_by_task_prefix(&node.id.to_string())
+                    .ok()
+                    .flatten()
+            })
+            .map(|summary| summary.transcript_path);
+
+        task_results.push(RepoFixTaskResult {
+            id: task.id.clone(),
+            description: task.description.clone(),
+            setup: task.setup.clone(),
+            verify_cmd: task.verify_cmd.clone(),
+            pre_exit: pre,
+            post_exit: post,
+            expect_exit: task.expect_exit,
+            passed: ok,
+            made_edit,
+            workdir: if ok {
+                None
+            } else {
+                Some(workdir.display().to_string())
+            },
+            transcript_path,
+            diff_summary: diff_summary.clone(),
+        });
+
         if ok {
             passed += 1;
             // Lever 1 (distillation): collect the TEST-VERIFIED solving trajectory into the SFT
@@ -8033,12 +8475,6 @@ async fn repo_fix_measure(
         } else {
             // Record HOW it failed so the proposer targets the real pattern (item 3).
             // made_edit=false => "finished without editing" (the dominant measured failure).
-            let made_edit = std::process::Command::new("diff")
-                .args(["-rq", &task.setup])
-                .arg(&workdir)
-                .output()
-                .map(|o| !o.stdout.is_empty())
-                .unwrap_or(false);
             failures.push((task.id.clone(), task.description.clone(), made_edit));
         }
         if verbose {
@@ -8050,9 +8486,36 @@ async fn repo_fix_measure(
                 if ok { "PASS" } else { "fail" }
             );
         }
-        let _ = std::fs::remove_dir_all(&workdir);
+        if ok {
+            let _ = std::fs::remove_dir_all(&workdir);
+        }
     }
-    Ok((passed, ran, failures))
+    Ok(RepoFixMeasureResult {
+        passed,
+        ran,
+        failures,
+        tasks: task_results,
+    })
+}
+
+fn repo_fix_source_diff_summary(setup: &std::path::Path, workdir: &std::path::Path) -> String {
+    std::process::Command::new("diff")
+        .args([
+            "-ru",
+            "--exclude=__pycache__",
+            "--exclude=*.pyc",
+            "--exclude=.git",
+            "--exclude=artifacts",
+            "--exclude=target",
+        ])
+        .arg(setup)
+        .arg(workdir)
+        .output()
+        .map(|o| {
+            let text = String::from_utf8_lossy(&o.stdout);
+            text.lines().take(80).collect::<Vec<_>>().join("\n")
+        })
+        .unwrap_or_else(|e| format!("diff unavailable: {e}"))
 }
 
 async fn run_repo_fix_bench(
@@ -8061,20 +8524,72 @@ async fn run_repo_fix_bench(
     policy: Arc<PolicyEngine>,
     memory: Arc<MemoryManager>,
     events: Arc<EventStore>,
+    transcripts: Arc<TranscriptStore>,
     cancel: CancellationToken,
 ) -> Result<()> {
-    let (passed, ran, _failures) = repo_fix_measure(
-        &ollama, &registry, &policy, &memory, &events, &cancel, None, true,
+    let result = repo_fix_measure(
+        &ollama,
+        &registry,
+        &policy,
+        &memory,
+        &events,
+        Some(transcripts),
+        &cancel,
+        None,
+        true,
     )
     .await?;
+    let passed = result.passed;
+    let ran = result.ran;
     let p1 = if ran > 0 {
         passed as f64 / ran as f64
     } else {
         0.0
     };
     println!("\n=== REPO-FIX BENCH ===\npass@1 = {p1:.3}  ({passed}/{ran} tasks)");
+    let artifact = write_repo_fix_bench_artifact(&result, ollama.model())?;
+    println!("artifact = {}", artifact.display());
     info!("repo-fix bench complete: pass@1={p1:.3} ({passed}/{ran})");
     Ok(())
+}
+
+fn write_repo_fix_bench_artifact(
+    result: &RepoFixMeasureResult,
+    model: &str,
+) -> Result<std::path::PathBuf> {
+    let repo_root = default_repo_root();
+    let manifest_path = std::env::var("REPO_FIX_TASKS")
+        .unwrap_or_else(|_| "scripts/benchmarks/repo_fix/tasks.json".to_string());
+    let run_id = uuid::Uuid::new_v4().to_string();
+    let pass_at_1 = if result.ran > 0 {
+        result.passed as f64 / result.ran as f64
+    } else {
+        0.0
+    };
+    let artifact = RepoFixBenchArtifact {
+        run_id: run_id.clone(),
+        recorded_at: chrono::Utc::now().to_rfc3339(),
+        harness_commit: git_head(&repo_root).unwrap_or_else(|_| "unknown".to_string()),
+        manifest_path,
+        model: model.to_string(),
+        passed: result.passed,
+        ran: result.ran,
+        pass_at_1,
+        tasks: result.tasks.clone(),
+    };
+    let dir = repo_root
+        .join("professor-x")
+        .join("artifacts")
+        .join("repo-fix")
+        .join(chrono::Utc::now().format("%Y-%m-%d").to_string());
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!(
+        "repo-fix-{}-{}.json",
+        chrono::Utc::now().format("%H%M%S"),
+        short_fragment(&run_id)
+    ));
+    std::fs::write(&path, serde_json::to_string_pretty(&artifact)?)?;
+    Ok(path)
 }
 
 /// M4: self-improvement loop with an EMPIRICAL fitness gate. Unlike the legacy evolution
@@ -8112,11 +8627,12 @@ async fn run_evolve_on_repofix(
             let mut fails: std::collections::HashMap<String, (String, bool)> =
                 std::collections::HashMap::new();
             for _ in 0..K {
-                let (pa, ra, fl) =
-                    repo_fix_measure(&o, &r, &p, &m, &e, &c, prompt.as_deref(), false).await?;
-                tot_p += pa;
-                tot_r += ra;
-                for (id, desc, made_edit) in fl {
+                let result =
+                    repo_fix_measure(&o, &r, &p, &m, &e, None, &c, prompt.as_deref(), false)
+                        .await?;
+                tot_p += result.passed;
+                tot_r += result.ran;
+                for (id, desc, made_edit) in result.failures {
                     fails.insert(id, (desc, made_edit));
                 }
             }
@@ -8184,9 +8700,7 @@ async fn run_evolve_on_repofix(
             best + MDE,
             if accept { "ACCEPT" } else { "reject" }
         );
-        info!(
-            "M4 round {round}: candidate={score:.3} best={best:.3} accept={accept}"
-        );
+        info!("M4 round {round}: candidate={score:.3} best={best:.3} accept={accept}");
         if accept {
             best = score;
             best_prompt = Some(candidate);
@@ -8225,7 +8739,11 @@ async fn propose_repofix_prompt(
          Output only the prompt:"
     );
     let resp = ollama
-        .generate(&prompt, Some(system), Some(ollama::ModelOptions::for_reflection()))
+        .generate(
+            &prompt,
+            Some(system),
+            Some(ollama::ModelOptions::for_reflection()),
+        )
         .await?;
     let (_, text) = resp.split_thinking();
     let text = text.trim().to_string();
@@ -8279,11 +8797,12 @@ async fn run_evolve_skill_on_repofix(
             let mut fails: std::collections::HashMap<String, (String, bool)> =
                 std::collections::HashMap::new();
             for _ in 0..K {
-                let (pa, ra, fl) =
-                    repo_fix_measure(&o, &r, &p, &m, &e, &c, prompt.as_deref(), false).await?;
-                tp += pa;
-                tr += ra;
-                for (id, d, me) in fl {
+                let result =
+                    repo_fix_measure(&o, &r, &p, &m, &e, None, &c, prompt.as_deref(), false)
+                        .await?;
+                tp += result.passed;
+                tr += result.ran;
+                for (id, d, me) in result.failures {
                     fails.insert(id, (d, me));
                 }
             }
@@ -8345,7 +8864,10 @@ async fn run_evolve_skill_on_repofix(
 
     if best_skill != original_skill {
         std::fs::write(&skill_path, &best_skill)?;
-        println!("PERSISTED improved px-fix-bug skill to {}", skill_path.display());
+        println!(
+            "PERSISTED improved px-fix-bug skill to {}",
+            skill_path.display()
+        );
     } else {
         println!("No skill change beat baseline — px-fix-bug left unchanged (gate working).");
     }
@@ -8388,22 +8910,34 @@ async fn run_evolve_code_on_repofix(
         .map_err(|e| anyhow::anyhow!("cannot read target {}: {e}", target_abs.display()))?;
     let allowed: Vec<String> = vec![format!("professor-x/{target}")];
 
-    println!("=== M4: evolve-CODE-on-repofix (AUTONOMOUS, target={target}, proposer={}) ===",
-             proposer.model());
+    println!(
+        "=== M4: evolve-CODE-on-repofix (AUTONOMOUS, target={target}, proposer={}) ===",
+        proposer.model()
+    );
 
     // Baseline with the CURRENT (already-built) binary.
-    let (bp, br, fails) =
-        repo_fix_measure(&ollama, &registry, &policy, &memory, &events, &cancel, None, false).await?;
-    let baseline = if br > 0 { bp as f64 / br as f64 } else { 0.0 };
+    let baseline_result = repo_fix_measure(
+        &ollama, &registry, &policy, &memory, &events, None, &cancel, None, false,
+    )
+    .await?;
+    let baseline = if baseline_result.ran > 0 {
+        baseline_result.passed as f64 / baseline_result.ran as f64
+    } else {
+        0.0
+    };
     println!("round 0 baseline pass@1 = {baseline:.3}");
-    let failure_report = if fails.is_empty() {
+    let failure_report = if baseline_result.failures.is_empty() {
         "No failures.".to_string()
     } else {
         // ACTIONABLE diagnosis (not a raw failure list — the coder needs a localizable target,
         // see docs/research/m4-code-proposer-scoping.md): classify the dominant failure mode and
         // tell the coder what KIND of code fix it implies (or that it's model-level, not harness).
-        let no_edit = fails.iter().filter(|(_, _, me)| !me).count();
-        let wrong_edit = fails.len() - no_edit;
+        let no_edit = baseline_result
+            .failures
+            .iter()
+            .filter(|(_, _, me)| !me)
+            .count();
+        let wrong_edit = baseline_result.failures.len() - no_edit;
         let diagnosis = if no_edit >= wrong_edit {
             "DOMINANT FAILURE: the agent finishes WITHOUT making an edit (gathers, then gives up). \
              If this file contains the finish/synthesis/loop logic, a fix would force an edit \
@@ -8413,46 +8947,73 @@ async fn run_evolve_code_on_repofix(
              a MODEL-reasoning limit, not a harness bug — there is likely no code fix here. Only \
              propose a diff if you see a concrete harness defect; otherwise output NO-DIFF."
         };
-        let list = fails.iter().map(|(id, d, me)| {
-            format!("- {id}: {} -> {}", d.chars().take(70).collect::<String>(),
-                    if *me {"WRONG edit"} else {"NO edit"})
-        }).collect::<Vec<_>>().join("\n");
+        let list = baseline_result
+            .failures
+            .iter()
+            .map(|(id, d, me)| {
+                format!(
+                    "- {id}: {} -> {}",
+                    d.chars().take(70).collect::<String>(),
+                    if *me { "WRONG edit" } else { "NO edit" }
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
         format!("{diagnosis}\n\nFailing tasks:\n{list}")
     };
 
     let mut best = baseline;
     let mut accepted = 0u32;
     for round in 1..=rounds {
-        if cancel.is_cancelled() { break; }
+        if cancel.is_cancelled() {
+            break;
+        }
         println!("\n--- round {round}: proposing a code diff for {target} ---");
         let diff = match propose_code_diff(&proposer, &target, &original, &failure_report).await {
             Ok(d) => d,
-            Err(e) => { warn!("propose failed: {e}"); continue; }
+            Err(e) => {
+                warn!("propose failed: {e}");
+                continue;
+            }
         };
         // STRUCTURAL SAFETY (no human approval — this is the gate)
-        if let Err(reason) = check_diff_safety(&diff, &allowed.iter().map(|s| s.as_str()).collect::<Vec<_>>()) {
+        if let Err(reason) = check_diff_safety(
+            &diff,
+            &allowed.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+        ) {
             println!("  SAFETY REJECT: {reason}");
             continue;
         }
         println!("  safety OK; verifying in sandbox worktree (build + full test + bench)…");
-        match gate_code_candidate(&repo_root, &diff, K, &ollama, &registry, &policy, &memory, &events, &cancel).await {
+        match gate_code_candidate(
+            &repo_root, &diff, K, &ollama, &registry, &policy, &memory, &events, &cancel,
+        )
+        .await
+        {
             Ok(Some(score)) => {
                 let accept = score >= best + 0.10;
-                println!("  candidate pass@1 = {score:.3} (best {best:.3}) -> {}",
-                         if accept {"ACCEPT"} else {"reject"});
+                println!(
+                    "  candidate pass@1 = {score:.3} (best {best:.3}) -> {}",
+                    if accept { "ACCEPT" } else { "reject" }
+                );
                 if accept {
                     // AUTONOMOUS apply to the working tree + commit.
-                    let tmp = std::env::temp_dir().join(format!("px-codeevolve-{}.diff", uuid::Uuid::new_v4()));
+                    let tmp = std::env::temp_dir()
+                        .join(format!("px-codeevolve-{}.diff", uuid::Uuid::new_v4()));
                     std::fs::write(&tmp, &diff)?;
-                    let ap = std::process::Command::new("git").args(["apply", "--recount", "-C1"]).arg(&tmp)
-                        .current_dir(&repo_root).status();
+                    let ap = std::process::Command::new("git")
+                        .args(["apply", "--recount", "-C1"])
+                        .arg(&tmp)
+                        .current_dir(&repo_root)
+                        .status();
                     let _ = std::fs::remove_file(&tmp);
                     if ap.map(|s| s.success()).unwrap_or(false) {
                         let _ = std::process::Command::new("git")
                             .args(["commit", "-am", &format!("M4 autonomous: code-proposer lifted repo-fix {best:.3}->{score:.3} ({target})")])
                             .current_dir(&repo_root).status();
                         println!("  APPLIED + committed autonomously.");
-                        best = score; accepted += 1;
+                        best = score;
+                        accepted += 1;
                     } else {
                         println!("  (apply to working tree failed — left unchanged)");
                     }
@@ -8484,24 +9045,52 @@ async fn gate_code_candidate(
     let wt = std::env::temp_dir().join(format!("px-codeevolve-wt-{}", uuid::Uuid::new_v4()));
     let run = || -> Result<Option<f64>> {
         // worktree at HEAD
-        if !Command::new("git").args(["worktree", "add", "--detach"]).arg(&wt).arg("HEAD")
-            .current_dir(repo_root).status()?.success() {
+        if !Command::new("git")
+            .args(["worktree", "add", "--detach"])
+            .arg(&wt)
+            .arg("HEAD")
+            .current_dir(repo_root)
+            .status()?
+            .success()
+        {
             anyhow::bail!("worktree add failed");
         }
         // apply diff
-        let tmp = wt.join("..").join(format!("px-cand-{}.diff", uuid::Uuid::new_v4()));
+        let tmp = wt
+            .join("..")
+            .join(format!("px-cand-{}.diff", uuid::Uuid::new_v4()));
         std::fs::write(&tmp, diff)?;
-        let applied = Command::new("git").args(["apply", "--recount", "-C1"]).arg(&tmp).current_dir(&wt).status()?.success();
+        let applied = Command::new("git")
+            .args(["apply", "--recount", "-C1"])
+            .arg(&tmp)
+            .current_dir(&wt)
+            .status()?
+            .success();
         let _ = std::fs::remove_file(&tmp);
-        if !applied { println!("    (diff did not apply cleanly)"); return Ok(None); }
+        if !applied {
+            println!("    (diff did not apply cleanly)");
+            return Ok(None);
+        }
         let cdir = wt.join("professor-x");
         // build
-        if !Command::new("cargo").args(["build", "--bins", "--quiet"]).current_dir(&cdir).status()?.success() {
-            println!("    (cargo build failed)"); return Ok(None);
+        if !Command::new("cargo")
+            .args(["build", "--bins", "--quiet"])
+            .current_dir(&cdir)
+            .status()?
+            .success()
+        {
+            println!("    (cargo build failed)");
+            return Ok(None);
         }
         // FULL test suite must pass
-        if !Command::new("cargo").args(["test", "--bins", "--quiet"]).current_dir(&cdir).status()?.success() {
-            println!("    (cargo test failed)"); return Ok(None);
+        if !Command::new("cargo")
+            .args(["test", "--bins", "--quiet"])
+            .current_dir(&cdir)
+            .status()?
+            .success()
+        {
+            println!("    (cargo test failed)");
+            return Ok(None);
         }
         Ok(Some(0.0)) // placeholder; real measurement below (needs async)
     };
@@ -8511,27 +9100,47 @@ async fn gate_code_candidate(
     let score = match built {
         Ok(Some(_)) if candidate_bin.exists() => {
             // measure repo-fix with the candidate binary (subprocess), k reps
-            let mut tot = 0.0; let mut n = 0;
+            let mut tot = 0.0;
+            let mut n = 0;
             for _ in 0..k {
-                if cancel.is_cancelled() { break; }
+                if cancel.is_cancelled() {
+                    break;
+                }
                 let out = tokio::process::Command::new(&candidate_bin)
                     .args(["--repo-fix-bench", "--model", "qwen3:8b-q4_K_M"])
                     .current_dir(wt.join("professor-x"))
-                    .env("PROFESSOR_X_DATA_DIR", std::env::var("PROFESSOR_X_DATA_DIR").unwrap_or_default())
-                    .output().await;
+                    .env(
+                        "PROFESSOR_X_DATA_DIR",
+                        std::env::var("PROFESSOR_X_DATA_DIR").unwrap_or_default(),
+                    )
+                    .output()
+                    .await;
                 if let Ok(o) = out {
                     let s = String::from_utf8_lossy(&o.stdout);
-                    if let Some(p) = s.lines().rev().find_map(|l| l.strip_prefix("pass@1 = ").and_then(|x| x.split_whitespace().next()).and_then(|x| x.parse::<f64>().ok())) {
-                        tot += p; n += 1;
+                    if let Some(p) = s.lines().rev().find_map(|l| {
+                        l.strip_prefix("pass@1 = ")
+                            .and_then(|x| x.split_whitespace().next())
+                            .and_then(|x| x.parse::<f64>().ok())
+                    }) {
+                        tot += p;
+                        n += 1;
                     }
                 }
             }
-            if n > 0 { Ok(Some(tot / n as f64)) } else { Ok(None) }
+            if n > 0 {
+                Ok(Some(tot / n as f64))
+            } else {
+                Ok(None)
+            }
         }
         Ok(_) => Ok(None),
         Err(e) => Err(e),
     };
-    let _ = Command::new("git").args(["worktree", "remove", "--force"]).arg(&wt).current_dir(repo_root).status();
+    let _ = Command::new("git")
+        .args(["worktree", "remove", "--force"])
+        .arg(&wt)
+        .current_dir(repo_root)
+        .status();
     let _ = (ollama, registry, policy, memory, events); // measurement uses a subprocess binary, not these
     score
 }
@@ -8571,7 +9180,11 @@ async fn propose_code_diff(
         anyhow::bail!("proposer returned no diff");
     }
     // strip accidental ``` fences
-    let cleaned = text.lines().filter(|l| !l.trim_start().starts_with("```")).collect::<Vec<_>>().join("\n");
+    let cleaned = text
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("```"))
+        .collect::<Vec<_>>()
+        .join("\n");
     Ok(cleaned)
 }
 
@@ -8590,7 +9203,11 @@ async fn propose_repofix_skill(
          Output the improved skill markdown only:"
     );
     let resp = ollama
-        .generate(&prompt, Some(system), Some(ollama::ModelOptions::for_reflection()))
+        .generate(
+            &prompt,
+            Some(system),
+            Some(ollama::ModelOptions::for_reflection()),
+        )
         .await?;
     let (_, text) = resp.split_thinking();
     let text = text.trim().to_string();
@@ -8678,6 +9295,9 @@ async fn run_single_task_live(
     if let Some(ref fm) = outcome.failure_mode {
         println!("failure: {}", truncate(fm, 220));
     }
+    if let Some(class) = outcome.failure_class {
+        println!("failure class: {}", class.as_str());
+    }
     Ok(())
 }
 
@@ -8727,10 +9347,17 @@ async fn run_interactive_tasks(
                     Ok(ms) if !ms.is_empty() => {
                         println!("installed (largest first):");
                         let mut ms = ms;
-                        ms.sort_by(|a, b| b.params_b.partial_cmp(&a.params_b)
-                            .unwrap_or(std::cmp::Ordering::Equal));
+                        ms.sort_by(|a, b| {
+                            b.params_b
+                                .partial_cmp(&a.params_b)
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        });
                         for m in ms {
-                            let mark = if m.name == ollama.model_name() { " ←" } else { "" };
+                            let mark = if m.name == ollama.model_name() {
+                                " ←"
+                            } else {
+                                ""
+                            };
                             println!("  {:<28} {:>6.1}B{}", m.name, m.params_b, mark);
                         }
                         println!("switch: /model <name>");
@@ -8738,9 +9365,8 @@ async fn run_interactive_tasks(
                     _ => println!("(could not list installed models)"),
                 }
             } else {
-                ollama = Arc::new(
-                    ollama::OllamaClient::new("http://localhost:11434").with_model(arg),
-                );
+                ollama =
+                    Arc::new(ollama::OllamaClient::new("http://localhost:11434").with_model(arg));
                 println!("✓ switched to model: {arg}");
                 record_console_command(&events, "model", Some(arg.to_string()))?;
             }
@@ -8752,9 +9378,33 @@ async fn run_interactive_tasks(
             tools.sort_by(|a, b| a.name.cmp(&b.name));
             println!("available tools ({}):", tools.len());
             for t in tools {
-                println!("  {:<20} {}", t.name, t.description.chars().take(60).collect::<String>());
+                println!(
+                    "  {:<20} {}",
+                    t.name,
+                    t.description.chars().take(60).collect::<String>()
+                );
             }
             record_console_command(&events, "tools", None)?;
+            continue;
+        }
+        if let Some(rest) = input.strip_prefix("/undo") {
+            let checkpoint = rest.trim();
+            let checkpoint = (!checkpoint.is_empty()).then_some(checkpoint);
+            record_console_command(&events, "undo", checkpoint.map(ToString::to_string))?;
+            let workspace_root = PermissionScope::default_autonomous().workspace_root;
+            match toolbridge::checkpoint::undo_checkpoint(&workspace_root, checkpoint) {
+                Ok(summary) => {
+                    events.append(
+                        None,
+                        None,
+                        "checkpoint.undone",
+                        &summary,
+                        serde_json::json!({"checkpoint": checkpoint}),
+                    )?;
+                    println!("✓ {summary}");
+                }
+                Err(e) => println!("undo failed: {e}"),
+            }
             continue;
         }
         if matches!(input, "/quit" | "/exit" | "quit" | "exit") {
@@ -8944,7 +9594,7 @@ async fn run_interactive_tasks(
             continue;
         }
         if let Some(rest) = input.strip_prefix("/run-commit") {
-            let cycles = rest.trim().parse::<u32>().unwrap_or(5);
+            let cycles = rest.trim().parse::<u32>().unwrap_or(6);
             record_console_command(&events, "run-commit", Some(cycles.to_string()))?;
             run_autonomous_operator_run(
                 Arc::clone(&registry),
@@ -9050,6 +9700,7 @@ fn format_interactive_help() -> String {
         "Professor X interactive task mode",
         "Type a task and press Enter.  Reference files with @path (e.g. 'fix @src/main.rs').",
         "  /model [name]   show/switch the local model    /tools  list available tools",
+        "  /undo [id|path]  restore the latest or selected Prof X checkpoint",
         "",
         "Operator commands",
         "  /brief         show latest run, coding session, evidence, and next commands",
@@ -9358,7 +10009,7 @@ fn format_operator_help() -> String {
         "Professor X operator commands",
         "",
         "Watch him work",
-        "  cargo run -- --prof-x-live 5",
+        "  cargo run -- --prof-x-live 6",
         "  cargo run -- --prof-x-enqueue \"tighten the next harness gap\"",
         "  cargo run -- --prof-x-enqueue-commit \"capture a verified skill improvement\"",
         "  cargo run -- --prof-x-plan",
@@ -9372,6 +10023,7 @@ fn format_operator_help() -> String {
         "  cargo run -- --prof-x-queue-publish latest",
         "  cargo run -- --observe-work",
         "  cargo run -- --cockpit",
+        "  cargo run -- --status-json",
         "  cargo run -- --watch-work",
         "  cargo run -- --prof-x-journal 50",
         "  cargo run -- --prof-x-journal-commit 50",
@@ -9380,6 +10032,7 @@ fn format_operator_help() -> String {
         "Give him a bounded coding-agent task",
         "  cargo run -- --prof-x-code-live \"update one safe local fixture\"",
         "  cargo run -- --coding-sessions 5",
+        "  cargo run -- --repair-coding-sessions 10",
         "  cargo run -- --prof-x-code-review latest",
         "  cargo run -- --prof-x-code-publish latest",
         "",
@@ -9474,18 +10127,132 @@ fn print_task_runs(memory: Arc<MemoryManager>, limit: usize) -> Result<()> {
     Ok(())
 }
 
+fn stale_coding_session_map(
+    events: &EventStore,
+    sessions: &[CodingSessionRecord],
+) -> Result<HashMap<String, CodingSessionStaleCandidate>> {
+    let mut stale = HashMap::new();
+    let now = chrono::Utc::now();
+    for session in sessions {
+        if let Some(candidate) = stale_candidate(events, session, now)? {
+            stale.insert(session.id.clone(), candidate);
+        }
+    }
+    Ok(stale)
+}
+
+fn coding_session_repair_command(limit: usize) -> String {
+    format!("cargo run -- --repair-coding-sessions {limit}")
+}
+
+fn repair_stale_coding_sessions(
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    limit: usize,
+) -> Result<()> {
+    let sessions = CodingSessionStore::new(Arc::clone(&memory.db)).running(limit.max(1))?;
+    let stale = stale_coding_session_map(&events, &sessions)?;
+    if stale.is_empty() {
+        println!("No stale coding sessions required repair.");
+        return Ok(());
+    }
+
+    let mut repaired = Vec::new();
+    for session in sessions {
+        let Some(candidate) = stale.get(&session.id) else {
+            continue;
+        };
+        let (report_path, evidence_path) = repair_stale_coding_session(
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            &session,
+            candidate,
+        )?;
+        repaired.push((session, candidate.clone(), report_path, evidence_path));
+    }
+
+    println!("Repaired {} stale coding session(s)", repaired.len());
+    for (session, candidate, report_path, evidence_path) in repaired {
+        println!(
+            "  {} repaired after {} minute(s) idle and {} later process starts",
+            short_fragment(&session.id),
+            candidate.idle_minutes,
+            candidate.newer_process_starts
+        );
+        println!("    report: {}", report_path.display());
+        println!("    evidence: {}", evidence_path.display());
+    }
+    Ok(())
+}
+
+fn repair_stale_coding_session(
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    session: &CodingSessionRecord,
+    candidate: &CodingSessionStaleCandidate,
+) -> Result<(PathBuf, PathBuf)> {
+    let mut checks = session.checks.clone();
+    checks.push(format!(
+        "stale-session repair after {} later daemon starts",
+        candidate.newer_process_starts
+    ));
+    let mut step_outcomes = session.step_outcomes.clone();
+    step_outcomes.push(format!(
+        "stale session reconciled after {} minute(s) idle",
+        candidate.idle_minutes
+    ));
+    let mut artifacts = session.artifacts.clone();
+    artifacts.sort();
+    artifacts.dedup();
+    let mut report = CodingSessionReport {
+        id: session.id.clone(),
+        generated_at: session.generated_at.to_rfc3339(),
+        goal: session.goal.clone(),
+        requested_goal: session.goal.clone(),
+        exercise: session.exercise.clone(),
+        status: "failed".to_string(),
+        workspace: session.workspace.clone(),
+        smoke_id: session.smoke_id,
+        smoke_report_path: session.smoke_report_path.clone(),
+        session_report_path: None,
+        transcript_path: session.transcript_path.clone(),
+        checks,
+        plan_steps: session.plan_steps.clone(),
+        step_outcomes,
+        artifacts,
+        failure_reason: Some(format!(
+            "stale coding session recovered: {}",
+            candidate.reason
+        )),
+    };
+    let event_session_id =
+        uuid::Uuid::parse_str(&session.id).unwrap_or_else(|_| uuid::Uuid::new_v4());
+    persist_coding_session_terminal_report(
+        memory,
+        events,
+        event_session_id,
+        session.generated_at,
+        &mut report,
+        "repaired stale coding-session evidence written to",
+        "repaired stale coding-session report written to",
+    )
+}
+
 fn print_coding_sessions(memory: Arc<MemoryManager>, limit: usize) -> Result<()> {
     let sessions = CodingSessionStore::new(Arc::clone(&memory.db)).recent(limit)?;
     if sessions.is_empty() {
         println!("No coding sessions recorded yet.");
         return Ok(());
     }
+    let events = EventStore::new(Arc::clone(&memory.db));
+    let stale = stale_coding_session_map(&events, &sessions)?;
     println!("Recent coding sessions");
     for session in sessions {
+        let stale_candidate = stale.get(&session.id);
         println!(
             "{} {} session={} exercise={} smoke={} checks={} artifacts={}{} {}",
             session.generated_at.format("%Y-%m-%d %H:%M:%S"),
-            session.status,
+            coding_session_display_status(&session, stale_candidate),
             &session.id[..8.min(session.id.len())],
             session.exercise,
             session
@@ -9500,6 +10267,10 @@ fn print_coding_sessions(memory: Arc<MemoryManager>, limit: usize) -> Result<()>
             truncate(&session.goal, 90),
         );
         println!("  report: {}", session.session_report_path);
+        if let Some(candidate) = stale_candidate {
+            println!("  stale: {}", truncate(&candidate.reason, 160));
+            println!("  repair: {}", coding_session_repair_command(limit.max(1)));
+        }
         if !session.checks.is_empty() {
             println!("  checks: {}", session.checks.join(", "));
         }
@@ -9528,10 +10299,15 @@ fn print_coding_session_review(memory: Arc<MemoryManager>, session_ref: &str) ->
         println!("No coding session found for '{session_ref}'.");
         return Ok(());
     };
+    let events = EventStore::new(Arc::clone(&memory.db));
+    let stale_candidate = stale_candidate(&events, &session, chrono::Utc::now())?;
     let repo_root = default_repo_root();
     println!("Professor X coding session review");
     println!("  session: {}", session.id);
-    println!("  status: {}", session.status);
+    println!(
+        "  status: {}",
+        coding_session_display_status(&session, stale_candidate.as_ref())
+    );
     println!("  exercise: {}", session.exercise);
     println!("  generated: {}", session.generated_at.to_rfc3339());
     println!("  goal: {}", session.goal);
@@ -9547,13 +10323,19 @@ fn print_coding_session_review(memory: Arc<MemoryManager>, session_ref: &str) ->
         existing_marker(&repo_root, &session.session_report_path)
     );
     if let Some(path) = &session.smoke_report_path {
-        println!("  smoke report: {path}{}", existing_marker(&repo_root, path));
+        println!(
+            "  smoke report: {path}{}",
+            existing_marker(&repo_root, path)
+        );
     }
     if let Some(path) = &session.transcript_path {
         println!("  transcript: {path}{}", existing_marker(&repo_root, path));
     }
     if let Some(reason) = &session.failure_reason {
         println!("  failure: {}", truncate(reason, 180));
+    }
+    if let Some(candidate) = &stale_candidate {
+        println!("  stale: {}", truncate(&candidate.reason, 180));
     }
 
     println!("Plan");
@@ -9593,7 +10375,14 @@ fn print_coding_session_review(memory: Arc<MemoryManager>, session_ref: &str) ->
     }
 
     println!("Publish readiness");
-    print_coding_session_publish_readiness(&repo_root, &session)?;
+    if stale_candidate.is_some() {
+        println!(
+            "  blocked: repair the stale session first with {}",
+            coding_session_repair_command(10)
+        );
+    } else {
+        print_coding_session_publish_readiness(&repo_root, &session)?;
+    }
 
     println!("Commands");
     println!(
@@ -9612,6 +10401,9 @@ fn print_coding_session_review(memory: Arc<MemoryManager>, session_ref: &str) ->
         "  publish evidence: cargo run -- --prof-x-code-publish {}",
         short_fragment(&session.id)
     );
+    if stale_candidate.is_some() {
+        println!("  repair stale row: cargo run -- --prof-x-code-repair 10");
+    }
     println!("  watch: cargo run -- --observe-work");
     Ok(())
 }
@@ -9650,7 +10442,10 @@ fn publish_coding_session_artifacts(memory: Arc<MemoryManager>, session_ref: &st
     let paths = publishable_coding_session_artifact_paths(&repo_root, &session)?;
     let commit = commit_coding_session_artifacts(&repo_root, &paths, &session)?;
 
-    println!("Published Professor X coding session {}", short_fragment(&session.id));
+    println!(
+        "Published Professor X coding session {}",
+        short_fragment(&session.id)
+    );
     println!("  commit: {commit}");
     for path in paths {
         println!("  artifact: {}", path.display());
@@ -9690,7 +10485,10 @@ fn publishable_coding_session_artifact_paths(
     paths.sort();
     paths.dedup();
     if paths.is_empty() {
-        anyhow::bail!("no existing coding session artifacts found for {}", short_fragment(&session.id));
+        anyhow::bail!(
+            "no existing coding session artifacts found for {}",
+            short_fragment(&session.id)
+        );
     }
     Ok(paths)
 }
@@ -9700,9 +10498,7 @@ fn publishable_coding_session_artifact_path(path: &std::path::Path) -> bool {
         || path
             .to_string_lossy()
             .starts_with("professor-x/artifacts/commands/")
-        || path
-            .to_string_lossy()
-            .starts_with("artifacts/commands/")
+        || path.to_string_lossy().starts_with("artifacts/commands/")
         || path
             .to_string_lossy()
             .starts_with("professor-x/artifacts/repo-patches/")
@@ -10044,7 +10840,10 @@ fn print_hiro_trajectory(memory: &Arc<MemoryManager>) -> Result<()> {
     }
     for (round, p, commit) in &rows {
         let bar = "#".repeat((p * 40.0).round() as usize);
-        println!("  r{round:<2} {p:.3} |{bar:<40}| {}", &commit[..commit.len().min(7)]);
+        println!(
+            "  r{round:<2} {p:.3} |{bar:<40}| {}",
+            &commit[..commit.len().min(7)]
+        );
     }
 
     // σ is only meaningful over a FROZEN harness — rounds sharing one commit.
@@ -10098,12 +10897,8 @@ fn print_hiro_trajectory(memory: &Arc<MemoryManager>) -> Result<()> {
 fn print_consciousness_report(memory: Arc<MemoryManager>) -> Result<()> {
     println!("Professor X — consciousness measurement report");
     println!("================================================");
-    println!(
-        "The thesis: an agent that knows itself, and grows more integrated as"
-    );
-    println!(
-        "it evolves, improves in ways a frozen one cannot. Five questions:\n"
-    );
+    println!("The thesis: an agent that knows itself, and grows more integrated as");
+    println!("it evolves, improves in ways a frozen one cannot. Five questions:\n");
 
     // ── HIRO performance trajectory + variance (the measurement floor) ────
     print_hiro_trajectory(&memory)?;
@@ -10122,9 +10917,19 @@ fn print_consciousness_report(memory: Arc<MemoryManager>) -> Result<()> {
             phi_traj.len(),
             first,
             last,
-            phi_slope.map(|s| format!("{s:+.4}/round")).unwrap_or_else(|| "n/a".into()),
+            phi_slope
+                .map(|s| format!("{s:+.4}/round"))
+                .unwrap_or_else(|| "n/a".into()),
         );
-        println!("    {}\n", verdict_slope(phi_slope, 0.0, "phi rising (integration growing)", "phi flat/falling"));
+        println!(
+            "    {}\n",
+            verdict_slope(
+                phi_slope,
+                0.0,
+                "phi rising (integration growing)",
+                "phi flat/falling"
+            )
+        );
     }
 
     // ── Q1b: DIFFERENTIATION — Lempel-Ziv complexity of module activity ───
@@ -10149,7 +10954,12 @@ fn print_consciousness_report(memory: Arc<MemoryManager>) -> Result<()> {
             let matrix = pci::matrix_from_activation_indices(&indices, 7);
             let lzc = pci::normalized_lzc(&matrix);
             // integration×differentiation: a conscious candidate is high on both.
-            let phi_now = memory.phi.trajectory()?.last().map(|(_, p)| *p).unwrap_or(0.0);
+            let phi_now = memory
+                .phi
+                .trajectory()?
+                .last()
+                .map(|(_, p)| *p)
+                .unwrap_or(0.0);
             println!(
                 "    n={} steps  LZc (differentiation) = {:.3}   [0=stereotyped, ~1=random]",
                 indices.len(),
@@ -10182,10 +10992,22 @@ fn print_consciousness_report(memory: Arc<MemoryManager>) -> Result<()> {
         let slope = least_squares_slope(&intero_traj);
         let first = intero_traj.first().map(|(_, v)| *v).unwrap_or(0.0);
         let last = intero_traj.last().map(|(_, v)| *v).unwrap_or(0.0);
-        println!("    error: {first:.3} → {last:.3}  slope={}",
-            slope.map(|s| format!("{s:+.4}/round")).unwrap_or_else(|| "n/a".into()));
+        println!(
+            "    error: {first:.3} → {last:.3}  slope={}",
+            slope
+                .map(|s| format!("{s:+.4}/round"))
+                .unwrap_or_else(|| "n/a".into())
+        );
         // falling error = negative slope is good
-        println!("    {}\n", verdict_slope(slope.map(|s| -s), 0.0, "body-model sharpening", "body-model not improving"));
+        println!(
+            "    {}\n",
+            verdict_slope(
+                slope.map(|s| -s),
+                0.0,
+                "body-model sharpening",
+                "body-model not improving"
+            )
+        );
     }
 
     // ── Q3: Self-prediction error converging? ─────────────────────────────
@@ -10198,9 +11020,13 @@ fn print_consciousness_report(memory: Arc<MemoryManager>) -> Result<()> {
         let dims = memory.self_prediction.mean_error_by_dimension(200)?;
         print!("    n={n_pred}  mean self-prediction error={mean:.3}");
         if let Some(d) = dims {
-            let (blind, val) = [("tools", d.tool_err), ("steps", d.step_err), ("success", d.success_err)]
-                .into_iter()
-                .fold(("", 0.0), |acc, x| if x.1 > acc.1 { x } else { acc });
+            let (blind, val) = [
+                ("tools", d.tool_err),
+                ("steps", d.step_err),
+                ("success", d.success_err),
+            ]
+            .into_iter()
+            .fold(("", 0.0), |acc, x| if x.1 > acc.1 { x } else { acc });
             println!("  | blind spot: {blind} ({val:.3})");
         } else {
             println!();
@@ -10240,15 +11066,18 @@ fn print_consciousness_report(memory: Arc<MemoryManager>) -> Result<()> {
 
     // ── Q4: Does default-mode wandering produce insight? ──────────────────
     println!("Q4. Does mind-wandering (DMN) produce insight that feeds evolution?");
-    let dmn_insights: i64 = memory.db.lock().unwrap().query_row(
-        "SELECT COUNT(*) FROM cognition WHERE source LIKE 'dmn:%'",
-        [],
-        |r| r.get(0),
-    ).unwrap_or(0);
+    let dmn_insights: i64 = memory
+        .db
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM cognition WHERE source LIKE 'dmn:%'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
     let narrative_chapters = memory.narrative.count()?;
-    println!(
-        "    DMN insights stored={dmn_insights}  narrative chapters={narrative_chapters}"
-    );
+    println!("    DMN insights stored={dmn_insights}  narrative chapters={narrative_chapters}");
     if dmn_insights == 0 {
         println!("    no data yet (DMN runs between evolution cycles)\n");
     } else {
@@ -10278,8 +11107,14 @@ fn print_consciousness_report(memory: Arc<MemoryManager>) -> Result<()> {
     println!("------------------");
     // FED — world model
     match memory.free_energy.slope_per_round()? {
-        Some(s) => println!("  FED (world-model error) slope: {s:+.4}/round  {}",
-            if s < 0.0 { "✓ world model improving" } else { "— not improving" }),
+        Some(s) => println!(
+            "  FED (world-model error) slope: {s:+.4}/round  {}",
+            if s < 0.0 {
+                "✓ world model improving"
+            } else {
+                "— not improving"
+            }
+        ),
         None => println!("  FED: no data yet"),
     }
     // Self-authored tests — the invention
@@ -10287,16 +11122,23 @@ fn print_consciousness_report(memory: Arc<MemoryManager>) -> Result<()> {
     let sat_rate = memory.self_authored_tests.mean_pass_rate()?;
     println!(
         "  Self-authored tests: {sat_count} authored, mean pass-rate {}",
-        sat_rate.map(|r| format!("{r:.2}")).unwrap_or_else(|| "n/a".into())
+        sat_rate
+            .map(|r| format!("{r:.2}"))
+            .unwrap_or_else(|| "n/a".into())
     );
     // Causal traces — STDP
-    println!("  Causal traces recorded: {}", memory.causal_traces.count()?);
+    println!(
+        "  Causal traces recorded: {}",
+        memory.causal_traces.count()?
+    );
     // MCA — metacognitive calibration (if any rounds)
     if let Some((round, _)) = phi_traj.last() {
         let metacog = memd::metacognitive::MetacognitiveStore::new(Arc::clone(&memory.db));
         let (mca, n) = metacog.mca_rolling(*round, 10)?;
         if n > 0 {
-            println!("  MCA (metacognitive calibration, last 10 rounds): {mca:.2} over {n} attributions");
+            println!(
+                "  MCA (metacognitive calibration, last 10 rounds): {mca:.2} over {n} attributions"
+            );
         }
     }
 
@@ -10323,7 +11165,10 @@ fn round_bucketed_mean(
     let conn = db.lock().unwrap();
     let mut stmt = conn.prepare(sql)?;
     let rows = stmt.query_map([], |r| {
-        Ok((r.get::<_, i64>(0)? as u32, r.get::<_, Option<f64>>(1)?.unwrap_or(0.0) as f32))
+        Ok((
+            r.get::<_, i64>(0)? as u32,
+            r.get::<_, Option<f64>>(1)?.unwrap_or(0.0) as f32,
+        ))
     })?;
     rows.map(|r| r.map_err(Into::into)).collect()
 }
@@ -10356,11 +11201,7 @@ fn print_prof_x_brief(memory: Arc<MemoryManager>, events: Arc<EventStore>) -> Re
     let recent_events = events.work_tail(12)?;
     println!(
         "{}",
-        format_prof_x_brief(
-            latest_run.as_ref(),
-            latest_session.as_ref(),
-            &recent_events
-        )
+        format_prof_x_brief(latest_run.as_ref(), latest_session.as_ref(), &recent_events)
     );
     Ok(())
 }
@@ -10411,10 +11252,7 @@ fn format_prof_x_brief(
                     if last_gate.passed { "passed" } else { "failed" },
                     truncate(&last_gate.detail, 90)
                 ));
-                lines.push(format!(
-                    "  proof {}",
-                    truncate(&last_gate.report_path, 130)
-                ));
+                lines.push(format!("  proof {}", truncate(&last_gate.report_path, 130)));
                 if let Some(transcript) = &last_gate.transcript_path {
                     lines.push(format!("  transcript {}", truncate(transcript, 130)));
                 }
@@ -10466,7 +11304,7 @@ fn format_prof_x_brief(
         }
         None => {
             lines.push("  no coding session recorded yet".to_string());
-            lines.push("  command /run-commit 5 after safety gates are green".to_string());
+            lines.push("  command /run-commit 6 after safety gates are green".to_string());
         }
     }
 
@@ -10509,7 +11347,11 @@ fn run_journal_path(run: &WorkLoopRunRecord) -> Option<String> {
 }
 
 fn format_run_log_entry(run: &WorkLoopRunRecord, ledger_path: Option<&str>) -> String {
-    let status = if run.failed_cycles == 0 { "passed" } else { "failed" };
+    let status = if run.failed_cycles == 0 {
+        "passed"
+    } else {
+        "failed"
+    };
     let latest_gate = run
         .smoke_records
         .last()
@@ -10570,7 +11412,10 @@ fn print_run_review(memory: Arc<MemoryManager>, run_ref: &str) -> Result<()> {
     println!("  completed: {}", report.completed_at);
     println!(
         "  cycles: {}/{} passed={} failed={}",
-        report.completed_cycles, report.requested_cycles, report.passed_cycles, report.failed_cycles
+        report.completed_cycles,
+        report.requested_cycles,
+        report.passed_cycles,
+        report.failed_cycles
     );
     println!("  report: {}", display_repo_path(&repo_root, &report_path));
     if let Some(path) = &report.ledger_path {
@@ -10601,7 +11446,10 @@ fn print_run_review(memory: Arc<MemoryManager>, run_ref: &str) -> Result<()> {
             status,
             truncate(&smoke.detail, 120)
         );
-        println!("    report: {}", display_repo_path(&repo_root, &artifact_path));
+        println!(
+            "    report: {}",
+            display_repo_path(&repo_root, &artifact_path)
+        );
         if !artifact_path.exists() {
             println!("    report_status: missing");
         }
@@ -10610,7 +11458,11 @@ fn print_run_review(memory: Arc<MemoryManager>, run_ref: &str) -> Result<()> {
             println!(
                 "    transcript: {}{}",
                 display_repo_path(&repo_root, &transcript_path),
-                if transcript_path.exists() { "" } else { " (missing)" }
+                if transcript_path.exists() {
+                    ""
+                } else {
+                    " (missing)"
+                }
             );
         }
         if smoke.kind == "patch_apply_commit" {
@@ -10662,11 +11514,7 @@ fn print_run_replay(memory: Arc<MemoryManager>, run_ref: &str) -> Result<()> {
     if !report.planned_jobs.is_empty() {
         println!("Plan");
         for job in &report.planned_jobs {
-            println!(
-                "- cycle {} {}",
-                job.cycle,
-                truncate(&job.reason, 120)
-            );
+            println!("- cycle {} {}", job.cycle, truncate(&job.reason, 120));
             println!("  L job {}", job.kind);
         }
         println!();
@@ -10690,7 +11538,10 @@ fn publish_run_artifacts(memory: Arc<MemoryManager>, run_ref: &str) -> Result<()
     let report: SupervisedLoopReport = serde_json::from_str(&raw)?;
     let published = publish_run_report_artifacts(&repo_root, &report_path, &report)?;
 
-    println!("Published Professor X run {}", short_fragment(&report.run_id));
+    println!(
+        "Published Professor X run {}",
+        short_fragment(&report.run_id)
+    );
     println!("  commit: {}", published.commit);
     for path in published.paths {
         println!("  artifact: {}", path.display());
@@ -10727,7 +11578,10 @@ fn write_prof_x_journal(events: Arc<EventStore>, limit: usize, commit: bool) -> 
     Ok(())
 }
 
-fn prof_x_journal_path(repo_root: &std::path::Path, timestamp: chrono::DateTime<chrono::Utc>) -> PathBuf {
+fn prof_x_journal_path(
+    repo_root: &std::path::Path,
+    timestamp: chrono::DateTime<chrono::Utc>,
+) -> PathBuf {
     repo_root
         .join("professor-x")
         .join("artifacts")
@@ -10749,7 +11603,10 @@ fn format_prof_x_journal_markdown(
         .unwrap_or_else(|| "clean".to_string());
     let latest_activity = cockpit_latest_activity(recent_events);
     let mut lines = vec![
-        format!("# Professor X Work Journal - {}", timestamp.format("%Y-%m-%d %H:%M:%S UTC")),
+        format!(
+            "# Professor X Work Journal - {}",
+            timestamp.format("%Y-%m-%d %H:%M:%S UTC")
+        ),
         String::new(),
         "## Run Context".to_string(),
         format!("- generated_at: {}", timestamp.to_rfc3339()),
@@ -10826,7 +11683,10 @@ fn commit_prof_x_journal(
         anyhow::bail!("journal is already committed; no staged changes");
     }
 
-    let message = format!("professor-x: journal {}", timestamp.format("%Y-%m-%d %H:%M:%S UTC"));
+    let message = format!(
+        "professor-x: journal {}",
+        timestamp.format("%Y-%m-%d %H:%M:%S UTC")
+    );
     let commit = std::process::Command::new("git")
         .args(["commit", "-m", &message])
         .current_dir(repo_root)
@@ -10863,10 +11723,9 @@ fn publishable_run_artifact_paths(
 ) -> Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
     paths.push(repo_relative_existing_path(repo_root, report_path)?);
-    let ledger = report
-        .ledger_path
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("run report has no ledger_path; run it again before publishing"))?;
+    let ledger = report.ledger_path.as_ref().ok_or_else(|| {
+        anyhow::anyhow!("run report has no ledger_path; run it again before publishing")
+    })?;
     paths.push(repo_relative_existing_path(
         repo_root,
         &resolve_report_reference(repo_root, ledger),
@@ -10878,9 +11737,7 @@ fn publishable_run_artifact_paths(
         )?);
     }
     for smoke in &report.smoke_records {
-        if let Some(path) =
-            optional_publishable_run_artifact_path(repo_root, &smoke.report_path)?
-        {
+        if let Some(path) = optional_publishable_run_artifact_path(repo_root, &smoke.report_path)? {
             paths.push(path);
         }
         if let Some(transcript) = &smoke.transcript_path {
@@ -10926,7 +11783,9 @@ fn publishable_event_log_paths(
                 .join("events")
                 .join(format!("{date}.jsonl")),
         ] {
-            if let Some(path) = optional_publishable_run_artifact_path(repo_root, candidate.display().to_string())? {
+            if let Some(path) =
+                optional_publishable_run_artifact_path(repo_root, candidate.display().to_string())?
+            {
                 paths.push(path);
             }
         }
@@ -11256,7 +12115,10 @@ fn find_work_loop_report_by_ref(repo_root: &std::path::Path, run_ref: &str) -> O
 }
 
 fn work_loop_report_artifacts(repo_root: &std::path::Path) -> Vec<PathBuf> {
-    let root = repo_root.join("professor-x").join("artifacts").join("work-loop");
+    let root = repo_root
+        .join("professor-x")
+        .join("artifacts")
+        .join("work-loop");
     let mut out = Vec::new();
     let mut stack = vec![root];
     while let Some(dir) = stack.pop() {
@@ -11355,10 +12217,14 @@ fn print_task_evidence(
         println!("No transcript found for '{task_ref}'.");
         return Ok(());
     };
-    let task_run = TaskRunStore::new(Arc::clone(&memory.db))
-        .get_by_task_prefix(&transcript.task_id)?;
-    let task_id = uuid::Uuid::parse_str(&transcript.task_id)
-        .with_context(|| format!("stored transcript task id is not a UUID: {}", transcript.task_id))?;
+    let task_run =
+        TaskRunStore::new(Arc::clone(&memory.db)).get_by_task_prefix(&transcript.task_id)?;
+    let task_id = uuid::Uuid::parse_str(&transcript.task_id).with_context(|| {
+        format!(
+            "stored transcript task id is not a UUID: {}",
+            transcript.task_id
+        )
+    })?;
     let task_events = events.for_task(task_id, 2000)?;
     let bundle = format_task_evidence_bundle(&transcript, task_run.as_ref(), &task_events);
     println!("{bundle}");
@@ -11387,7 +12253,10 @@ fn format_task_evidence_bundle(
     lines.push(format!("  transcript_status: {}", transcript.status));
     lines.push(format!("  attempts: {}", transcript.attempt_count));
     lines.push(format!("  steps: {}", transcript.step_count));
-    lines.push(format!("  description: {}", truncate(&transcript.task_description, 180)));
+    lines.push(format!(
+        "  description: {}",
+        truncate(&transcript.task_description, 180)
+    ));
     lines.push(format!("  summary: {}", truncate(&transcript.summary, 180)));
 
     match task_run {
@@ -11403,20 +12272,32 @@ fn format_task_evidence_bundle(
             if let Some(mode) = &run.failure_mode {
                 lines.push(format!("  failure: {}", truncate(mode, 180)));
             }
+            if let Some(class) = run.failure_class {
+                lines.push(format!("  failure_class: {}", class.as_str()));
+            }
             if let Some(tool) = &run.last_tool {
                 lines.push(format!("  last_tool: {tool}"));
             }
             if !run.last_summary.is_empty() {
-                lines.push(format!("  last_summary: {}", truncate(&run.last_summary, 180)));
+                lines.push(format!(
+                    "  last_summary: {}",
+                    truncate(&run.last_summary, 180)
+                ));
             }
             if let Some(error) = &run.last_error {
                 lines.push(format!("  last_error: {}", truncate(error, 180)));
             }
             if !run.verification_summary.is_empty() {
-                lines.push(format!("  verification: {}", truncate(&run.verification_summary, 220)));
+                lines.push(format!(
+                    "  verification: {}",
+                    truncate(&run.verification_summary, 220)
+                ));
             }
             if !run.verification_artifacts.is_empty() {
-                lines.push(format!("  verification_artifacts: {}", run.verification_artifacts.len()));
+                lines.push(format!(
+                    "  verification_artifacts: {}",
+                    run.verification_artifacts.len()
+                ));
                 for artifact in run.verification_artifacts.iter().take(5) {
                     lines.push(format!("    - {}", truncate(artifact, 160)));
                 }
@@ -11477,7 +12358,7 @@ fn format_transcript_summary(transcript: &TranscriptSummary) -> String {
 
 fn format_task_run_summary(run: &TaskRun) -> String {
     format!(
-        "{} {} task={} type={} p{} attempts={} steps={}{} {}",
+        "{} {} task={} type={} p{} attempts={} steps={}{}{} {}",
         run.updated_at.format("%Y-%m-%d %H:%M:%S"),
         run.status,
         &run.task_id[..8.min(run.task_id.len())],
@@ -11485,6 +12366,9 @@ fn format_task_run_summary(run: &TaskRun) -> String {
         run.priority,
         run.attempt_count,
         run.step_count,
+        run.failure_class
+            .map(|class| format!(" class={}", class.as_str()))
+            .unwrap_or_default(),
         run.outcome_score
             .map(|score| format!(" score={score:.2}"))
             .unwrap_or_default(),
@@ -11571,6 +12455,63 @@ fn print_work_cockpit(
     Ok(())
 }
 
+fn print_work_status_json(
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    limit: usize,
+) -> Result<()> {
+    let value = render_work_status_json(memory, events, limit)?;
+    println!("{}", serde_json::to_string_pretty(&value)?);
+    Ok(())
+}
+
+fn render_work_status_json(
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    limit: usize,
+) -> Result<serde_json::Value> {
+    let repo_root = default_repo_root();
+    let recent_events = events.work_tail(limit)?;
+    let latest_task_run = TaskRunStore::new(Arc::clone(&memory.db)).latest()?;
+    let latest_run = WorkLoopRunStore::new(Arc::clone(&memory.db)).latest()?;
+    let latest_coding_session = CodingSessionStore::new(Arc::clone(&memory.db)).latest()?;
+    let latest_coding_session_stale = latest_coding_session
+        .as_ref()
+        .map(|session| stale_candidate(&events, session, chrono::Utc::now()))
+        .transpose()?
+        .flatten();
+    let latest_coding_smoke = CodingSmokeStore::new(Arc::clone(&memory.db)).latest()?;
+    let recent_queue = AutonomyQueueStore::new(Arc::clone(&memory.db)).recent(5)?;
+    let runtime_line = cockpit_runtime_line(&repo_root);
+    let safety_line = shell_sandbox_posture_line();
+    let gate_store = WorkLoopGateStore::new(Arc::clone(&memory.db));
+    let latest_gate = gate_store.latest()?;
+    let recent_gates = latest_run
+        .as_ref()
+        .map(|run| gate_store.recent_for_run(&run.run_id, 8))
+        .transpose()?
+        .unwrap_or_default();
+    let recent_evolution_events = events.work_tail(200)?;
+    let latest_evolution_artifact =
+        latest_evolution_artifact_status(&repo_root, &recent_evolution_events);
+
+    Ok(format_work_status_json(
+        &repo_root,
+        &runtime_line,
+        &safety_line,
+        &recent_events,
+        latest_evolution_artifact.as_ref(),
+        latest_task_run.as_ref(),
+        latest_run.as_ref(),
+        latest_coding_session.as_ref(),
+        latest_coding_session_stale.as_ref(),
+        latest_coding_smoke.as_ref(),
+        latest_gate.as_ref(),
+        &recent_gates,
+        &recent_queue,
+    ))
+}
+
 fn render_work_cockpit(
     memory: Arc<MemoryManager>,
     events: Arc<EventStore>,
@@ -11583,6 +12524,7 @@ fn render_work_cockpit(
     let latest_coding_smoke = CodingSmokeStore::new(Arc::clone(&memory.db)).latest()?;
     let recent_queue = AutonomyQueueStore::new(Arc::clone(&memory.db)).recent(5)?;
     let runtime_line = cockpit_runtime_line(&repo_root);
+    let safety_line = shell_sandbox_posture_line();
     let gate_store = WorkLoopGateStore::new(Arc::clone(&memory.db));
     let latest_gate = gate_store.latest()?;
     let recent_gates = latest_run
@@ -11590,11 +12532,16 @@ fn render_work_cockpit(
         .map(|run| gate_store.recent_for_run(&run.run_id, 8))
         .transpose()?
         .unwrap_or_default();
+    let recent_evolution_events = events.work_tail(200)?;
+    let latest_evolution_artifact =
+        latest_evolution_artifact_status(&repo_root, &recent_evolution_events);
 
     Ok(format_work_cockpit(
         &repo_root,
         &runtime_line,
+        &safety_line,
         &recent_events,
+        latest_evolution_artifact.as_ref(),
         latest_run.as_ref(),
         latest_coding_session.as_ref(),
         latest_coding_smoke.as_ref(),
@@ -11604,10 +12551,342 @@ fn render_work_cockpit(
     ))
 }
 
+fn format_work_status_json(
+    repo_root: &std::path::Path,
+    runtime_line: &str,
+    safety_line: &str,
+    recent_events: &[memd::events::AgentEvent],
+    latest_evolution_artifact: Option<&EvolutionArtifactStatus>,
+    latest_task_run: Option<&TaskRun>,
+    latest_run: Option<&WorkLoopRunRecord>,
+    latest_coding_session: Option<&CodingSessionRecord>,
+    latest_coding_session_stale: Option<&CodingSessionStaleCandidate>,
+    latest_coding_smoke: Option<&CodingSmokeRecord>,
+    latest_gate: Option<&WorkLoopGateRecord>,
+    recent_gates: &[WorkLoopGateRecord],
+    recent_queue: &[AutonomyQueueItem],
+) -> serde_json::Value {
+    serde_json::json!({
+        "schema": "professor_x.work_status.v1",
+        "generated_at": chrono::Utc::now().to_rfc3339(),
+        "repo": {
+            "root": repo_root.display().to_string(),
+            "git": cockpit_git_line(repo_root),
+        },
+        "runtime": runtime_line,
+        "safety": safety_line,
+        "state": cockpit_state(latest_run, latest_gate),
+        "now": cockpit_now_summary(recent_events, latest_gate, latest_coding_session),
+        "latest_activity": cockpit_latest_activity(recent_events),
+        "signal": work_signal_summary(recent_events),
+        "latest_evolution_artifact": latest_evolution_artifact,
+        "latest_task_run": latest_task_run.map(work_status_task_run_json),
+        "current_run": latest_run.map(work_status_run_json),
+        "active_gate": latest_gate.map(work_status_gate_json),
+        "gate_ledger": recent_gates.iter().take(8).map(work_status_gate_json).collect::<Vec<_>>(),
+        "autonomous_queue": recent_queue.iter().take(5).map(work_status_queue_json).collect::<Vec<_>>(),
+        "latest_coding_session": latest_coding_session
+            .map(|session| work_status_coding_session_json(session, latest_coding_session_stale)),
+        "latest_coding_smoke": latest_coding_smoke.map(work_status_coding_smoke_json),
+        "recent_events": recent_events.iter().map(work_status_event_json).collect::<Vec<_>>(),
+        "commands": [
+            "cargo run -- --status-json",
+            "cargo run -- --cockpit",
+            "cargo run -- --observe-work",
+            "cargo run -- --repair-coding-sessions 10",
+            "cargo run -- --prof-x-live-publish 6",
+            "cargo run -- --replay latest",
+            "cargo run -- --run-review latest"
+        ],
+    })
+}
+
+fn work_status_run_json(run: &WorkLoopRunRecord) -> serde_json::Value {
+    serde_json::json!({
+        "run_id": run.run_id,
+        "short_id": short_fragment(&run.run_id),
+        "kind": run.run_kind,
+        "profile": run.profile,
+        "started_at": run.started_at.to_rfc3339(),
+        "completed_at": run.completed_at.to_rfc3339(),
+        "requested_cycles": run.requested_cycles,
+        "completed_cycles": run.completed_cycles,
+        "passed_cycles": run.passed_cycles,
+        "failed_cycles": run.failed_cycles,
+        "progress": cockpit_progress(run.completed_cycles, run.requested_cycles),
+        "report_path": run.report_path,
+        "commands": {
+            "replay": format!("cargo run -- --replay {}", short_fragment(&run.run_id)),
+            "review": format!("cargo run -- --run-review {}", short_fragment(&run.run_id)),
+            "publish": format!("cargo run -- --publish-run {}", short_fragment(&run.run_id)),
+        },
+        "planned_jobs": run.planned_jobs.iter().map(|job| serde_json::json!({
+            "cycle": job.cycle,
+            "kind": job.kind,
+            "label": job.label,
+            "reason": job.reason,
+        })).collect::<Vec<_>>(),
+        "evidence": run.smoke_records.iter().map(|smoke| serde_json::json!({
+            "cycle": smoke.cycle,
+            "kind": smoke.kind,
+            "passed": smoke.passed,
+            "report_path": smoke.report_path,
+            "transcript_path": smoke.transcript_path,
+            "workspace": smoke.workspace,
+            "detail": smoke.detail,
+        })).collect::<Vec<_>>(),
+    })
+}
+
+fn work_status_task_run_json(run: &TaskRun) -> serde_json::Value {
+    serde_json::json!({
+        "task_id": run.task_id,
+        "short_id": short_fragment(&run.task_id),
+        "status": run.status,
+        "task_type": run.task_type,
+        "priority": run.priority,
+        "attempt_count": run.attempt_count,
+        "step_count": run.step_count,
+        "score": run.outcome_score,
+        "failure_class": run.failure_class.map(FailureClass::as_str),
+        "failure_mode": run.failure_mode,
+        "last_tool": run.last_tool,
+        "last_summary": run.last_summary,
+        "transcript_path": run.transcript_path,
+        "updated_at": run.updated_at.to_rfc3339(),
+        "completed_at": run.completed_at.map(|ts| ts.to_rfc3339()),
+    })
+}
+
+fn work_status_gate_json(gate: &WorkLoopGateRecord) -> serde_json::Value {
+    serde_json::json!({
+        "run_id": gate.run_id,
+        "short_run_id": short_fragment(&gate.run_id),
+        "run_kind": gate.run_kind,
+        "profile": gate.profile,
+        "cycle": gate.cycle,
+        "kind": gate.kind,
+        "label": gate.label,
+        "reason": gate.reason,
+        "status": gate.status,
+        "passed": gate.passed,
+        "started_at": gate.started_at.map(|ts| ts.to_rfc3339()),
+        "completed_at": gate.completed_at.map(|ts| ts.to_rfc3339()),
+        "updated_at": gate.updated_at.to_rfc3339(),
+        "report_path": gate.report_path,
+        "transcript_path": gate.transcript_path,
+        "workspace": gate.workspace,
+        "detail": gate.detail,
+    })
+}
+
+fn work_status_queue_json(item: &AutonomyQueueItem) -> serde_json::Value {
+    let brief = autonomy_queue_brief(item, 160);
+    serde_json::json!({
+        "queue_id": item.id,
+        "short_id": short_fragment(&item.id),
+        "status": item.status,
+        "priority": item.priority,
+        "profile": item.profile.to_string(),
+        "cycles": item.cycles,
+        "goal": item.goal,
+        "next_command": brief.next_command,
+        "commands": brief.commands,
+        "result_run_id": item.result_run_id,
+        "result_report_path": item.result_report_path,
+        "failure_reason": item.failure_reason,
+        "queued_at": item.queued_at.to_rfc3339(),
+        "updated_at": item.updated_at.to_rfc3339(),
+    })
+}
+
+fn work_status_coding_session_json(
+    session: &CodingSessionRecord,
+    stale: Option<&CodingSessionStaleCandidate>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "id": session.id,
+        "short_id": short_fragment(&session.id),
+        "generated_at": session.generated_at.to_rfc3339(),
+        "goal": session.goal,
+        "exercise": session.exercise,
+        "status": coding_session_display_status(session, stale),
+        "stored_status": session.status,
+        "stale": stale.is_some(),
+        "stale_reason": stale.as_ref().map(|candidate| candidate.reason.as_str()),
+        "stale_last_activity_at": stale.as_ref().map(|candidate| candidate.last_activity_at.to_rfc3339()),
+        "stale_idle_minutes": stale.as_ref().map(|candidate| candidate.idle_minutes),
+        "stale_newer_process_starts": stale.as_ref().map(|candidate| candidate.newer_process_starts),
+        "workspace": session.workspace,
+        "commit": coding_session_commit_hint(session),
+        "checks": session.checks,
+        "artifacts": session.artifacts,
+        "session_report_path": session.session_report_path,
+        "smoke_report_path": session.smoke_report_path,
+        "transcript_path": session.transcript_path,
+        "last_outcome": session.step_outcomes.last(),
+        "failure_reason": session.failure_reason,
+        "repair_command": stale.as_ref().map(|_| coding_session_repair_command(10)),
+    })
+}
+
+fn work_status_coding_smoke_json(smoke: &CodingSmokeRecord) -> serde_json::Value {
+    serde_json::json!({
+        "id": smoke.id,
+        "generated_at": smoke.generated_at.to_rfc3339(),
+        "workspace": smoke.workspace,
+        "passed": smoke.passed,
+        "initial_test_failed": smoke.initial_test_failed,
+        "edit_applied": smoke.edit_applied,
+        "final_test_passed": smoke.final_test_passed,
+        "report_path": smoke.report_path,
+        "transcript_path": smoke.transcript_path,
+        "artifacts": smoke.artifacts,
+    })
+}
+
+fn work_status_event_json(event: &memd::events::AgentEvent) -> serde_json::Value {
+    serde_json::json!({
+        "id": event.id,
+        "timestamp": event.timestamp.to_rfc3339(),
+        "event_type": event.event_type,
+        "summary": event.summary,
+        "session_id": event.session_id,
+        "task_id": event.task_id,
+        "line": format_work_event(event),
+    })
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct EvolutionArtifactStatus {
+    stage: String,
+    artifact_path: String,
+    event_type: Option<String>,
+    event_id: Option<i64>,
+    event_summary: Option<String>,
+    generated_at: Option<String>,
+    artifact_id: Option<String>,
+    status: Option<String>,
+    target_component: Option<String>,
+    reason: Option<String>,
+    checks: Vec<String>,
+    empirical_gate: Option<evolved::loop_runner::EmpiricalVerificationEvidence>,
+    empirical_gate_summary: Option<String>,
+    diff_bytes: Option<usize>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct StoredEvolutionArtifactStatus {
+    generated_at: Option<String>,
+    artifact_id: Option<String>,
+    status: Option<String>,
+    target_component: Option<String>,
+    analysis: Option<String>,
+    verification: Option<evolved::loop_runner::VerificationOutcome>,
+    diff_bytes: Option<usize>,
+}
+
+fn empirical_gate_summary(
+    evidence: &evolved::loop_runner::EmpiricalVerificationEvidence,
+) -> String {
+    format!(
+        "repo-fix {} task(s) baseline {:.3} candidate {:.3} delta {:+.3} {}",
+        evidence.task_count,
+        evidence.baseline_score,
+        evidence.candidate_score,
+        evidence.score_delta,
+        if evidence.passed { "pass" } else { "reject" }
+    )
+}
+
+fn latest_evolution_artifact_status(
+    repo_root: &std::path::Path,
+    recent_events: &[memd::events::AgentEvent],
+) -> Option<EvolutionArtifactStatus> {
+    recent_events
+        .iter()
+        .rev()
+        .find(|event| {
+            event.event_type.starts_with("evolution.")
+                && event.payload["artifact_path"].as_str().is_some()
+        })
+        .and_then(|event| evolution_artifact_status_from_event(repo_root, event))
+}
+
+fn evolution_artifact_status_from_event(
+    repo_root: &std::path::Path,
+    event: &memd::events::AgentEvent,
+) -> Option<EvolutionArtifactStatus> {
+    let raw_path = event.payload["artifact_path"].as_str()?;
+    let artifact_path = resolve_report_reference(repo_root, raw_path);
+    let stage = evolution_artifact_stage(&artifact_path)
+        .unwrap_or_else(|| event.event_type.trim_start_matches("evolution.").to_string());
+
+    if let Ok(raw) = std::fs::read_to_string(&artifact_path) {
+        if let Ok(stored) = serde_json::from_str::<StoredEvolutionArtifactStatus>(&raw) {
+            let verification = stored.verification.clone();
+            let evidence = verification.as_ref().and_then(|value| value.evidence.clone());
+            let reason = verification
+                .as_ref()
+                .map(|value| value.reason.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .or_else(|| stored.analysis.filter(|value| !value.trim().is_empty()));
+            return Some(EvolutionArtifactStatus {
+                stage,
+                artifact_path: display_repo_path(repo_root, &artifact_path),
+                event_type: Some(event.event_type.clone()),
+                event_id: Some(event.id),
+                event_summary: Some(event.summary.clone()),
+                generated_at: stored.generated_at,
+                artifact_id: stored.artifact_id,
+                status: stored.status,
+                target_component: stored.target_component,
+                reason,
+                checks: verification
+                    .as_ref()
+                    .map(|value| value.checks.clone())
+                    .unwrap_or_default(),
+                empirical_gate_summary: evidence.as_ref().map(empirical_gate_summary),
+                empirical_gate: evidence,
+                diff_bytes: stored.diff_bytes,
+            });
+        }
+    }
+
+    Some(EvolutionArtifactStatus {
+        stage,
+        artifact_path: display_repo_path(repo_root, &artifact_path),
+        event_type: Some(event.event_type.clone()),
+        event_id: Some(event.id),
+        event_summary: Some(event.summary.clone()),
+        generated_at: Some(event.timestamp.to_rfc3339()),
+        artifact_id: None,
+        status: None,
+        target_component: event.payload["target_component"]
+            .as_str()
+            .map(ToOwned::to_owned),
+        reason: event.payload["reason"].as_str().map(ToOwned::to_owned),
+        checks: Vec::new(),
+        empirical_gate: None,
+        empirical_gate_summary: None,
+        diff_bytes: None,
+    })
+}
+
+fn evolution_artifact_stage(path: &std::path::Path) -> Option<String> {
+    path.parent()?
+        .parent()?
+        .file_name()?
+        .to_str()
+        .map(|value| value.to_string())
+}
+
 fn format_work_cockpit(
     repo_root: &std::path::Path,
     runtime_line: &str,
+    safety_line: &str,
     recent_events: &[memd::events::AgentEvent],
+    latest_evolution_artifact: Option<&EvolutionArtifactStatus>,
     latest_run: Option<&WorkLoopRunRecord>,
     latest_coding_session: Option<&CodingSessionRecord>,
     latest_coding_smoke: Option<&CodingSmokeRecord>,
@@ -11623,6 +12902,7 @@ fn format_work_cockpit(
         chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
     ));
     lines.push(format!("runtime {runtime_line}"));
+    lines.push(format!("safety {safety_line}"));
     lines.push(format!(
         "state {}  {}",
         cockpit_state(latest_run, latest_gate),
@@ -11632,6 +12912,31 @@ fn format_work_cockpit(
         "now   {}",
         cockpit_now_summary(recent_events, latest_gate, latest_coding_session)
     ));
+    lines.push(String::new());
+    lines.push("Latest evolution artifact".to_string());
+    if let Some(artifact) = latest_evolution_artifact {
+        lines.push(format!(
+            "  {} {} {}",
+            artifact.stage,
+            artifact.status.as_deref().unwrap_or("unknown"),
+            artifact.target_component.as_deref().unwrap_or("unknown"),
+        ));
+        if let Some(reason) = artifact.reason.as_deref() {
+            lines.push(format!("  reason {}", truncate(reason, 160)));
+        }
+        if let Some(summary) = artifact.empirical_gate_summary.as_deref() {
+            lines.push(format!("  gate {}", truncate(summary, 160)));
+        }
+        if !artifact.checks.is_empty() {
+            lines.push(format!(
+                "  checks {}",
+                truncate(&artifact.checks.join(", "), 160)
+            ));
+        }
+        lines.push(format!("  artifact {}", artifact.artifact_path));
+    } else {
+        lines.push("  none recorded".to_string());
+    }
     lines.push(String::new());
     lines.push("Current run".to_string());
     match latest_run {
@@ -11685,13 +12990,18 @@ fn format_work_cockpit(
                 }
             }
         }
-        None => lines.push("  waiting for --operator-run, --operator-run-commit, or --lab".to_string()),
+        None => {
+            lines.push("  waiting for --operator-run, --operator-run-commit, or --lab".to_string())
+        }
     }
 
     lines.push(String::new());
     lines.push("Autonomous queue".to_string());
     if recent_queue.is_empty() {
-        lines.push("  empty; add work with --prof-x-enqueue \"goal\" or --prof-x-enqueue-commit \"goal\"".to_string());
+        lines.push(
+            "  empty; add work with --prof-x-enqueue \"goal\" or --prof-x-enqueue-commit \"goal\""
+                .to_string(),
+        );
     } else {
         for item in recent_queue.iter().take(5) {
             let brief = autonomy_queue_brief(item, 96);
@@ -11819,7 +13129,10 @@ fn format_work_cockpit(
     }
 
     lines.push(String::new());
-    lines.push(format!("Recent signal {}", work_signal_summary(recent_events)));
+    lines.push(format!(
+        "Recent signal {}",
+        work_signal_summary(recent_events)
+    ));
     lines.push(String::new());
     lines.push("Live trace".to_string());
     if recent_events.is_empty() {
@@ -11847,10 +13160,7 @@ fn cockpit_state(
     {
         return "RUNNING";
     }
-    if latest_run
-        .map(|run| run.failed_cycles > 0)
-        .unwrap_or(false)
-    {
+    if latest_run.map(|run| run.failed_cycles > 0).unwrap_or(false) {
         return "NEEDS-REVIEW";
     }
     if latest_run
@@ -11974,7 +13284,9 @@ fn work_signal_summary(events: &[memd::events::AgentEvent]) -> String {
             evolution += 1;
         } else if event_type.starts_with("work_loop.") {
             loop_events += 1;
-        } else if event_type.starts_with("autonomy.queue.") || event_type.starts_with("autonomous_run.") {
+        } else if event_type.starts_with("autonomy.queue.")
+            || event_type.starts_with("autonomous_run.")
+        {
             autonomy += 1;
         } else if event_type == "transcript.written" {
             transcripts += 1;
@@ -12015,7 +13327,10 @@ fn cockpit_git_line(repo_root: &std::path::Path) -> String {
     )
     .filter(|text| !text.is_empty())
     .unwrap_or_else(|| "none".to_string());
-    format!("{branch} @ {commit} {status} evolved={}", truncate(&latest_evolved, 72))
+    format!(
+        "{branch} @ {commit} {status} evolved={}",
+        truncate(&latest_evolved, 72)
+    )
 }
 
 fn cockpit_runtime_line(repo_root: &std::path::Path) -> String {
@@ -12171,7 +13486,10 @@ fn format_work_event(event: &memd::events::AgentEvent) -> String {
         meta.push(format!("arg={}", truncate(argument, 48)));
     }
     if let Some(accepted) = event.payload["accepted"].as_bool() {
-        meta.push(format!("decision={}", if accepted { "accept" } else { "reject" }));
+        meta.push(format!(
+            "decision={}",
+            if accepted { "accept" } else { "reject" }
+        ));
     }
     if let Some(passed) = event.payload["passed"].as_bool() {
         meta.push(format!("passed={passed}"));
@@ -12189,10 +13507,16 @@ fn format_work_event(event: &memd::events::AgentEvent) -> String {
     {
         meta.push(format!("checks={}", items.len()));
     }
-    if let Some(bytes) = event.payload["diff_bytes"].as_i64().filter(|bytes| *bytes > 0) {
+    if let Some(bytes) = event.payload["diff_bytes"]
+        .as_i64()
+        .filter(|bytes| *bytes > 0)
+    {
         meta.push(format!("diff={bytes}b"));
     }
-    if let Some(items) = event.payload["artifacts"].as_array().filter(|items| !items.is_empty()) {
+    if let Some(items) = event.payload["artifacts"]
+        .as_array()
+        .filter(|items| !items.is_empty())
+    {
         meta.push(format!("artifacts={}", items.len()));
     }
     lines.push(format!("  L {}", meta.join(" ")));
@@ -12218,11 +13542,27 @@ fn format_work_event(event: &memd::events::AgentEvent) -> String {
         "smoke-report",
         event.payload["smoke_report_path"].as_str(),
     );
-    push_payload_line(&mut lines, "evidence", event.payload["evidence_path"].as_str());
-    push_payload_line(&mut lines, "transcript", event.payload["transcript_path"].as_str());
+    push_payload_line(
+        &mut lines,
+        "evidence",
+        event.payload["evidence_path"].as_str(),
+    );
+    push_payload_line(
+        &mut lines,
+        "transcript",
+        event.payload["transcript_path"].as_str(),
+    );
     push_payload_line(&mut lines, "patch", event.payload["patch_path"].as_str());
-    push_payload_line(&mut lines, "target", event.payload["target_component"].as_str());
-    push_payload_line(&mut lines, "operator-goal", event.payload["operator_goal"].as_str());
+    push_payload_line(
+        &mut lines,
+        "target",
+        event.payload["target_component"].as_str(),
+    );
+    push_payload_line(
+        &mut lines,
+        "operator-goal",
+        event.payload["operator_goal"].as_str(),
+    );
     if let Some(commit) = event.payload["commit"].as_str() {
         lines.push(format!("  L commit {}", short_fragment(commit)));
     }
@@ -12292,7 +13632,12 @@ fn event_action(event: &memd::events::AgentEvent) -> &'static str {
         }
         event_type if event_type.starts_with("evolution.") => "Evolution event",
         event_type if event_type.starts_with("policy.") => "Policy gate",
-        event_type if event_type.starts_with("autonomous_run.") || event_type.starts_with("autonomy.queue.") => "Autonomous run",
+        event_type
+            if event_type.starts_with("autonomous_run.")
+                || event_type.starts_with("autonomy.queue.") =>
+        {
+            "Autonomous run"
+        }
         _ => "Observed",
     }
 }
@@ -12364,7 +13709,7 @@ fn truncate(text: &str, max_chars: usize) -> String {
 fn setup_signal_handlers(cancel: CancellationToken) {
     #[cfg(unix)]
     {
-        use tokio::signal::unix::{SignalKind, signal};
+        use tokio::signal::unix::{signal, SignalKind};
 
         let cancel1 = cancel.clone();
         tokio::spawn(async move {
@@ -12823,7 +14168,7 @@ mod tests {
         let help = format_operator_help();
 
         assert!(help.contains("Professor X operator commands"));
-        assert!(help.contains("--prof-x-live 5"));
+        assert!(help.contains("--prof-x-live 6"));
         assert!(help.contains("--prof-x-enqueue"));
         assert!(help.contains("--prof-x-enqueue-commit"));
         assert!(help.contains("--prof-x-plan"));
@@ -12836,9 +14181,11 @@ mod tests {
         assert!(help.contains("--prof-x-queue-review latest"));
         assert!(help.contains("--prof-x-queue-publish latest"));
         assert!(help.contains("--observe-work"));
+        assert!(help.contains("--status-json"));
         assert!(help.contains("--task-evidence latest"));
         assert!(help.contains("--inspect latest"));
         assert!(help.contains("--prof-x-code-live"));
+        assert!(help.contains("--repair-coding-sessions 10"));
         assert!(help.contains("--prof-x-code-review latest"));
         assert!(help.contains("--prof-x-code-publish latest"));
         assert!(help.contains("--prof-x-skill-live"));
@@ -12858,6 +14205,22 @@ mod tests {
             assert!(!cli.run_now);
             assert!(!cli.lab);
         }
+    }
+
+    #[test]
+    fn status_json_flag_is_inspect_only() {
+        let cli = parse_args_from(["professor-x", "--prof-x-status-json"]);
+        assert!(cli.status_json);
+        assert!(!cli.run_now);
+        assert!(!cli.lab);
+    }
+
+    #[test]
+    fn repair_coding_sessions_flag_is_inspect_only() {
+        let cli = parse_args_from(["professor-x", "--repair-coding-sessions", "7"]);
+        assert_eq!(cli.repair_coding_sessions_limit, Some(7));
+        assert!(!cli.run_now);
+        assert!(!cli.lab);
     }
 
     #[test]
@@ -12895,11 +14258,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(durable.len(), 2);
-        assert!(
-            durable
-                .iter()
-                .all(|path| path.starts_with("artifacts/coding-smoke/"))
-        );
+        assert!(durable
+            .iter()
+            .all(|path| path.starts_with("artifacts/coding-smoke/")));
         assert!(durable.iter().all(|path| !path.starts_with("/tmp/")));
         assert!(durable.iter().all(|path| repo.join(path).exists()));
 
@@ -13127,7 +14488,9 @@ mod tests {
         assert!(line.contains("Completed queued work"));
         assert!(line.contains("queue=12345678"));
         assert!(line.contains("result-report artifacts/work-loop/2026-06-08/loop-085024.json"));
-        assert!(line.contains("result-journal artifacts/work-loop/ledger/2026-06-08/prof-x-journal-12345678.md"));
+        assert!(line.contains(
+            "result-journal artifacts/work-loop/ledger/2026-06-08/prof-x-journal-12345678.md"
+        ));
         assert!(line.contains("passed=true"));
     }
 
@@ -13192,12 +14555,14 @@ mod tests {
             last_output_preview: Some("wrote daily update".to_string()),
             last_error: None,
             last_artifacts: vec!["artifacts/commands/write.txt".to_string()],
-            verification_summary: "4 step(s): 4 succeeded, 0 failed; 2 artifact(s); transcript recorded".to_string(),
+            verification_summary:
+                "4 step(s): 4 succeeded, 0 failed; 2 artifact(s); transcript recorded".to_string(),
             verification_artifacts: vec![
                 "artifacts/transcripts/2026-06-08/12345678.json".to_string(),
                 "artifacts/validation/2026-06-08/12345678.json".to_string(),
             ],
             outcome_score: Some(0.0),
+            failure_class: Some(FailureClass::ArtifactValidation),
             failure_mode: Some("field:recorded_at: missing".to_string()),
             transcript_path: Some(transcript.transcript_path.clone()),
             queued_at: now,
@@ -13251,14 +14616,17 @@ mod tests {
         };
 
         assert_eq!(
-            task_evidence_markdown_path(&transcript).display().to_string(),
+            task_evidence_markdown_path(&transcript)
+                .display()
+                .to_string(),
             "artifacts/transcripts/2026-06-08/12345678.evidence.md"
         );
     }
 
     #[test]
     fn coding_session_evidence_sits_next_to_report_and_is_attached() {
-        let root = std::env::temp_dir().join(format!("px-session-evidence-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("px-session-evidence-{}", uuid::Uuid::new_v4()));
         let report_path = root
             .join("professor-x")
             .join("artifacts")
@@ -13311,6 +14679,215 @@ mod tests {
     }
 
     #[test]
+    fn persist_coding_session_terminal_report_replaces_pending_running_row() {
+        let root =
+            std::env::temp_dir().join(format!("px-session-terminal-{}", uuid::Uuid::new_v4()));
+        let report_dir = root.join("reports");
+        let data_dir = root.join("data");
+        let previous_report_dir = std::env::var("PROFESSOR_X_CODING_SESSION_REPORT_DIR").ok();
+        std::fs::create_dir_all(&report_dir).unwrap();
+        std::env::set_var("PROFESSOR_X_CODING_SESSION_REPORT_DIR", &report_dir);
+
+        let memory = Arc::new(MemoryManager::open(&data_dir).unwrap());
+        let events = Arc::new(EventStore::new(Arc::clone(&memory.db)));
+        let session_id = uuid::Uuid::new_v4();
+        let generated_at = chrono::Utc::now();
+        let failure_reason =
+            "main worktree has source/config/skill changes; refusing patch apply".to_string();
+
+        CodingSessionStore::new(Arc::clone(&memory.db))
+            .insert(&CodingSessionRecord {
+                id: session_id.to_string(),
+                generated_at,
+                goal: "operator goal".to_string(),
+                exercise: "repo_patch_apply_commit".to_string(),
+                status: "running".to_string(),
+                workspace: Some("repo-root verified apply commit".to_string()),
+                smoke_id: None,
+                smoke_report_path: None,
+                session_report_path: "pending".to_string(),
+                transcript_path: None,
+                artifacts: vec!["/tmp/example.diff".to_string()],
+                checks: Vec::new(),
+                plan_steps: vec![
+                    "Policy-gate the patch through patch.apply before sandbox work".to_string(),
+                ],
+                step_outcomes: Vec::new(),
+                failure_reason: None,
+                recorded_at: generated_at,
+            })
+            .unwrap();
+
+        let mut report = CodingSessionReport {
+            id: session_id.to_string(),
+            generated_at: generated_at.to_rfc3339(),
+            goal: "repo patch coding session".to_string(),
+            requested_goal: "operator goal".to_string(),
+            exercise: "repo_patch_apply_commit".to_string(),
+            status: "failed".to_string(),
+            workspace: Some("repo-root verified apply commit".to_string()),
+            smoke_id: None,
+            smoke_report_path: None,
+            session_report_path: None,
+            transcript_path: None,
+            checks: Vec::new(),
+            plan_steps: vec!["Policy-gate the patch through patch.apply before sandbox work".to_string()],
+            step_outcomes: vec!["apply path aborted before verification artifact: main worktree has source/config/skill changes; refusing patch apply".to_string()],
+            artifacts: vec!["/tmp/example.diff".to_string()],
+            failure_reason: Some(failure_reason.clone()),
+        };
+
+        let (report_path, evidence_path) = persist_coding_session_terminal_report(
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            session_id,
+            generated_at,
+            &mut report,
+            "repo patch commit coding-session evidence written to",
+            "repo patch commit coding-session report written to",
+        )
+        .unwrap();
+
+        let stored = CodingSessionStore::new(Arc::clone(&memory.db))
+            .get_by_ref(&session_id.to_string())
+            .unwrap()
+            .unwrap();
+        let report_json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&report_path).unwrap()).unwrap();
+        let work = events.work_tail(4).unwrap();
+
+        assert_eq!(stored.status, "failed");
+        assert_eq!(stored.goal, "operator goal");
+        assert_eq!(
+            stored.session_report_path,
+            report_path.display().to_string()
+        );
+        assert_eq!(
+            stored.failure_reason.as_deref(),
+            Some(failure_reason.as_str())
+        );
+        assert!(report_path.exists());
+        assert!(evidence_path.exists());
+        assert_eq!(
+            report_json["session_report_path"].as_str(),
+            Some(report_path.to_str().unwrap())
+        );
+        assert!(work
+            .iter()
+            .any(|event| event.event_type == "coding.session.evidence_written"));
+        assert!(work
+            .iter()
+            .any(|event| event.event_type == "coding.session.failed"));
+
+        if let Some(previous) = previous_report_dir {
+            std::env::set_var("PROFESSOR_X_CODING_SESSION_REPORT_DIR", previous);
+        } else {
+            std::env::remove_var("PROFESSOR_X_CODING_SESSION_REPORT_DIR");
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn repair_stale_coding_sessions_reconciles_old_running_rows() {
+        let root = std::env::temp_dir().join(format!("px-session-repair-{}", uuid::Uuid::new_v4()));
+        let report_dir = root.join("reports");
+        let data_dir = root.join("data");
+        let previous_report_dir = std::env::var("PROFESSOR_X_CODING_SESSION_REPORT_DIR").ok();
+        std::fs::create_dir_all(&report_dir).unwrap();
+        std::env::set_var("PROFESSOR_X_CODING_SESSION_REPORT_DIR", &report_dir);
+
+        let memory = Arc::new(MemoryManager::open(&data_dir).unwrap());
+        let events = Arc::new(EventStore::new(Arc::clone(&memory.db)));
+        let session_id = uuid::Uuid::new_v4();
+        let generated_at = chrono::Utc::now() - chrono::Duration::minutes(90);
+
+        CodingSessionStore::new(Arc::clone(&memory.db))
+            .insert(&CodingSessionRecord {
+                id: session_id.to_string(),
+                generated_at,
+                goal: "repair stale row".to_string(),
+                exercise: "repo_patch_apply_commit".to_string(),
+                status: "running".to_string(),
+                workspace: Some("repo-root verified apply commit".to_string()),
+                smoke_id: None,
+                smoke_report_path: None,
+                session_report_path: "pending".to_string(),
+                transcript_path: None,
+                artifacts: vec!["/tmp/example.diff".to_string()],
+                checks: Vec::new(),
+                plan_steps: vec!["Verify patch".to_string()],
+                step_outcomes: Vec::new(),
+                failure_reason: None,
+                recorded_at: generated_at,
+            })
+            .unwrap();
+        memory
+            .db
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO agent_events
+                 (timestamp, session_id, task_id, event_type, summary, payload)
+                 VALUES (?1, NULL, NULL, ?2, ?3, ?4)",
+                rusqlite::params![
+                    generated_at.to_rfc3339(),
+                    "coding.session.started",
+                    "starting repo patch commit coding-agent session",
+                    serde_json::json!({
+                        "session_id": session_id.to_string(),
+                        "mode": "repo_patch_apply_commit",
+                    })
+                    .to_string(),
+                ],
+            )
+            .unwrap();
+        events
+            .append(
+                None,
+                None,
+                "daemon.started",
+                "Professor X process started",
+                serde_json::json!({}),
+            )
+            .unwrap();
+        events
+            .append(
+                None,
+                None,
+                "daemon.started",
+                "Professor X process started",
+                serde_json::json!({}),
+            )
+            .unwrap();
+
+        repair_stale_coding_sessions(Arc::clone(&memory), Arc::clone(&events), 10).unwrap();
+
+        let stored = CodingSessionStore::new(Arc::clone(&memory.db))
+            .get_by_ref(&session_id.to_string())
+            .unwrap()
+            .unwrap();
+        let work = events.work_tail(8).unwrap();
+        assert_eq!(stored.status, "failed");
+        assert_ne!(stored.session_report_path, "pending");
+        assert!(std::path::Path::new(&stored.session_report_path).exists());
+        assert!(stored
+            .failure_reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("stale coding session recovered"));
+        assert!(work
+            .iter()
+            .any(|event| event.event_type == "coding.session.failed"));
+
+        if let Some(previous) = previous_report_dir {
+            std::env::set_var("PROFESSOR_X_CODING_SESSION_REPORT_DIR", previous);
+        } else {
+            std::env::remove_var("PROFESSOR_X_CODING_SESSION_REPORT_DIR");
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn operator_skill_patch_sanitizes_goal_and_paths() {
         let body = operator_goal_skill_body(
             "px-operator-goal-test",
@@ -13326,7 +14903,10 @@ mod tests {
 
         assert!(body.contains("Operator goal: capture next harness gap with evidence"));
         assert!(body.contains("workspace-bound"));
-        assert_eq!(skill_goal_slug("Capture next harness gap!!"), "capture-next-harness-gap");
+        assert_eq!(
+            skill_goal_slug("Capture next harness gap!!"),
+            "capture-next-harness-gap"
+        );
         assert_eq!(skill_goal_slug("!!!"), "operator-goal");
         assert_eq!(
             format!(
@@ -13349,7 +14929,24 @@ mod tests {
     }
 
     #[test]
-    fn conductor_skills_include_generated_operator_goals() {
+    fn patch_apply_commit_patch_uses_operator_goal_when_present() {
+        let patch_path =
+            write_patch_apply_commit_patch(Some(" preserve operator goal provenance ")).unwrap();
+        let file_name = patch_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let diff = std::fs::read_to_string(&patch_path).unwrap();
+
+        assert!(file_name.starts_with(OPERATOR_SKILL_PREFIX));
+        assert!(diff.contains("Operator goal: preserve operator goal provenance"));
+
+        let _ = std::fs::remove_file(patch_path);
+    }
+
+    #[test]
+    fn conductor_skills_exclude_ephemeral_operator_provenance_files() {
         let skills_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("skills")
             .join("conductor");
@@ -13359,9 +14956,16 @@ mod tests {
             .map(|(frontmatter, _)| frontmatter.name.as_str())
             .collect::<BTreeSet<_>>();
 
-        assert!(names.contains("px-operator-goal-20260601-134503-make-goals-verified"));
-        assert!(names.contains("px-operator-goal-20260601-135027-preserve-goal-provenance"));
         assert!(names.contains("px-repo-patch-live-commit-smoke-20260601"));
+        assert!(!names
+            .iter()
+            .any(|name| name.starts_with("px-operator-goal-")));
+        assert!(!names
+            .iter()
+            .any(|name| name.starts_with("px-operator-autocommit-")));
+        assert!(!names
+            .iter()
+            .any(|name| name.starts_with("px-autonomous-patch-")));
         assert!(names.iter().all(|name| name.len() <= MAX_SKILL_NAME_LEN));
     }
 
@@ -13380,6 +14984,18 @@ mod tests {
         assert!(plan[0].reason.contains("latest operator run failed"));
         assert_eq!(plan[1].kind, "coding_smoke");
         assert_eq!(plan.len(), 3);
+    }
+
+    #[test]
+    fn commit_cli_defaults_match_full_profile_gate_count() {
+        let cli = parse_args_from(["professor-x", "--operator-run-commit"]);
+        assert_eq!(cli.operator_run_commit_cycles, Some(6));
+
+        let cli = parse_args_from(["professor-x", "--prof-x-live"]);
+        assert_eq!(cli.operator_run_live_cycles, Some(6));
+
+        let cli = parse_args_from(["professor-x", "--prof-x-run-commit"]);
+        assert_eq!(cli.autonomous_run_commit_cycles, Some(6));
     }
 
     #[test]
@@ -13410,7 +15026,9 @@ mod tests {
             plan_work_loop_jobs(WorkLoopRunKind::Operator, WorkLoopProfile::Core, 4, &[]);
         let context = WorkLoopRunContext {
             queue_id: Some("queue-12345678".to_string()),
-            operator_goal: Some("run HIRO benchmark inventory before the next evolution".to_string()),
+            operator_goal: Some(
+                "run HIRO benchmark inventory before the next evolution".to_string(),
+            ),
         };
 
         prioritize_planned_jobs_for_context(&mut jobs, WorkLoopProfile::Core, Some(&context));
@@ -13435,13 +15053,15 @@ mod tests {
         prioritize_planned_jobs_for_context(&mut jobs, WorkLoopProfile::Core, Some(&context));
 
         assert_eq!(jobs[0].kind, "proposal_dry_run");
-        assert!(jobs[0].reason.contains("targets evolution proposal dry-run gate"));
+        assert!(jobs[0]
+            .reason
+            .contains("targets evolution proposal dry-run gate"));
     }
 
     #[test]
     fn queued_commit_profile_goal_targets_verified_patch_apply_gate() {
         let mut jobs =
-            plan_work_loop_jobs(WorkLoopRunKind::Operator, WorkLoopProfile::Commit, 5, &[]);
+            plan_work_loop_jobs(WorkLoopRunKind::Operator, WorkLoopProfile::Commit, 6, &[]);
         let context = WorkLoopRunContext {
             queue_id: Some("queue-12345678".to_string()),
             operator_goal: Some("apply and commit a verified patch with git evidence".to_string()),
@@ -13450,7 +15070,9 @@ mod tests {
         prioritize_planned_jobs_for_context(&mut jobs, WorkLoopProfile::Commit, Some(&context));
 
         assert_eq!(jobs[0].kind, "patch_apply_commit");
-        assert!(jobs[0].reason.contains("targets verified patch apply commit gate"));
+        assert!(jobs[0]
+            .reason
+            .contains("targets verified patch apply commit gate"));
     }
 
     #[test]
@@ -13485,12 +15107,17 @@ mod tests {
         );
 
         assert_eq!(preview.source, "pending_queue");
-        assert_eq!(preview.queue_id.as_deref(), Some("12345678-aaaa-bbbb-cccc-123456789abc"));
+        assert_eq!(
+            preview.queue_id.as_deref(),
+            Some("12345678-aaaa-bbbb-cccc-123456789abc")
+        );
         assert_eq!(preview.profile, WorkLoopProfile::Core);
         assert_eq!(preview.cycles, 4);
         assert_eq!(preview.priority, 77);
         assert_eq!(preview.planned_jobs[0].kind, "hiro_smoke");
-        assert!(preview.planned_jobs[0].reason.contains("queued goal: run HIRO benchmark"));
+        assert!(preview.planned_jobs[0]
+            .reason
+            .contains("queued goal: run HIRO benchmark"));
     }
 
     #[test]
@@ -13539,7 +15166,9 @@ mod tests {
         );
 
         assert_eq!(preview.planned_jobs[0].kind, "evolution_smoke");
-        assert!(preview.planned_jobs[0].reason.contains("latest operator run failed"));
+        assert!(preview.planned_jobs[0]
+            .reason
+            .contains("latest operator run failed"));
     }
 
     #[test]
@@ -13591,9 +15220,31 @@ mod tests {
         let plan = plan_next_autonomy_queue_item(&recent);
 
         assert_eq!(plan.profile, WorkLoopProfile::Commit);
-        assert_eq!(plan.cycles, 5);
+        assert_eq!(plan.cycles, 6);
         assert_eq!(plan.priority, 60);
         assert!(plan.reason.contains("patch_apply_commit"));
+    }
+
+    #[test]
+    fn autonomy_planner_requires_operator_commit_after_patch_apply_gate() {
+        let recent = vec![work_loop_run(
+            "operator",
+            0,
+            vec![
+                smoke("coding_smoke", true),
+                smoke("evolution_smoke", true),
+                smoke("hiro_smoke", true),
+                smoke("proposal_dry_run", true),
+                smoke("patch_apply_commit", true),
+            ],
+        )];
+
+        let plan = plan_next_autonomy_queue_item(&recent);
+
+        assert_eq!(plan.profile, WorkLoopProfile::Commit);
+        assert_eq!(plan.cycles, 6);
+        assert_eq!(plan.priority, 60);
+        assert!(plan.reason.contains("operator_commit"));
     }
 
     #[test]
@@ -13749,7 +15400,9 @@ mod tests {
         assert!(line.contains("cycle=5/5"));
         assert!(line.contains("job=patch_apply_commit"));
         assert!(line.contains("passed=true"));
-        assert!(line.contains("report professor-x/artifacts/evolution/patch-verifications/patch.json"));
+        assert!(
+            line.contains("report professor-x/artifacts/evolution/patch-verifications/patch.json")
+        );
         assert!(line.contains("transcript professor-x/artifacts/transcripts/t.json"));
         assert!(line.contains("commit abcdef12"));
         assert!(line.contains("5 checks"));
@@ -13863,7 +15516,8 @@ mod tests {
             tool: None,
             job: Some("coding_smoke".to_string()),
             passed: Some(true),
-            summary: "coding smoke report written to artifacts/coding-smoke/report.json".to_string(),
+            summary: "coding smoke report written to artifacts/coding-smoke/report.json"
+                .to_string(),
             detail: Some("deterministic coding smoke".to_string()),
             report_path: Some("artifacts/coding-smoke/report.json".to_string()),
             transcript_path: Some("artifacts/transcripts/task.json".to_string()),
@@ -14161,7 +15815,9 @@ mod tests {
         assert_eq!(paths.len(), 5);
         assert!(paths.iter().any(|path| path.ends_with("loop-010000.json")));
         assert!(paths.iter().any(|path| path.ends_with("run-12345678.md")));
-        assert!(paths.iter().any(|path| path.ends_with("prof-x-journal-12345678.md")));
+        assert!(paths
+            .iter()
+            .any(|path| path.ends_with("prof-x-journal-12345678.md")));
         assert!(paths.iter().any(|path| path.ends_with("smoke-010000.json")));
         assert!(paths.iter().any(|path| path.ends_with("2026-06-01.jsonl")));
         assert!(publishable_run_artifact_path(std::path::Path::new(
@@ -14189,17 +15845,19 @@ mod tests {
             .join("2026-06-09")
             .join("task.json");
         std::fs::create_dir_all(artifact.parent().unwrap()).unwrap();
-        std::fs::write(root.join(".gitignore"), "professor-x/artifacts/transcripts/\n").unwrap();
+        std::fs::write(
+            root.join(".gitignore"),
+            "professor-x/artifacts/transcripts/\n",
+        )
+        .unwrap();
         std::fs::write(&artifact, "{}\n").unwrap();
-        assert!(
-            std::process::Command::new("git")
-                .arg("init")
-                .current_dir(&root)
-                .output()
-                .unwrap()
-                .status
-                .success()
-        );
+        assert!(std::process::Command::new("git")
+            .arg("init")
+            .current_dir(&root)
+            .output()
+            .unwrap()
+            .status
+            .success());
 
         git_add_publishable_artifacts(
             &root,
@@ -14222,7 +15880,8 @@ mod tests {
 
     #[test]
     fn publishable_coding_session_artifact_paths_allow_only_evidence_artifacts() {
-        let root = std::env::temp_dir().join(format!("px-session-publish-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("px-session-publish-{}", uuid::Uuid::new_v4()));
         let session_report = root
             .join("professor-x")
             .join("artifacts")
@@ -14271,15 +15930,19 @@ mod tests {
 
         assert_eq!(paths.len(), 3);
         assert_eq!(readiness, paths);
-        assert!(paths.iter().any(|path| path.ends_with("session-12345678.json")));
-        assert!(paths.iter().any(|path| path.ends_with("task-12345678.json")));
+        assert!(paths
+            .iter()
+            .any(|path| path.ends_with("session-12345678.json")));
+        assert!(paths
+            .iter()
+            .any(|path| path.ends_with("task-12345678.json")));
         assert!(paths.iter().any(|path| path.ends_with("cargo-check.json")));
-        assert!(publishable_coding_session_artifact_path(std::path::Path::new(
-            "professor-x/artifacts/commands/2026-06-01/cargo-check.json"
-        )));
-        assert!(!publishable_coding_session_artifact_path(std::path::Path::new(
-            "professor-x/src/main.rs"
-        )));
+        assert!(publishable_coding_session_artifact_path(
+            std::path::Path::new("professor-x/artifacts/commands/2026-06-01/cargo-check.json")
+        ));
+        assert!(!publishable_coding_session_artifact_path(
+            std::path::Path::new("professor-x/src/main.rs")
+        ));
 
         session.artifacts.push(source_file.display().to_string());
         assert!(publishable_coding_session_artifact_paths(&root, &session).is_err());
@@ -14330,8 +15993,12 @@ mod tests {
 
         let line = format_work_event(&event);
 
-        assert!(line.contains("session-report artifacts/coding-sessions/2026-06-01/session-135052-0aeff8ac.json"));
-        assert!(line.contains("artifact artifacts/evolution/patch-verifications/2026-06-01/patch-135049.json"));
+        assert!(line.contains(
+            "session-report artifacts/coding-sessions/2026-06-01/session-135052-0aeff8ac.json"
+        ));
+        assert!(line.contains(
+            "artifact artifacts/evolution/patch-verifications/2026-06-01/patch-135049.json"
+        ));
     }
 
     #[test]
@@ -14359,8 +16026,12 @@ mod tests {
         assert!(line.contains("Wrote coding evidence"));
         assert!(line.contains("exercise=repo_patch_apply_commit"));
         assert!(line.contains("artifacts=2"));
-        assert!(line.contains("session-report artifacts/coding-sessions/2026-06-01/session-135052-0aeff8ac.json"));
-        assert!(line.contains("evidence artifacts/coding-sessions/2026-06-01/session-135052-0aeff8ac.evidence.md"));
+        assert!(line.contains(
+            "session-report artifacts/coding-sessions/2026-06-01/session-135052-0aeff8ac.json"
+        ));
+        assert!(line.contains(
+            "evidence artifacts/coding-sessions/2026-06-01/session-135052-0aeff8ac.evidence.md"
+        ));
     }
 
     #[test]
@@ -14381,7 +16052,10 @@ mod tests {
 
         let line = format_live_task_event(&event).unwrap();
 
-        assert_eq!(line, "  tool fs.replace: running - path=src/lib.rs mode=apply");
+        assert_eq!(
+            line,
+            "  tool fs.replace: running - path=src/lib.rs mode=apply"
+        );
     }
 
     #[test]
@@ -14440,15 +16114,19 @@ mod tests {
         let session = CodingSessionRecord {
             id: "session-12345678-aaaa-bbbb-cccc-123456789abc".to_string(),
             generated_at: now,
-            goal: "operator goal skill session: verify, apply, and commit goal='make work visible'".to_string(),
+            goal: "operator goal skill session: verify, apply, and commit goal='make work visible'"
+                .to_string(),
             exercise: "repo_patch_apply_commit".to_string(),
             status: "passed".to_string(),
             workspace: Some("repo-root verified apply commit".to_string()),
             smoke_id: None,
             smoke_report_path: None,
-            session_report_path: "artifacts/coding-sessions/2026-06-01/session-135052-0aeff8ac.json".to_string(),
+            session_report_path:
+                "artifacts/coding-sessions/2026-06-01/session-135052-0aeff8ac.json".to_string(),
             transcript_path: None,
-            artifacts: vec!["artifacts/evolution/patch-verifications/2026-06-01/patch-135049.json".to_string()],
+            artifacts: vec![
+                "artifacts/evolution/patch-verifications/2026-06-01/patch-135049.json".to_string(),
+            ],
             checks: vec!["cargo_check".to_string(), "git_commit".to_string()],
             plan_steps: Vec::new(),
             step_outcomes: vec![
@@ -14497,6 +16175,30 @@ mod tests {
                 "detail": "deterministic coding smoke",
             }),
         };
+        let evolution = EvolutionArtifactStatus {
+            stage: "rejections".to_string(),
+            artifact_path: "artifacts/evolution/rejections/2026-06-16/081201-test.json"
+                .to_string(),
+            event_type: Some("evolution.rejected".to_string()),
+            event_id: Some(12),
+            event_summary: Some("evolution proposal rejected".to_string()),
+            generated_at: Some(now.to_rfc3339()),
+            artifact_id: Some("artifact-123".to_string()),
+            status: Some("Rejected".to_string()),
+            target_component: Some("SkillDefinition(\"HandleActionBlocks\")".to_string()),
+            reason: Some(
+                "empirical repo-fix gate failed: repo-fix bench timed out after 600s"
+                    .to_string(),
+            ),
+            checks: vec![
+                "cargo_check".to_string(),
+                "cargo_test".to_string(),
+                "repo_fix_empirical_gate".to_string(),
+            ],
+            empirical_gate: None,
+            empirical_gate_summary: None,
+            diff_bytes: Some(707),
+        };
         let queued = queue_item(
             "make Prof X work visible in the cockpit",
             WorkLoopProfile::Commit,
@@ -14506,7 +16208,9 @@ mod tests {
         let screen = format_work_cockpit(
             std::path::Path::new("."),
             "pid=123 profx_peer=1 ollama=up model=qwen3:8b-q4_k_m",
+            "shell_sandbox=fallback-policy-only bwrap_installed=true bwrap_usable=false",
             &[event],
+            Some(&evolution),
             Some(&run),
             Some(&session),
             Some(&smoke),
@@ -14517,8 +16221,19 @@ mod tests {
 
         assert!(screen.contains("Professor X live work cockpit"));
         assert!(screen.contains("runtime pid=123 profx_peer=1 ollama=up model=qwen3:8b-q4_k_m"));
+        assert!(screen.contains(
+            "safety shell_sandbox=fallback-policy-only bwrap_installed=true bwrap_usable=false"
+        ));
         assert!(screen.contains("state IDLE"));
-        assert!(screen.contains("now   last work_loop.cycle.passed #10 Prof X operator run cycle 1/2 passed"));
+        assert!(screen.contains(
+            "now   last work_loop.cycle.passed #10 Prof X operator run cycle 1/2 passed"
+        ));
+        assert!(screen.contains("Latest evolution artifact"));
+        assert!(screen.contains("rejections Rejected SkillDefinition(\"HandleActionBlocks\")"));
+        assert!(screen.contains("repo-fix bench timed out after 600s"));
+        assert!(screen.contains(
+            "artifact artifacts/evolution/rejections/2026-06-16/081201-test.json"
+        ));
         assert!(screen.contains("progress [######......] 1/2"));
         assert!(screen.contains("operator:core run=12345678"));
         assert!(screen.contains("commands replay=--replay 12345678"));
@@ -14530,12 +16245,15 @@ mod tests {
         assert!(screen.contains("Latest coding session"));
         assert!(screen.contains("passed session=session-"));
         assert!(screen.contains("commit=eedcd3e1"));
-        assert!(screen.contains("report artifacts/coding-sessions/2026-06-01/session-135052-0aeff8ac.json"));
+        assert!(screen
+            .contains("report artifacts/coding-sessions/2026-06-01/session-135052-0aeff8ac.json"));
         assert!(screen.contains("commands sessions=--coding-sessions 5"));
         assert!(screen.contains("Latest coding smoke"));
         assert!(screen.contains("gates initial_failed=true edit_applied=true final_passed=true"));
         assert!(screen.contains("report artifacts/coding-smoke/2026-06-10/smoke-075320.json"));
-        assert!(screen.contains("transcript artifacts/transcripts/2026-06-10/69c32462-5fa6-4731-a49e-b1aa5263a3fa.json"));
+        assert!(screen.contains(
+            "transcript artifacts/transcripts/2026-06-10/69c32462-5fa6-4731-a49e-b1aa5263a3fa.json"
+        ));
         assert!(screen.contains("artifact artifacts/coding-smoke/2026-06-10/69c32462/evidence/artifacts/commands/run.json"));
         assert!(screen.contains("proof report artifacts/coding-smoke/report.json"));
         assert!(screen.contains("proof transcript artifacts/transcripts/task.json"));
@@ -14544,6 +16262,195 @@ mod tests {
         assert!(screen.contains("--cockpit"));
         assert!(screen.contains("--prof-x-live-publish 6"));
         assert!(screen.contains("--run-review latest"));
+    }
+
+    #[test]
+    fn format_work_status_json_is_machine_readable_operator_state() {
+        let now = chrono::Utc::now();
+        let event = memd::events::AgentEvent {
+            id: 55,
+            timestamp: now,
+            session_id: None,
+            task_id: Some("task-123456789".to_string()),
+            event_type: "tool.started".to_string(),
+            summary: "running tool 'shell.restricted' :: command=cargo test".to_string(),
+            payload: serde_json::json!({
+                "tool": "shell.restricted",
+                "params_preview": "command=cargo test",
+            }),
+        };
+        let queued = queue_item(
+            "make Prof X observable from scripts",
+            WorkLoopProfile::Core,
+            2,
+        );
+
+        let value = format_work_status_json(
+            std::path::Path::new("."),
+            "pid=123 profx_peer=1 ollama=up model=qwen3:8b-q4_k_m",
+            "shell_sandbox=fallback-policy-only",
+            std::slice::from_ref(&event),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &[],
+            std::slice::from_ref(&queued),
+        );
+
+        assert_eq!(value["schema"], "professor_x.work_status.v1");
+        assert_eq!(value["state"], "IDLE");
+        assert_eq!(
+            value["now"],
+            "running tool shell.restricted command=cargo test"
+        );
+        assert_eq!(
+            value["runtime"],
+            "pid=123 profx_peer=1 ollama=up model=qwen3:8b-q4_k_m"
+        );
+        assert_eq!(value["autonomous_queue"][0]["short_id"], "12345678");
+        assert!(value["autonomous_queue"][0]["next_command"]
+            .as_str()
+            .unwrap()
+            .contains("--prof-x-step-live 1"));
+        assert!(value["recent_events"][0]["line"]
+            .as_str()
+            .unwrap()
+            .contains("Running"));
+        assert!(value["commands"].as_array().unwrap().iter().any(|cmd| {
+            cmd.as_str()
+                .unwrap()
+                .contains("cargo run -- --observe-work")
+        }));
+        assert!(value["latest_evolution_artifact"].is_null());
+        assert!(value["latest_task_run"].is_null());
+        assert!(value["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|cmd| { cmd.as_str().unwrap().contains("cargo run -- --status-json") }));
+        assert!(value["commands"].as_array().unwrap().iter().any(|cmd| {
+            cmd.as_str()
+                .unwrap()
+                .contains("cargo run -- --repair-coding-sessions 10")
+        }));
+    }
+
+    #[test]
+    fn latest_evolution_artifact_status_reads_empirical_gate_summary() {
+        let root = std::env::temp_dir().join(format!(
+            "px-latest-evolution-status-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let artifact_dir = root.join("artifacts/evolution/rejections/2026-06-16");
+        std::fs::create_dir_all(&artifact_dir).unwrap();
+        let artifact_path = artifact_dir.join("081201-test.json");
+        std::fs::write(
+            &artifact_path,
+            serde_json::json!({
+                "generated_at": "2026-06-16T08:12:01Z",
+                "artifact_id": "1d5d034b",
+                "status": "Rejected",
+                "target_component": "SkillDefinition(\"HandleActionBlocks\")",
+                "analysis": "empirical repo-fix gate rejected proposal",
+                "verification": {
+                    "accepted": false,
+                    "reason": "empirical repo-fix gate rejected proposal: repo-fix subset pass@1 baseline 0.750 candidate 0.500 delta -0.250 on 4 task(s)",
+                    "checks": ["cargo_check", "cargo_test", "repo_fix_empirical_gate"],
+                    "evidence": {
+                        "benchmark": "repo_fix_subset",
+                        "task_count": 4,
+                        "baseline_score": 0.75,
+                        "candidate_score": 0.5,
+                        "score_delta": -0.25,
+                        "passed": false
+                    }
+                },
+                "diff_bytes": 807
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let event = memd::events::AgentEvent {
+            id: 77,
+            timestamp: chrono::Utc::now(),
+            session_id: None,
+            task_id: None,
+            event_type: "evolution.rejected".to_string(),
+            summary: "evolution proposal rejected".to_string(),
+            payload: serde_json::json!({
+                "artifact_path": "artifacts/evolution/rejections/2026-06-16/081201-test.json",
+                "target_component": "SkillDefinition(\"HandleActionBlocks\")",
+            }),
+        };
+
+        let summary =
+            latest_evolution_artifact_status(&root, std::slice::from_ref(&event)).unwrap();
+        assert_eq!(summary.stage, "rejections");
+        assert_eq!(summary.status.as_deref(), Some("Rejected"));
+        assert_eq!(
+            summary.target_component.as_deref(),
+            Some("SkillDefinition(\"HandleActionBlocks\")")
+        );
+        assert!(summary
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("repo-fix subset pass@1 baseline 0.750 candidate 0.500 delta -0.250"));
+        assert_eq!(summary.checks.len(), 3);
+        assert_eq!(
+            summary.empirical_gate_summary.as_deref(),
+            Some("repo-fix 4 task(s) baseline 0.750 candidate 0.500 delta -0.250 reject")
+        );
+        assert_eq!(summary.diff_bytes, Some(807));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn work_status_coding_session_json_marks_stale_sessions() {
+        let now = chrono::Utc::now();
+        let session = CodingSessionRecord {
+            id: "12345678-aaaa-bbbb-cccc-123456789abc".to_string(),
+            generated_at: now,
+            goal: "repair stale row".to_string(),
+            exercise: "repo_patch_apply_commit".to_string(),
+            status: "running".to_string(),
+            workspace: Some("repo-root".to_string()),
+            smoke_id: None,
+            smoke_report_path: None,
+            session_report_path: "pending".to_string(),
+            transcript_path: None,
+            artifacts: Vec::new(),
+            checks: Vec::new(),
+            plan_steps: Vec::new(),
+            step_outcomes: Vec::new(),
+            failure_reason: None,
+            recorded_at: now,
+        };
+        let stale = CodingSessionStaleCandidate {
+            session_id: session.id.clone(),
+            last_activity_at: now,
+            idle_minutes: 91,
+            newer_process_starts: 3,
+            reason: "3 later Professor X process starts were recorded".to_string(),
+        };
+
+        let value = work_status_coding_session_json(&session, Some(&stale));
+
+        assert_eq!(value["status"], "stale");
+        assert_eq!(value["stored_status"], "running");
+        assert_eq!(value["stale"], true);
+        assert_eq!(value["stale_idle_minutes"], 91);
+        assert_eq!(value["stale_newer_process_starts"], 3);
+        assert!(value["repair_command"]
+            .as_str()
+            .unwrap()
+            .contains("--repair-coding-sessions 10"));
     }
 
     #[test]
@@ -14666,12 +16573,16 @@ mod tests {
             recorded_at: now,
         };
 
-        assert_eq!(coding_session_commit_hint(&session).as_deref(), Some("eedcd3e1"));
+        assert_eq!(
+            coding_session_commit_hint(&session).as_deref(),
+            Some("eedcd3e1")
+        );
     }
 
     #[test]
     fn command_artifact_summary_reads_reviewable_fields() {
-        let dir = std::env::temp_dir().join(format!("px-command-artifact-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("px-command-artifact-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("artifact.json");
         std::fs::write(
@@ -14696,6 +16607,81 @@ mod tests {
         assert!(summary.contains("exit=0"));
         assert!(summary.contains("stdout=2B"));
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn repo_fix_bench_artifact_carries_reviewable_task_evidence() {
+        let artifact = RepoFixBenchArtifact {
+            run_id: "run-123".to_string(),
+            recorded_at: "2026-06-15T00:00:00Z".to_string(),
+            harness_commit: "abcdef1".to_string(),
+            manifest_path: "scripts/benchmarks/repo_fix/tasks.json".to_string(),
+            model: "qwen3:8b-q4_K_M".to_string(),
+            passed: 1,
+            ran: 2,
+            pass_at_1: 0.5,
+            tasks: vec![RepoFixTaskResult {
+                id: "fix_001".to_string(),
+                description: "fix add".to_string(),
+                setup: "scripts/benchmarks/repo_fix/fix_001".to_string(),
+                verify_cmd: "python3 check.py".to_string(),
+                pre_exit: 1,
+                post_exit: 0,
+                expect_exit: 0,
+                passed: true,
+                made_edit: true,
+                workdir: Some("/tmp/px-repofix-fix_001-run".to_string()),
+                transcript_path: Some("artifacts/transcripts/2026-06-15/task.json".to_string()),
+                diff_summary: "diff -ru old/calc.py new/calc.py".to_string(),
+            }],
+        };
+
+        let value = serde_json::to_value(&artifact).unwrap();
+        assert_eq!(value["run_id"], "run-123");
+        assert_eq!(value["harness_commit"], "abcdef1");
+        assert_eq!(value["model"], "qwen3:8b-q4_K_M");
+        assert_eq!(value["pass_at_1"], 0.5);
+        assert_eq!(value["tasks"][0]["id"], "fix_001");
+        assert_eq!(value["tasks"][0]["pre_exit"], 1);
+        assert_eq!(value["tasks"][0]["post_exit"], 0);
+        assert_eq!(value["tasks"][0]["made_edit"], true);
+        assert_eq!(value["tasks"][0]["workdir"], "/tmp/px-repofix-fix_001-run");
+        assert_eq!(
+            value["tasks"][0]["transcript_path"],
+            "artifacts/transcripts/2026-06-15/task.json"
+        );
+        assert!(value["tasks"][0]["diff_summary"]
+            .as_str()
+            .unwrap()
+            .contains("calc.py"));
+    }
+
+    #[test]
+    fn repo_fix_source_diff_ignores_runtime_artifacts() {
+        let root = std::env::temp_dir().join(format!("px-repofix-diff-{}", uuid::Uuid::new_v4()));
+        let setup = root.join("setup");
+        let workdir = root.join("workdir");
+        std::fs::create_dir_all(&setup).unwrap();
+        std::fs::create_dir_all(workdir.join("artifacts/checkpoints")).unwrap();
+        std::fs::write(setup.join("calc.py"), "def add(a, b):\n    return a - b\n").unwrap();
+        std::fs::write(
+            workdir.join("calc.py"),
+            "def add(a, b):\n    return a - b\n",
+        )
+        .unwrap();
+        std::fs::write(workdir.join("artifacts/checkpoints/one.json"), "{}\n").unwrap();
+
+        assert_eq!(repo_fix_source_diff_summary(&setup, &workdir), "");
+
+        std::fs::write(
+            workdir.join("calc.py"),
+            "def add(a, b):\n    return a + b\n",
+        )
+        .unwrap();
+        let summary = repo_fix_source_diff_summary(&setup, &workdir);
+        assert!(summary.contains("calc.py"));
+        assert!(!summary.contains("artifacts/checkpoints"));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

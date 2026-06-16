@@ -1,0 +1,26 @@
+{
+  "run_id": "01564d46-7361-4767-b175-dc4e579766c9",
+  "recorded_at": "2026-06-15T15:48:05.545429463+00:00",
+  "harness_commit": "bc57650",
+  "manifest_path": "/tmp/px-repofix-one.qJ1aHl.json",
+  "model": "qwen3:8b-q4_K_M",
+  "passed": 0,
+  "ran": 1,
+  "pass_at_1": 0.0,
+  "tasks": [
+    {
+      "id": "fix_001",
+      "description": "In calc.py, the add(a, b) function returns a - b instead of a + b. Fix it so the tests pass.",
+      "setup": "scripts/benchmarks/repo_fix/fix_001",
+      "verify_cmd": "python3 check.py",
+      "pre_exit": 1,
+      "post_exit": 1,
+      "expect_exit": 0,
+      "passed": false,
+      "made_edit": false,
+      "workdir": "/tmp/px-repofix-fix_001-2043130-a856d73d50b44991bb3e923c13441f74",
+      "transcript_path": "artifacts/transcripts/2026-06-15/b8a929a5-a4e4-46c4-b928-c8787ab4ecba.json",
+      "diff_summary": ""
+    }
+  ]
+}

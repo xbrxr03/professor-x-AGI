@@ -1,0 +1,27 @@
+{
+  "generated_at": "2026-06-16T08:23:50.175734668+00:00",
+  "artifact_id": "5437a54b-c02b-4ba1-95ff-6c404faf9b1c",
+  "node_id": null,
+  "status": "Proposed",
+  "target_component": "SkillDefinition(\"HandleActionBlocks\")",
+  "motivation": "Defining a reusable skill that explicitly checks for prior actions and uses restricted tools like 'fs'/'pgrep' will help prevent duplicate action blocks and missing 'command' parameters.",
+  "manifest": {
+    "evidence_cited": [
+      "[failure:unknown] (x2)"
+    ],
+    "root_cause": "[failure:unknown] likely due to lack of explicit instructions on checking prior actions and using specific tools.",
+    "fix_description": "# HandleActionBlocks\n## Purpose\nTo handle action blocks by checking for prior actions and using restricted tools like 'fs'/'pgrep' to prevent duplicates and ensure all commands are properly specified.\n\n## Workflow\n1. **Check Prior Actions**: Before executing any command, check if the same or a similar action has been performed recently.\n2. **Use Restricted Tools**: Utilize restricted tools such as `fs` and `pgrep` to verify system state and avoid conflicts.\n3. **Specify Commands**: Ensure all commands are fully specified with necessary parameters.\n\n## Output Contract\n- Returns a confirmation message indicating whether the action was executed successfully or if it was skipped due to prior execution.",
+    "predicted_fixes": [
+      "Tasks involving command execution that previously failed due to duplicate actions or missing parameters."
+    ],
+    "predicted_regressions": [
+      "Tasks might take longer to execute due to additional checks, but this should be minimal and outweighed by reduced errors."
+    ],
+    "verification_status": "Pending",
+    "verified_at": null
+  },
+  "verification": null,
+  "analysis": "",
+  "diff_hash": "52bbdd50e99b1fa62addadde699e678309295fe6304e1ed45e6e0c42240d7387",
+  "diff_bytes": 707
+}

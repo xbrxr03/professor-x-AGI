@@ -3,7 +3,6 @@
 /// Key invariant from hermes-agent/cron/scheduler.py line 1829:
 ///   advance_next_run() is called BEFORE execution, under file lock.
 ///   This gives at-most-once semantics even if the process crashes mid-run.
-
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
@@ -113,7 +112,11 @@ impl CronScheduler {
         }
 
         if !due_jobs.is_empty() {
-            info!("scheduler: {} job(s) due at {}", due_jobs.len(), now.format("%H:%M:%S"));
+            info!(
+                "scheduler: {} job(s) due at {}",
+                due_jobs.len(),
+                now.format("%H:%M:%S")
+            );
         } else {
             debug!("scheduler tick: no jobs due");
         }
@@ -161,7 +164,8 @@ impl CronScheduler {
             }
             "Cron" => {
                 // Parse cron expression and find next fire time
-                next_cron_time(&schedule_value).unwrap_or_else(|| Utc::now() + chrono::Duration::hours(1))
+                next_cron_time(&schedule_value)
+                    .unwrap_or_else(|| Utc::now() + chrono::Duration::hours(1))
             }
             _ => Utc::now() + chrono::Duration::hours(1),
         };
@@ -212,7 +216,9 @@ fn parse_job(row: &rusqlite::Row) -> rusqlite::Result<CronJob> {
         repeat_limit: row.get::<_, Option<i64>>(8)?.map(|n| n as u32),
         repeat_completed: row.get::<_, i64>(9)? as u32,
         last_run_at: last_run_at.and_then(|s| {
-            DateTime::parse_from_rfc3339(&s).ok().map(|d| d.with_timezone(&Utc))
+            DateTime::parse_from_rfc3339(&s)
+                .ok()
+                .map(|d| d.with_timezone(&Utc))
         }),
         last_status: row.get(11)?,
         created_at: DateTime::parse_from_rfc3339(&created_at)

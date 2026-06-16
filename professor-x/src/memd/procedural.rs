@@ -193,9 +193,7 @@ impl ProceduralStore {
                AND (CAST(times_succeeded + 1 AS REAL) / CAST(times_used + 2 AS REAL)) < ?2",
         )?;
         let names: Vec<String> = stmt
-            .query_map(params![min_uses as i64, threshold as f64], |row| {
-                row.get(0)
-            })?
+            .query_map(params![min_uses as i64, threshold as f64], |row| row.get(0))?
             .filter_map(|r| r.ok())
             .collect();
 
@@ -241,11 +239,8 @@ mod tests {
     }
 
     fn seed(store: &ProceduralStore, name: &str) {
-        let entry = ProceduralEntry::new(
-            name.to_string(),
-            format!("desc-{name}"),
-            "body".to_string(),
-        );
+        let entry =
+            ProceduralEntry::new(name.to_string(), format!("desc-{name}"), "body".to_string());
         store.upsert(&entry).unwrap();
     }
 
@@ -332,7 +327,8 @@ mod tests {
         // Manually mark both verified
         {
             let db = store.db.lock().unwrap();
-            db.execute("UPDATE procedural SET verified = 1", []).unwrap();
+            db.execute("UPDATE procedural SET verified = 1", [])
+                .unwrap();
         }
 
         let retired = store.retire_low_quality(5, 0.30).unwrap();
@@ -354,7 +350,8 @@ mod tests {
         store.record_outcome("newskill", false).unwrap();
         {
             let db = store.db.lock().unwrap();
-            db.execute("UPDATE procedural SET verified = 1", []).unwrap();
+            db.execute("UPDATE procedural SET verified = 1", [])
+                .unwrap();
         }
 
         let retired = store.retire_low_quality(5, 0.30).unwrap();

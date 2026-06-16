@@ -12,24 +12,24 @@ use std::collections::HashSet;
 /// Path fragments that a proposed code diff may NEVER touch, regardless of the allow-list.
 /// These are the surfaces a metric-gaming or misevolving change would target.
 pub const HARD_FORBIDDEN: &[&str] = &[
-    "scripts/benchmarks/",         // the repo-fix fixtures + check.py (the reward signal)
-    "src/evolved/hiro.rs",         // the HIRO evaluator / judge
-    "src/evolved/code_safety.rs",  // this guard itself
-    "src/policyd/",                // security gating, audit, permissions
-    "src/memd/",                   // memory internals / identity store
-    "config/",                     // model/hardware config
-    "professor_x.md",              // identity seed
-    "Cargo.toml",                  // build/deps
+    "scripts/benchmarks/", // the repo-fix fixtures + check.py (the reward signal)
+    "src/evolved/hiro.rs", // the HIRO evaluator / judge
+    "src/evolved/code_safety.rs", // this guard itself
+    "src/policyd/",        // security gating, audit, permissions
+    "src/memd/",           // memory internals / identity store
+    "config/",             // model/hardware config
+    "professor_x.md",      // identity seed
+    "Cargo.toml",          // build/deps
     ".github/",
 ];
 
 /// Extra signals inside a diff body that indicate eval/test tampering even on an allowed file.
 pub const FORBIDDEN_BODY_SIGNALS: &[&str] = &[
-    "repo_fix_measure",            // the benchmark runner
+    "repo_fix_measure", // the benchmark runner
     "run_repo_fix_bench",
-    "expect_exit",                 // fixture pass/fail contract
-    "#[cfg(test)]",                // adding/altering tests to pass
-    "fn analyze_reward_hacking",   // the reward-hacking scanner
+    "expect_exit",               // fixture pass/fail contract
+    "#[cfg(test)]",              // adding/altering tests to pass
+    "fn analyze_reward_hacking", // the reward-hacking scanner
 ];
 
 /// Parse the file paths a unified diff touches (from `+++ b/<path>` / `--- a/<path>` lines).
@@ -78,7 +78,9 @@ pub fn check_diff_safety(diff: &str, allowed: &[&str]) -> Result<(), String> {
         }
         // 3. no test files (a change must pass the EXISTING tests, not rewrite them)
         if p.ends_with("_test.rs") || p.contains("/tests/") {
-            return Err(format!("diff touches a test file {p} (must pass existing tests)"));
+            return Err(format!(
+                "diff touches a test file {p} (must pass existing tests)"
+            ));
         }
     }
     // 4. body-level eval/test tampering signals
@@ -115,16 +117,26 @@ mod tests {
 
     #[test]
     fn denies_touching_the_benchmark_fixtures() {
-        let d = diff_for("scripts/benchmarks/repo_fix/fix_001/check.py", "sys.exit(0)");
-        let err = check_diff_safety(&d, &["scripts/benchmarks/repo_fix/fix_001/check.py"]).unwrap_err();
+        let d = diff_for(
+            "scripts/benchmarks/repo_fix/fix_001/check.py",
+            "sys.exit(0)",
+        );
+        let err =
+            check_diff_safety(&d, &["scripts/benchmarks/repo_fix/fix_001/check.py"]).unwrap_err();
         assert!(err.contains("HARD-FORBIDDEN"));
     }
 
     #[test]
     fn denies_touching_the_evaluator_and_safety() {
-        for f in ["src/evolved/hiro.rs", "src/policyd/gating.rs", "src/evolved/code_safety.rs"] {
+        for f in [
+            "src/evolved/hiro.rs",
+            "src/policyd/gating.rs",
+            "src/evolved/code_safety.rs",
+        ] {
             let d = diff_for(f, "x");
-            assert!(check_diff_safety(&d, &[f]).unwrap_err().contains("HARD-FORBIDDEN"));
+            assert!(check_diff_safety(&d, &[f])
+                .unwrap_err()
+                .contains("HARD-FORBIDDEN"));
         }
     }
 

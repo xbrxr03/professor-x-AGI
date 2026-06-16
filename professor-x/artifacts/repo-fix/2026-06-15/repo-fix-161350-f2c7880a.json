@@ -1,0 +1,26 @@
+{
+  "run_id": "f2c7880a-5297-44cb-a489-47dac3697da0",
+  "recorded_at": "2026-06-15T16:13:50.728296909+00:00",
+  "harness_commit": "c18b0c9",
+  "manifest_path": "/tmp/px-repofix-fix014.json",
+  "model": "qwen3:8b-q4_K_M",
+  "passed": 1,
+  "ran": 1,
+  "pass_at_1": 1.0,
+  "tasks": [
+    {
+      "id": "fix_014",
+      "description": "In ops.py, one of the four functions is wrong: mul(a, b) returns a + b instead of a * b. Fix it.",
+      "setup": "scripts/benchmarks/repo_fix/fix_014",
+      "verify_cmd": "python3 check.py",
+      "pre_exit": 1,
+      "post_exit": 0,
+      "expect_exit": 0,
+      "passed": true,
+      "made_edit": true,
+      "workdir": null,
+      "transcript_path": "artifacts/transcripts/2026-06-15/a22ada00-3952-4482-9d44-cb983dca00b9.json",
+      "diff_summary": "diff -ru '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.git' '--exclude=artifacts' '--exclude=target' scripts/benchmarks/repo_fix/fix_014/ops.py /tmp/px-repofix-fix_014-2053846-1fdbb1a2520f41d69c1b3a7cb903ecee/ops.py\n--- scripts/benchmarks/repo_fix/fix_014/ops.py\t2026-06-15 09:50:19.575453999 -0400\n+++ /tmp/px-repofix-fix_014-2053846-1fdbb1a2520f41d69c1b3a7cb903ecee/ops.py\t2026-06-15 12:13:47.678868545 -0400\n@@ -5,7 +5,7 @@\n     return a - b\n \n def mul(a, b):\n-    return a + b\n+    return a * b\n \n def div(a, b):\n     return a / b"
+    }
+  ]
+}

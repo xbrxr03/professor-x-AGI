@@ -7,7 +7,6 @@
 /// FAISS can be wired in later if the store grows beyond ~50K entries.
 ///
 /// Run once to enable: `ollama pull nomic-embed-text`
-
 use anyhow::Result;
 use rusqlite::{params, Connection};
 use std::sync::{Arc, Mutex};
@@ -83,9 +82,8 @@ impl EmbeddingStore {
     /// Fetch all (source_id, vector) pairs for a table. Used for brute-force search.
     pub fn all_for(&self, source_table: &str) -> Result<Vec<(String, Vec<f32>)>> {
         let db = self.db.lock().unwrap();
-        let mut stmt = db.prepare(
-            "SELECT source_id, vector FROM embeddings WHERE source_table = ?1",
-        )?;
+        let mut stmt =
+            db.prepare("SELECT source_id, vector FROM embeddings WHERE source_table = ?1")?;
         let rows = stmt.query_map(params![source_table], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
         })?;
@@ -98,12 +96,7 @@ impl EmbeddingStore {
     }
 
     /// Return the top-k source_ids most similar to `query`, sorted descending.
-    pub fn top_k(
-        &self,
-        source_table: &str,
-        query: &[f32],
-        k: usize,
-    ) -> Result<Vec<(String, f32)>> {
+    pub fn top_k(&self, source_table: &str, query: &[f32], k: usize) -> Result<Vec<(String, f32)>> {
         let candidates = self.all_for(source_table)?;
         let mut scored: Vec<(String, f32)> = candidates
             .into_iter()

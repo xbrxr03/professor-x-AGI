@@ -15,7 +15,6 @@
 /// Before each task: predict. After: measure per-dimension error. Track the
 /// errors over rounds. Convergence = developing self-knowledge. Persistent
 /// divergence on a dimension = a blind spot worth a self-authored test.
-
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
@@ -270,7 +269,12 @@ impl SelfPredictionStore {
 
         // AUROC via Mann-Whitney U on confidence ranks (average ranks for ties).
         let mut idx: Vec<usize> = (0..data.len()).collect();
-        idx.sort_by(|&a, &b| data[a].0.partial_cmp(&data[b].0).unwrap_or(std::cmp::Ordering::Equal));
+        idx.sort_by(|&a, &b| {
+            data[a]
+                .0
+                .partial_cmp(&data[b].0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         let mut ranks = vec![0.0f64; data.len()];
         let mut i = 0;
         while i < idx.len() {
@@ -298,8 +302,16 @@ impl SelfPredictionStore {
 
         // Calibration gap: mean confidence on correct vs incorrect trials.
         let mean_conf = |want: bool| -> f32 {
-            let v: Vec<f32> = data.iter().filter(|(_, c)| *c == want).map(|(x, _)| *x).collect();
-            if v.is_empty() { 0.0 } else { v.iter().sum::<f32>() / v.len() as f32 }
+            let v: Vec<f32> = data
+                .iter()
+                .filter(|(_, c)| *c == want)
+                .map(|(x, _)| *x)
+                .collect();
+            if v.is_empty() {
+                0.0
+            } else {
+                v.iter().sum::<f32>() / v.len() as f32
+            }
         };
         Ok(Some(MetacogResult {
             auroc,
@@ -390,11 +402,7 @@ mod tests {
             expected_success: 1.0,
             expected_failure_mode: None,
         };
-        let err = pred.error_against(
-            &["fs.read".to_string(), "fs.write".to_string()],
-            3,
-            true,
-        );
+        let err = pred.error_against(&["fs.read".to_string(), "fs.write".to_string()], 3, true);
         assert!(err.aggregate() < 1e-6);
     }
 
@@ -424,7 +432,8 @@ mod tests {
 
     #[test]
     fn parse_prediction_reads_all_fields() {
-        let text = "TOOLS: fs.read, memory.read\nSTEPS: 4\nSUCCESS: 0.8\nFAILURE_MODE: wrong file path";
+        let text =
+            "TOOLS: fs.read, memory.read\nSTEPS: 4\nSUCCESS: 0.8\nFAILURE_MODE: wrong file path";
         let p = parse_prediction(text);
         assert_eq!(p.expected_tools.len(), 2);
         assert_eq!(p.expected_steps, 4);
@@ -436,7 +445,11 @@ mod tests {
     fn record_and_mean_error() {
         let store = fresh_store();
         let pred = SelfPrediction::uninformed();
-        let err = SelfPredictionError { tool_err: 0.2, step_err: 0.4, success_err: 0.3 };
+        let err = SelfPredictionError {
+            tool_err: 0.2,
+            step_err: 0.4,
+            success_err: 0.3,
+        };
         store.record("s", 0, "planning", &pred, &err).unwrap();
         let mean = store.mean_error(10).unwrap().unwrap();
         assert!((mean - 0.3).abs() < 1e-5); // (0.2+0.4+0.3)/3
@@ -448,7 +461,11 @@ mod tests {
         let pred = SelfPrediction::uninformed();
         // step_err consistently high — that's the blind spot
         for _ in 0..3 {
-            let err = SelfPredictionError { tool_err: 0.1, step_err: 0.9, success_err: 0.1 };
+            let err = SelfPredictionError {
+                tool_err: 0.1,
+                step_err: 0.9,
+                success_err: 0.1,
+            };
             store.record("s", 0, "planning", &pred, &err).unwrap();
         }
         let dims = store.mean_error_by_dimension(10).unwrap().unwrap();

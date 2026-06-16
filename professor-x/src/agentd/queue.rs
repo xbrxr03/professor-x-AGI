@@ -1,5 +1,5 @@
-use std::collections::BinaryHeap;
 use std::cmp::Ordering;
+use std::collections::BinaryHeap;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -12,14 +12,20 @@ struct PrioritizedTask {
 }
 
 impl PartialEq for PrioritizedTask {
-    fn eq(&self, other: &Self) -> bool { self.priority == other.priority }
+    fn eq(&self, other: &Self) -> bool {
+        self.priority == other.priority
+    }
 }
 impl Eq for PrioritizedTask {}
 impl PartialOrd for PrioritizedTask {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> { Some(self.cmp(other)) }
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 impl Ord for PrioritizedTask {
-    fn cmp(&self, other: &Self) -> Ordering { self.priority.cmp(&other.priority) }
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.priority.cmp(&other.priority)
+    }
 }
 
 pub struct TaskQueue {
@@ -39,7 +45,10 @@ impl TaskQueue {
         let priority = task.priority;
         let id = task.id;
         self.tasks.lock().await.insert(id, task);
-        self.heap.lock().await.push(PrioritizedTask { priority, id });
+        self.heap
+            .lock()
+            .await
+            .push(PrioritizedTask { priority, id });
     }
 
     /// Pop the highest-priority pending task whose parents are all complete.
@@ -54,9 +63,14 @@ impl TaskQueue {
         let mut ready_idx = None;
         for (i, c) in candidates.iter().enumerate() {
             if let Some(task) = tasks.get(&c.id) {
-                if task.status != TaskStatus::Pending { continue; }
+                if task.status != TaskStatus::Pending {
+                    continue;
+                }
                 let parents_done = task.parent_ids.iter().all(|pid| {
-                    tasks.get(pid).map(|p| p.status == TaskStatus::Complete).unwrap_or(true)
+                    tasks
+                        .get(pid)
+                        .map(|p| p.status == TaskStatus::Complete)
+                        .unwrap_or(true)
                 });
                 if parents_done {
                     ready_idx = Some(i);
@@ -67,12 +81,16 @@ impl TaskQueue {
 
         match ready_idx {
             None => {
-                for c in candidates { heap.push(c); }
+                for c in candidates {
+                    heap.push(c);
+                }
                 None
             }
             Some(i) => {
                 let chosen = candidates.remove(i);
-                for c in candidates { heap.push(c); }
+                for c in candidates {
+                    heap.push(c);
+                }
                 drop(heap);
                 drop(tasks);
                 self.tasks.lock().await.remove(&chosen.id)

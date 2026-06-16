@@ -1,0 +1,26 @@
+{
+  "run_id": "1a6de1c8-e5d3-44be-bb88-af969dda22af",
+  "recorded_at": "2026-06-15T16:38:14.952384768+00:00",
+  "harness_commit": "4f66791",
+  "manifest_path": "/tmp/px-repofix-fix012.json",
+  "model": "qwen3:8b-q4_K_M",
+  "passed": 1,
+  "ran": 1,
+  "pass_at_1": 1.0,
+  "tasks": [
+    {
+      "id": "fix_012",
+      "description": "In running.py, running_max initializes m = 0, so it returns 0 for all-negative inputs. Fix the initialization to handle negatives.",
+      "setup": "scripts/benchmarks/repo_fix/fix_012",
+      "verify_cmd": "python3 check.py",
+      "pre_exit": 1,
+      "post_exit": 0,
+      "expect_exit": 0,
+      "passed": true,
+      "made_edit": true,
+      "workdir": null,
+      "transcript_path": "artifacts/transcripts/2026-06-15/72a9b6a9-4209-4eed-a93f-235683d4a868.json",
+      "diff_summary": "diff -ru '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.git' '--exclude=artifacts' '--exclude=target' scripts/benchmarks/repo_fix/fix_012/running.py /tmp/px-repofix-fix_012-2061105-d39c2c2504e34142b7cdc90444df5928/running.py\n--- scripts/benchmarks/repo_fix/fix_012/running.py\t2026-06-15 09:50:19.575136381 -0400\n+++ /tmp/px-repofix-fix_012-2061105-d39c2c2504e34142b7cdc90444df5928/running.py\t2026-06-15 12:38:11.936733425 -0400\n@@ -1,5 +1,5 @@\n def running_max(xs):\n-    m = 0\n+    m = -float('inf')\n     for x in xs:\n         if x > m:\n             m = x"
+    }
+  ]
+}

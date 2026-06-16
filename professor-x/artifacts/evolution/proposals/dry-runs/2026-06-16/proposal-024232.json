@@ -1,0 +1,22 @@
+{
+  "generated_at": "2026-06-16T02:42:32.599186969+00:00",
+  "mode": "dry_run",
+  "operator_goal": "record coding-session evidence for commit-capable patch autonomy",
+  "workspace": "repo-root",
+  "harness_commit": "3d48610",
+  "target_component": "SkillDefinition(\"px-operator-proposal-dry-run\")",
+  "motivation": "operator queued goal proposal: record coding-session evidence for commit-capable patch autonomy",
+  "accepted": true,
+  "applied": false,
+  "commit": null,
+  "reason": "sandbox verification passed",
+  "checks": [
+    "reward_hacking_scan",
+    "sandbox_worktree",
+    "material_diff",
+    "cargo_check",
+    "cargo_test"
+  ],
+  "diff_hash": "60eb3b36f13172f1c97d6eb84c35f0e849768eba3bfc6cc51749f181f9c30a3a",
+  "diff_bytes": 1290
+}

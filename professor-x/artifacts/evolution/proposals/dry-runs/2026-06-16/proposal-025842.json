@@ -1,0 +1,22 @@
+{
+  "generated_at": "2026-06-16T02:58:42.101032502+00:00",
+  "mode": "dry_run",
+  "operator_goal": "validate clean-tree repo patch commit session evidence",
+  "workspace": "repo-root",
+  "harness_commit": "b1560fa",
+  "target_component": "SkillDefinition(\"px-operator-proposal-dry-run\")",
+  "motivation": "operator queued goal proposal: validate clean-tree repo patch commit session evidence",
+  "accepted": true,
+  "applied": false,
+  "commit": null,
+  "reason": "sandbox verification passed",
+  "checks": [
+    "reward_hacking_scan",
+    "sandbox_worktree",
+    "material_diff",
+    "cargo_check",
+    "cargo_test"
+  ],
+  "diff_hash": "d5dbf3957be49c04fa6a84d69bf01061073da3139d36dc3a489f9a43e18a5b44",
+  "diff_bytes": 1280
+}

@@ -23,7 +23,6 @@
 /// bias is ~constant when the sample count per round is constant (≈60 HIRO
 /// tasks). The trajectory across rounds is therefore the valid signal, which
 /// is precisely the claim under test.
-
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
@@ -152,7 +151,12 @@ impl PhiStore {
         db.execute(
             "INSERT INTO phi_activations (round, activation_index, active_count, recorded_at)
              VALUES (?1, ?2, ?3, ?4)",
-            params![round as i64, a.to_index() as i64, active, Utc::now().to_rfc3339()],
+            params![
+                round as i64,
+                a.to_index() as i64,
+                active,
+                Utc::now().to_rfc3339()
+            ],
         )?;
         Ok(())
     }
@@ -160,9 +164,8 @@ impl PhiStore {
     /// Load all activations for a round.
     pub fn activations_for_round(&self, round: u32) -> Result<Vec<ModuleActivation>> {
         let db = self.db.lock().unwrap();
-        let mut stmt = db.prepare(
-            "SELECT activation_index FROM phi_activations WHERE round = ?1",
-        )?;
+        let mut stmt =
+            db.prepare("SELECT activation_index FROM phi_activations WHERE round = ?1")?;
         let rows = stmt.query_map(params![round as i64], |r| r.get::<_, i64>(0))?;
         let mut out = Vec::new();
         for idx in rows.flatten() {
@@ -214,9 +217,7 @@ impl PhiStore {
     /// Phi trajectory across rounds (oldest first) — the H-phi plot input.
     pub fn trajectory(&self) -> Result<Vec<(u32, f32)>> {
         let db = self.db.lock().unwrap();
-        let mut stmt = db.prepare(
-            "SELECT round, phi FROM phi_rounds ORDER BY round ASC",
-        )?;
+        let mut stmt = db.prepare("SELECT round, phi FROM phi_rounds ORDER BY round ASC")?;
         let rows = stmt.query_map([], |r| {
             Ok((r.get::<_, i64>(0)? as u32, r.get::<_, f64>(1)? as f32))
         })?;
@@ -312,7 +313,10 @@ mod tests {
             acts.push(a);
         }
         let phi = integrated_information(&acts);
-        assert!(phi < 0.05, "expected ~0 phi for single varying module, got {phi}");
+        assert!(
+            phi < 0.05,
+            "expected ~0 phi for single varying module, got {phi}"
+        );
     }
 
     #[test]
@@ -329,7 +333,10 @@ mod tests {
             acts.push(a);
         }
         let phi = integrated_information(&acts);
-        assert!(phi > 1.0, "expected high phi for 3 correlated modules, got {phi}");
+        assert!(
+            phi > 1.0,
+            "expected high phi for 3 correlated modules, got {phi}"
+        );
     }
 
     #[test]
@@ -363,7 +370,9 @@ mod tests {
     #[test]
     fn single_decision_returns_none() {
         let store = fresh_store();
-        store.record_activation(0, &ModuleActivation::none()).unwrap();
+        store
+            .record_activation(0, &ModuleActivation::none())
+            .unwrap();
         assert!(store.compute_and_record_round(0).unwrap().is_none());
     }
 }

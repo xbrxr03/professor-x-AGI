@@ -264,11 +264,7 @@ const P_CORRECT: usize = 2;
 /// - Layer 4 tool execution: `p_tool` only (tool category dominates).
 /// - Layer 5 reasoning: average of `p_plan` and `p_correct`.
 /// - Layer 0 (unknown / parser default): overall mean delta.
-pub(crate) fn relevant_delta_for_layer(
-    layer: u8,
-    prior_fp: [f32; 3],
-    curr_fp: [f32; 3],
-) -> f32 {
+pub(crate) fn relevant_delta_for_layer(layer: u8, prior_fp: [f32; 3], curr_fp: [f32; 3]) -> f32 {
     let d_tool = curr_fp[P_TOOL] - prior_fp[P_TOOL];
     let d_plan = curr_fp[P_PLAN] - prior_fp[P_PLAN];
     let d_correct = curr_fp[P_CORRECT] - prior_fp[P_CORRECT];
@@ -324,7 +320,13 @@ mod tests {
     fn append_assigns_rowid_and_persists() {
         let store = fresh_store();
         let id = store
-            .append(&MetacognitiveEntry::new(3, "SkillDefinition(\"x\")", 3, 3, 0.6))
+            .append(&MetacognitiveEntry::new(
+                3,
+                "SkillDefinition(\"x\")",
+                3,
+                3,
+                0.6,
+            ))
             .unwrap();
         assert!(id > 0);
         let recent = store.recent(10).unwrap();
@@ -465,7 +467,13 @@ mod tests {
         // Two attributions on the same round: Layer 3 (tool-only) and
         // Layer 5 (reasoning).
         let _ = store
-            .append(&MetacognitiveEntry::new(1, "ToolDescription(\"x\")", 3, 3, 0.7))
+            .append(&MetacognitiveEntry::new(
+                1,
+                "ToolDescription(\"x\")",
+                3,
+                3,
+                0.7,
+            ))
             .unwrap();
         let _ = store
             .append(&MetacognitiveEntry::new(1, "SystemPrompt", 5, 3, 0.7))
@@ -488,7 +496,13 @@ mod tests {
     fn verify_round_lever_specific_records_per_entry_delta() {
         let store = fresh_store();
         store
-            .append(&MetacognitiveEntry::new(2, "ToolDescription(\"x\")", 3, 3, 0.7))
+            .append(&MetacognitiveEntry::new(
+                2,
+                "ToolDescription(\"x\")",
+                3,
+                3,
+                0.7,
+            ))
             .unwrap();
         store
             .append(&MetacognitiveEntry::new(2, "SystemPrompt", 5, 3, 0.7))

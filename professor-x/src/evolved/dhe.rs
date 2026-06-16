@@ -13,7 +13,6 @@
 ///   Layer 5    → Lever 1 (parametric, if pattern is pervasive)
 ///
 /// Target: ≥60% fix-prediction precision vs AHE baseline of 33.7% (H10).
-
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
@@ -172,7 +171,8 @@ impl Dhe {
                     evidence: if passed {
                         "LLM judge: reasoning used observations correctly".to_string()
                     } else {
-                        "LLM judge: reasoning failed to use observations toward the goal".to_string()
+                        "LLM judge: reasoning failed to use observations toward the goal"
+                            .to_string()
                     },
                     confidence: 0.85,
                 }
@@ -186,9 +186,10 @@ impl Dhe {
 
     /// Layer 1: Was relevant memory retrieved? (proxy: did steps reference memory.read?)
     fn probe_layer1(task: &TaskNode) -> LayerResult {
-        let used_memory = task.steps.iter().any(|s| {
-            s.action.tool_name.starts_with("memory.")
-        });
+        let used_memory = task
+            .steps
+            .iter()
+            .any(|s| s.action.tool_name.starts_with("memory."));
 
         // If task requires recall and no memory was used, Layer 1 failed
         let needs_memory = task.description.to_lowercase().contains("previous")
@@ -219,7 +220,8 @@ impl Dhe {
             layer: 2,
             passed: !context_overload,
             evidence: if context_overload {
-                "observation output was truncated — model may have ignored relevant context".to_string()
+                "observation output was truncated — model may have ignored relevant context"
+                    .to_string()
             } else {
                 "context size within bounds".to_string()
             },
@@ -230,10 +232,18 @@ impl Dhe {
     /// Layer 3: Did the agent call the right tools in the right order?
     fn probe_layer3(task: &TaskNode) -> LayerResult {
         // Wrong tool: if ALL tool calls in the task were denied or failed, dispatch is broken
-        let total   = task.steps.len();
-        let denied  = task.steps.iter().filter(|s| {
-            s.observation.error.as_deref().unwrap_or("").contains("policy denied")
-        }).count();
+        let total = task.steps.len();
+        let denied = task
+            .steps
+            .iter()
+            .filter(|s| {
+                s.observation
+                    .error
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("policy denied")
+            })
+            .count();
 
         let mostly_denied = total > 0 && (denied as f32 / total as f32) > 0.6;
 
@@ -241,7 +251,9 @@ impl Dhe {
             layer: 3,
             passed: !mostly_denied,
             evidence: if mostly_denied {
-                format!("{denied}/{total} tool calls were denied — agent is not using permitted tools")
+                format!(
+                    "{denied}/{total} tool calls were denied — agent is not using permitted tools"
+                )
             } else {
                 "tool dispatch appears correct".to_string()
             },
@@ -251,7 +263,7 @@ impl Dhe {
 
     /// Layer 4: Did tools return useful output?
     fn probe_layer4(task: &TaskNode) -> LayerResult {
-        let total    = task.steps.len();
+        let total = task.steps.len();
         let failures = task.steps.iter().filter(|s| !s.observation.success).count();
 
         let high_failure_rate = total > 0 && (failures as f32 / total as f32) > 0.5;
@@ -275,8 +287,16 @@ impl Dhe {
         let mut circular = false;
 
         for step in &task.steps {
-            let key = format!("{}:{}", step.action.tool_name,
-                              step.action.params.to_string().chars().take(100).collect::<String>());
+            let key = format!(
+                "{}:{}",
+                step.action.tool_name,
+                step.action
+                    .params
+                    .to_string()
+                    .chars()
+                    .take(100)
+                    .collect::<String>()
+            );
             if !seen_actions.insert(key) {
                 circular = true;
                 break;

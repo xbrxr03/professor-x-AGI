@@ -89,11 +89,7 @@ impl SemanticStore {
                 quality = (success_count + ?1 + 1.0) / (use_count + 1 + 2.0),
                 last_accessed = ?2
              WHERE id = ?3",
-            params![
-                success as i32,
-                Utc::now().to_rfc3339(),
-                id.to_string(),
-            ],
+            params![success as i32, Utc::now().to_rfc3339(), id.to_string(),],
         )?;
         Ok(())
     }

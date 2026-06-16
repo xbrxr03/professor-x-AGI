@@ -1,0 +1,33 @@
+{
+  "generated_at": "2026-06-16T08:12:01.039373949+00:00",
+  "artifact_id": "1d5d034b-a7b8-41d0-a31a-d3f94e7e22c5",
+  "node_id": null,
+  "status": "Rejected",
+  "target_component": "SkillDefinition(\"CorrectProcedureSkill\")",
+  "motivation": "Defining a reusable skill that captures the correct procedure for handling tasks with missing 'command' parameters and duplicate action blocks will improve task completion rates.",
+  "manifest": {
+    "evidence_cited": [
+      "[failure:unknown] (x2)"
+    ],
+    "root_cause": "The agent fails due to unknown reasons, likely related to improper command execution and action duplication.",
+    "fix_description": "# CorrectProcedureSkill\n## Purpose\nThis skill defines the correct procedure for executing commands while avoiding duplicate actions and ensuring all required parameters are provided.\n\n## Workflow\n1. **Check Prior Actions**: Before executing any new command, verify that the same command has not already been executed in the current context to avoid duplicates.\n2. **Validate Command Parameters**: Ensure that all necessary parameters (e.g., 'command') for the intended action are present and correctly formatted.\n3. **Execute Command Safely**: Use restricted tools like `fs` or `pgrep` when needed, ensuring they do not conflict with existing actions or policies.\n\n## Output Contract\n- The command is executed successfully without duplication.\n- All required parameters are validated and used appropriately.",
+    "predicted_fixes": [
+      "Tasks involving command execution that require parameter validation and duplicate action checks."
+    ],
+    "predicted_regressions": [
+      "None"
+    ],
+    "verification_status": "Rejected",
+    "verified_at": null
+  },
+  "verification": {
+    "accepted": false,
+    "reason": "main worktree is dirty; refusing autonomous mutation",
+    "checks": [
+      "main_worktree_clean"
+    ]
+  },
+  "analysis": "main worktree is dirty; refusing autonomous mutation",
+  "diff_hash": "41aa834a72e93d05918078817874cf0cf1c3c50833882d6c9ebae7018d6f3b18",
+  "diff_bytes": 807
+}

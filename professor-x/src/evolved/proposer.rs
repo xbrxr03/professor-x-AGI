@@ -5,7 +5,6 @@
 /// Diff format: ASI-Evolve config.yaml diff_pattern (<<<< SEARCH / ==== / >>>> REPLACE)
 /// UCB1 sampling: ASI-Evolve config.yaml ucb1_c = 1.414
 /// ChangeManifest: AHE paper arXiv:2604.25850, Section 3.3 Decision Observability
-
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
@@ -72,7 +71,12 @@ pub struct EvolutionNode {
 }
 
 impl EvolutionNode {
-    pub fn new(motivation: String, target: HarnessComponent, diff: String, manifest: ChangeManifest) -> Self {
+    pub fn new(
+        motivation: String,
+        target: HarnessComponent,
+        diff: String,
+        manifest: ChangeManifest,
+    ) -> Self {
         Self {
             id: None,
             created_at: Utc::now(),
@@ -151,7 +155,7 @@ impl NodeDatabase {
                     results, analysis, manifest, score, visit_count, status
              FROM evolution_nodes
              WHERE status IN ('Proposed', 'Accepted')
-             ORDER BY id DESC LIMIT 50"
+             ORDER BY id DESC LIMIT 50",
         )?;
 
         struct Row {
@@ -170,65 +174,162 @@ impl NodeDatabase {
             status: String,
         }
 
-        let mut rows: Vec<Row> = stmt.query_map([], |row| {
-            let visit_count: i64 = row.get(10)?;
-            let score: f64 = row.get(9)?;
-            let ucb = if visit_count == 0 {
-                f64::MAX
-            } else {
-                score + c * (n_total.ln() / visit_count as f64).sqrt()
-            };
-            Ok(Row {
-                ucb,
-                id: row.get(0)?,
-                created_at: row.get(1)?,
-                parent_ids: row.get(2)?,
-                motivation: row.get(3)?,
-                target_component: row.get(4)?,
-                diff: row.get(5)?,
-                results: row.get(6)?,
-                analysis: row.get(7)?,
-                manifest: row.get(8)?,
-                score,
-                visit_count,
-                status: row.get(11)?,
+        let mut rows: Vec<Row> = stmt
+            .query_map([], |row| {
+                let visit_count: i64 = row.get(10)?;
+                let score: f64 = row.get(9)?;
+                let ucb = if visit_count == 0 {
+                    f64::MAX
+                } else {
+                    score + c * (n_total.ln() / visit_count as f64).sqrt()
+                };
+                Ok(Row {
+                    ucb,
+                    id: row.get(0)?,
+                    created_at: row.get(1)?,
+                    parent_ids: row.get(2)?,
+                    motivation: row.get(3)?,
+                    target_component: row.get(4)?,
+                    diff: row.get(5)?,
+                    results: row.get(6)?,
+                    analysis: row.get(7)?,
+                    manifest: row.get(8)?,
+                    score,
+                    visit_count,
+                    status: row.get(11)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        rows.sort_by(|a, b| {
+            b.ucb
+                .partial_cmp(&a.ucb)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        Ok(rows
+            .into_iter()
+            .take(n)
+            .map(|r| {
+                let default_manifest = ChangeManifest {
+                    evidence_cited: Vec::new(),
+                    root_cause: String::new(),
+                    fix_description: String::new(),
+                    predicted_fixes: Vec::new(),
+                    predicted_regressions: Vec::new(),
+                    verification_status: VerificationStatus::Pending,
+                    verified_at: None,
+                };
+                EvolutionNode {
+                    id: Some(r.id),
+                    created_at: DateTime::parse_from_rfc3339(&r.created_at)
+                        .map(|d| d.with_timezone(&Utc))
+                        .unwrap_or_else(|_| Utc::now()),
+                    parent_ids: serde_json::from_str(&r.parent_ids).unwrap_or_default(),
+                    motivation: r.motivation,
+                    target_component: parse_harness_component(&r.target_component),
+                    diff: r.diff,
+                    results: serde_json::from_str(&r.results).unwrap_or(serde_json::Value::Null),
+                    analysis: r.analysis,
+                    manifest: serde_json::from_str(&r.manifest).unwrap_or(default_manifest),
+                    score: r.score as f32,
+                    visit_count: r.visit_count as u32,
+                    status: match r.status.as_str() {
+                        "Testing" => NodeStatus::Testing,
+                        "Accepted" => NodeStatus::Accepted,
+                        "Rejected" => NodeStatus::Rejected,
+                        "RolledBack" => NodeStatus::RolledBack,
+                        _ => NodeStatus::Proposed,
+                    },
+                }
             })
-        })?.filter_map(|r| r.ok()).collect();
+            .collect())
+    }
+}
 
-        rows.sort_by(|a, b| b.ucb.partial_cmp(&a.ucb).unwrap_or(std::cmp::Ordering::Equal));
+fn parse_harness_component(raw: &str) -> HarnessComponent {
+    let raw = raw.trim();
+    if let Some(name) = parse_debug_component_arg(raw, "ToolDescription(") {
+        return HarnessComponent::ToolDescription(name);
+    }
+    if let Some(name) = parse_debug_component_arg(raw, "SkillDefinition(") {
+        return HarnessComponent::SkillDefinition(name);
+    }
+    if let Some(name) = raw.strip_prefix("ToolDescription:") {
+        return HarnessComponent::ToolDescription(name.trim().to_string());
+    }
+    if let Some(name) = raw.strip_prefix("SkillDefinition:") {
+        return HarnessComponent::SkillDefinition(name.trim().to_string());
+    }
+    match raw {
+        "SystemPrompt" => HarnessComponent::SystemPrompt,
+        "HarnessConfig" => HarnessComponent::HarnessConfig,
+        "ProceduralMemory" => HarnessComponent::ProceduralMemory,
+        "Middleware" => HarnessComponent::Middleware,
+        _ => HarnessComponent::HarnessConfig,
+    }
+}
 
-        Ok(rows.into_iter().take(n).map(|r| {
-            let default_manifest = ChangeManifest {
-                evidence_cited: Vec::new(),
-                root_cause: String::new(),
-                fix_description: String::new(),
-                predicted_fixes: Vec::new(),
-                predicted_regressions: Vec::new(),
-                verification_status: VerificationStatus::Pending,
-                verified_at: None,
-            };
-            EvolutionNode {
-                id: Some(r.id),
-                created_at: DateTime::parse_from_rfc3339(&r.created_at)
-                    .map(|d| d.with_timezone(&Utc))
-                    .unwrap_or_else(|_| Utc::now()),
-                parent_ids: serde_json::from_str(&r.parent_ids).unwrap_or_default(),
-                motivation: r.motivation,
-                target_component: HarnessComponent::HarnessConfig,
-                diff: r.diff,
-                results: serde_json::from_str(&r.results).unwrap_or(serde_json::Value::Null),
-                analysis: r.analysis,
-                manifest: serde_json::from_str(&r.manifest).unwrap_or(default_manifest),
-                score: r.score as f32,
-                visit_count: r.visit_count as u32,
-                status: match r.status.as_str() {
-                    "Testing" => NodeStatus::Testing,
-                    "Accepted" => NodeStatus::Accepted,
-                    "Rejected" => NodeStatus::Rejected,
-                    "RolledBack" => NodeStatus::RolledBack,
-                    _ => NodeStatus::Proposed,
-                },
-            }
-        }).collect())
+fn parse_debug_component_arg(raw: &str, prefix: &str) -> Option<String> {
+    let inner = raw.strip_prefix(prefix)?.strip_suffix(')')?.trim();
+    serde_json::from_str(inner).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    #[test]
+    fn sample_ucb1_preserves_stored_target_component() {
+        let db = Arc::new(Mutex::new(Connection::open_in_memory().unwrap()));
+        db.lock()
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE evolution_nodes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    parent_ids TEXT NOT NULL,
+                    motivation TEXT NOT NULL,
+                    target_component TEXT NOT NULL,
+                    diff TEXT NOT NULL,
+                    results TEXT NOT NULL,
+                    analysis TEXT NOT NULL,
+                    manifest TEXT NOT NULL,
+                    score REAL NOT NULL,
+                    visit_count INTEGER NOT NULL,
+                    status TEXT NOT NULL
+                );",
+            )
+            .unwrap();
+        let node_db = NodeDatabase::new(Arc::clone(&db));
+        let manifest = ChangeManifest {
+            evidence_cited: vec!["task_runs".to_string()],
+            root_cause: "tool selection drift".to_string(),
+            fix_description: "# retry\n".to_string(),
+            predicted_fixes: vec!["tool-use".to_string()],
+            predicted_regressions: Vec::new(),
+            verification_status: VerificationStatus::Pending,
+            verified_at: None,
+        };
+        let mut node = EvolutionNode::new(
+            "teach a reusable retry policy".to_string(),
+            HarnessComponent::SkillDefinition("retry-plan-generation".to_string()),
+            "# retry-plan-generation".to_string(),
+            manifest,
+        );
+        node.score = 0.8;
+        node.visit_count = 1;
+        node.status = NodeStatus::Accepted;
+        node_db.insert(&mut node).unwrap();
+
+        let sampled = node_db.sample_ucb1(1).unwrap();
+
+        assert_eq!(sampled.len(), 1);
+        assert!(matches!(
+            &sampled[0].target_component,
+            HarnessComponent::SkillDefinition(name) if name == "retry-plan-generation"
+        ));
     }
 }

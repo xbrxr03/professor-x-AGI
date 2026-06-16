@@ -8,7 +8,6 @@
 ///
 /// Model default: qwen3:8b-q4_k_m (5.2GB VRAM, 42 tok/s, thinking mode)
 /// Thinking mode: set "think" in options to enable <think>...</think> prefix
-
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -101,7 +100,9 @@ impl ModelOptions {
             num_ctx: Some(32768),
             top_p: Some(0.9),
             stop: None,
-            think: Some(true),
+            // Evolution prompts require strict structured output and must run
+            // on coder-style local models that often reject thinking mode.
+            think: Some(false),
         }
     }
 }
@@ -153,13 +154,22 @@ pub struct ChatMessage {
 
 impl ChatMessage {
     pub fn system(content: impl Into<String>) -> Self {
-        Self { role: "system".to_string(), content: content.into() }
+        Self {
+            role: "system".to_string(),
+            content: content.into(),
+        }
     }
     pub fn user(content: impl Into<String>) -> Self {
-        Self { role: "user".to_string(), content: content.into() }
+        Self {
+            role: "user".to_string(),
+            content: content.into(),
+        }
     }
     pub fn assistant(content: impl Into<String>) -> Self {
-        Self { role: "assistant".to_string(), content: content.into() }
+        Self {
+            role: "assistant".to_string(),
+            content: content.into(),
+        }
     }
 }
 
@@ -282,7 +292,9 @@ impl OllamaClient {
     /// Check if Ollama is reachable and our model is loaded.
     pub async fn health_check(&self) -> Result<bool> {
         let url = format!("{}/api/tags", self.base_url);
-        let resp = self.http.get(&url)
+        let resp = self
+            .http
+            .get(&url)
             .timeout(Duration::from_secs(5))
             .send()
             .await?;
@@ -323,7 +335,11 @@ impl OllamaClient {
                     .and_then(|d| d.parameter_size.as_deref())
                     .and_then(parse_params_b)
                     .unwrap_or(0.0);
-                InstalledModel { name: m.name, params_b, size_bytes: m.size }
+                InstalledModel {
+                    name: m.name,
+                    params_b,
+                    size_bytes: m.size,
+                }
             })
             .collect())
     }
@@ -411,7 +427,11 @@ impl OllamaClient {
             .send()
             .await?;
         if !resp.status().is_success() {
-            bail!("ollama embed failed {}: {}", resp.status(), resp.text().await.unwrap_or_default());
+            bail!(
+                "ollama embed failed {}: {}",
+                resp.status(),
+                resp.text().await.unwrap_or_default()
+            );
         }
         let embed_resp: EmbedResponse = resp.json().await?;
         embed_resp
@@ -427,7 +447,10 @@ impl OllamaClient {
             return Ok(Vec::new());
         }
         // Local ONNX batch first; fall back to Ollama HTTP on any failure.
-        let owned: Vec<String> = texts.iter().map(|t| t.chars().take(2048).collect()).collect();
+        let owned: Vec<String> = texts
+            .iter()
+            .map(|t| t.chars().take(2048).collect())
+            .collect();
         if let Ok(Some(v)) = tokio::task::spawn_blocking(move || {
             let refs: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
             crate::local_embed::embed_many(&refs)
@@ -513,13 +536,19 @@ impl OllamaClient {
                     if attempt + 1 == MAX_RETRIES {
                         bail!("ollama generate failed {status}: {body}");
                     }
-                    warn!("ollama generate attempt {}/{MAX_RETRIES}: {status}", attempt + 1);
+                    warn!(
+                        "ollama generate attempt {}/{MAX_RETRIES}: {status}",
+                        attempt + 1
+                    );
                 }
                 Err(e) => {
                     if attempt + 1 == MAX_RETRIES {
                         bail!("ollama generate connection error: {e}");
                     }
-                    warn!("ollama connection attempt {}/{MAX_RETRIES}: {e}", attempt + 1);
+                    warn!(
+                        "ollama connection attempt {}/{MAX_RETRIES}: {e}",
+                        attempt + 1
+                    );
                 }
             }
 
@@ -548,13 +577,19 @@ impl OllamaClient {
                     if attempt + 1 == MAX_RETRIES {
                         bail!("ollama chat failed {status}: {body}");
                     }
-                    warn!("ollama chat attempt {}/{MAX_RETRIES}: {status}", attempt + 1);
+                    warn!(
+                        "ollama chat attempt {}/{MAX_RETRIES}: {status}",
+                        attempt + 1
+                    );
                 }
                 Err(e) => {
                     if attempt + 1 == MAX_RETRIES {
                         bail!("ollama chat connection error: {e}");
                     }
-                    warn!("ollama chat connection attempt {}/{MAX_RETRIES}: {e}", attempt + 1);
+                    warn!(
+                        "ollama chat connection attempt {}/{MAX_RETRIES}: {e}",
+                        attempt + 1
+                    );
                 }
             }
 
@@ -570,8 +605,16 @@ fn base64_encode(data: &[u8]) -> String {
     let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
     for chunk in data.chunks(3) {
         let b0 = chunk[0] as usize;
-        let b1 = if chunk.len() > 1 { chunk[1] as usize } else { 0 };
-        let b2 = if chunk.len() > 2 { chunk[2] as usize } else { 0 };
+        let b1 = if chunk.len() > 1 {
+            chunk[1] as usize
+        } else {
+            0
+        };
+        let b2 = if chunk.len() > 2 {
+            chunk[2] as usize
+        } else {
+            0
+        };
         out.push(TABLE[(b0 >> 2)] as char);
         out.push(TABLE[((b0 & 3) << 4) | (b1 >> 4)] as char);
         if chunk.len() > 1 {
@@ -586,4 +629,17 @@ fn base64_encode(data: &[u8]) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ModelOptions;
+
+    #[test]
+    fn evolution_options_disable_thinking_for_coder_compatibility() {
+        let opts = ModelOptions::for_evolution();
+
+        assert_eq!(opts.think, Some(false));
+        assert_eq!(opts.num_ctx, Some(32768));
+    }
 }

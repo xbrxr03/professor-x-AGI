@@ -53,11 +53,13 @@ pub fn tool_risk_score(tool: &str) -> u8 {
         "web.fetch" => 20,
         "ollama.complete" => 15,
         "patch.review" => 20,
+        "git.checkpoint" => 25,
         "fs.hash_edit" => 40,
         "fs.replace" => 42,
         "fs.write" => 45,
         "shell.restricted" => 60,
         "patch.apply" => 62,
+        "git.undo" => 64,
         "fs.delete" => 70,
         "git.commit" => 50,
         "harness.modify" => 85,
@@ -144,6 +146,58 @@ impl PolicyEngine {
                     reason: format!("{tool} requires string param 'patch'"),
                     risk_score: risk,
                 };
+            }
+        }
+
+        if tool == "git.checkpoint" {
+            match params.get("paths").and_then(|v| v.as_array()) {
+                Some(paths) if !paths.is_empty() => {
+                    for path in paths {
+                        let Some(path) = path.as_str() else {
+                            return GateResult {
+                                decision: Decision::Deny,
+                                reason: "git.checkpoint paths must be strings".to_string(),
+                                risk_score: risk,
+                            };
+                        };
+                        if path.starts_with('/') || path.contains('\0') {
+                            return GateResult {
+                                decision: Decision::Deny,
+                                reason: format!(
+                                    "checkpoint path '{}' is not a relative workspace path",
+                                    path
+                                ),
+                                risk_score: risk,
+                            };
+                        }
+                        if path.split('/').any(|part| part == ".." || part == ".git") {
+                            return GateResult {
+                                decision: Decision::Deny,
+                                reason: format!(
+                                    "checkpoint path '{}' contains a blocked component",
+                                    path
+                                ),
+                                risk_score: risk,
+                            };
+                        }
+                        if let Some(reason) =
+                            path_access_denied_reason(path, FileAccess::Write, scope)
+                        {
+                            return GateResult {
+                                decision: Decision::Deny,
+                                reason,
+                                risk_score: risk,
+                            };
+                        }
+                    }
+                }
+                _ => {
+                    return GateResult {
+                        decision: Decision::Deny,
+                        reason: "git.checkpoint requires non-empty array param 'paths'".to_string(),
+                        risk_score: risk,
+                    };
+                }
             }
         }
 
@@ -264,7 +318,8 @@ enum FileAccess {
 
 fn path_denied_reason(tool: &str, path: &str, scope: &PermissionScope) -> Option<String> {
     let access = match tool {
-        "fs.read" | "fs.hash_read" | "fs.window_open" | "fs.window_goto" | "fs.window_scroll" | "fs.list" => FileAccess::Read,
+        "fs.read" | "fs.hash_read" | "fs.window_open" | "fs.window_goto" | "fs.window_scroll"
+        | "fs.list" => FileAccess::Read,
         "fs.write" | "fs.hash_edit" | "fs.replace" | "fs.delete" => FileAccess::Write,
         _ => return None,
     };
@@ -814,5 +869,35 @@ mod tests {
         )
         .await;
         assert_eq!(denied_review.decision, Decision::Deny);
+    }
+
+    #[tokio::test]
+    async fn checkpoint_policy_keeps_paths_inside_workspace() {
+        let scope = test_scope();
+
+        let allowed = gate(
+            "git.checkpoint",
+            json!({"paths": ["src/lib.rs"], "reason": "before edit"}),
+            &scope,
+        )
+        .await;
+        assert_eq!(allowed.decision, Decision::Allow, "{}", allowed.reason);
+
+        let denied = gate(
+            "git.checkpoint",
+            json!({"paths": ["../outside.txt"], "reason": "escape"}),
+            &scope,
+        )
+        .await;
+        assert_eq!(denied.decision, Decision::Deny);
+        assert!(denied.reason.contains("blocked component"));
+
+        let malformed = gate(
+            "git.checkpoint",
+            json!({"paths": [], "reason": "empty"}),
+            &scope,
+        )
+        .await;
+        assert_eq!(malformed.decision, Decision::Deny);
     }
 }

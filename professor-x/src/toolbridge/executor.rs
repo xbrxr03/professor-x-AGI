@@ -14,8 +14,10 @@ use crate::memd::semantic::SemanticEntry;
 use crate::memd::MemoryManager;
 use crate::ollama::OllamaClient;
 use crate::toolbridge::apply_patch::apply_fuzzy_patch_to_memory;
+use crate::toolbridge::checkpoint::{create_checkpoint, undo_checkpoint};
 use crate::toolbridge::editverify::{verify_candidate_content, EditVerification};
 use crate::toolbridge::hashedit::{hash_edit_file, hash_read_file, resolve_workspace_path};
+use crate::toolbridge::shell_sandbox::restricted_shell_command;
 use crate::toolbridge::window::{goto_window_file, open_window_file, scroll_window_file};
 use crate::toolbridge::ToolRegistry;
 
@@ -102,6 +104,7 @@ pub struct ToolExecutor {
 #[derive(Debug, Serialize)]
 struct CommandOutputArtifact<'a> {
     command: &'a str,
+    sandbox: &'a str,
     exit_code: Option<i32>,
     success: bool,
     stdout: &'a str,
@@ -268,6 +271,8 @@ impl ToolExecutor {
                 };
                 let verification = self.verify_edit_candidate(&resolved_path, content).await?;
                 ensure_edit_verification(&verification)?;
+                let checkpoint =
+                    create_checkpoint(&self.workspace_root, &[PathBuf::from(path)], "fs.write")?;
                 if let Some(p) = resolved_path.parent() {
                     std::fs::create_dir_all(p)?;
                 }
@@ -275,16 +280,18 @@ impl ToolExecutor {
                 // Change visibility: report a diff so the user always sees the edit.
                 let summary = if !existed || old.is_empty() {
                     format!(
-                        "created {path} ({} lines, {} bytes; verified={})",
+                        "created {path} ({} lines, {} bytes; verified={}; checkpoint={})",
                         content.lines().count(),
                         content.len(),
-                        verification.check
+                        verification.check,
+                        checkpoint.display()
                     )
                 } else {
                     format!(
-                        "edited {path} — {}; verified={}",
+                        "edited {path} — {}; verified={}; checkpoint={}",
                         diff_summary(&old, content),
-                        verification.check
+                        verification.check,
+                        checkpoint.display()
                     )
                 };
                 Ok(ToolDispatch::output(summary))
@@ -305,16 +312,30 @@ impl ToolExecutor {
                     .verify_edit_candidate(&resolved_path, &outcome.after)
                     .await?;
                 ensure_edit_verification(&verification)?;
+                let checkpoint = if mode == "apply" {
+                    Some(create_checkpoint(
+                        &self.workspace_root,
+                        &[PathBuf::from(path)],
+                        "fs.hash_edit",
+                    )?)
+                } else {
+                    None
+                };
                 if mode == "apply" {
                     std::fs::write(&resolved_path, &outcome.after)?;
                 }
                 let diff_artifact =
                     self.write_replace_artifact(path, &outcome.before, &outcome.after)?;
+                let checkpoint_suffix = checkpoint
+                    .as_ref()
+                    .map(|path| format!("; checkpoint={}", path.display()))
+                    .unwrap_or_default();
                 Ok(ToolDispatch::with_artifact(
                     format!(
-                        "hash_edit {mode} {path} line {line} — {}; verified={}",
+                        "hash_edit {mode} {path} line {line} — {}; verified={}{}",
                         diff_summary(&outcome.before, &outcome.after),
-                        verification.check
+                        verification.check,
+                        checkpoint_suffix
                     ),
                     diff_artifact,
                 ))
@@ -347,27 +368,46 @@ impl ToolExecutor {
                 let verification = self.verify_edit_candidate(&resolved_path, &updated).await?;
                 ensure_edit_verification(&verification)?;
                 let diff_artifact = self.write_replace_artifact(path, &original, &updated)?;
+                let checkpoint = if mode == "apply" {
+                    Some(create_checkpoint(
+                        &self.workspace_root,
+                        &[PathBuf::from(path)],
+                        "fs.replace",
+                    )?)
+                } else {
+                    None
+                };
                 if mode == "apply" {
                     std::fs::write(&resolved_path, &updated)?;
                 }
+                let checkpoint_suffix = checkpoint
+                    .as_ref()
+                    .map(|path| format!("; checkpoint={}", path.display()))
+                    .unwrap_or_default();
                 Ok(ToolDispatch::with_artifact(
                     format!(
-                        "replace {mode} {path} — {}; verified={}",
+                        "replace {mode} {path} — {}; verified={}{}",
                         diff_summary(&original, &updated),
-                        verification.check
+                        verification.check,
+                        checkpoint_suffix
                     ),
                     diff_artifact,
                 ))
             }
             "fs.delete" => {
                 let path = req_str(&action.params, "path")?;
-                let p = std::path::Path::new(path);
+                let p = resolve_workspace_path(&self.workspace_root, path);
+                let checkpoint =
+                    create_checkpoint(&self.workspace_root, &[PathBuf::from(path)], "fs.delete")?;
                 if p.is_dir() {
                     std::fs::remove_dir_all(p)?;
                 } else {
                     std::fs::remove_file(p)?;
                 }
-                Ok(ToolDispatch::output(format!("deleted {path}")))
+                Ok(ToolDispatch::output(format!(
+                    "deleted {path}; checkpoint={}",
+                    checkpoint.display()
+                )))
             }
             "shell.restricted" => {
                 let cmd = req_str(&action.params, "command")?;
@@ -376,12 +416,8 @@ impl ToolExecutor {
                 // with no file arg) get immediate EOF instead of blocking
                 // forever — this hung a 14h baseline run on bare `awk '...'`.
                 // Hard 30s timeout so NO command can ever freeze the agent.
-                let child = tokio::process::Command::new("sh")
-                    .arg("-c")
-                    .arg(cmd)
-                    .current_dir(&self.workspace_root)
-                    .stdin(std::process::Stdio::null())
-                    .output();
+                let (mut shell, sandbox) = restricted_shell_command(&self.workspace_root, cmd);
+                let child = shell.output();
                 let out = match tokio::time::timeout(std::time::Duration::from_secs(30), child)
                     .await
                 {
@@ -397,6 +433,7 @@ impl ToolExecutor {
                 let stderr = String::from_utf8_lossy(&out.stderr).to_string();
                 let artifact_path = self.write_command_artifact(
                     cmd,
+                    sandbox.label(),
                     out.status.code(),
                     out.status.success(),
                     &stdout,
@@ -420,7 +457,11 @@ impl ToolExecutor {
                     )
                 };
                 Ok(ToolDispatch::with_artifact(
-                    format!("{preview}\n[full output: {}]", artifact_path.display()),
+                    format!(
+                        "{preview}\n[sandbox: {}]\n[full output: {}]",
+                        sandbox.label(),
+                        artifact_path.display()
+                    ),
                     artifact_path,
                 ))
             }
@@ -442,10 +483,24 @@ impl ToolExecutor {
                 if !check.status.success() {
                     let fuzzy = apply_fuzzy_patch_to_memory(&self.workspace_root, patch)?;
                     for file in &fuzzy {
-                        let verification =
-                            self.verify_edit_candidate(&file.resolved_path, &file.after).await?;
+                        let verification = self
+                            .verify_edit_candidate(&file.resolved_path, &file.after)
+                            .await?;
                         ensure_edit_verification(&verification)?;
                     }
+                    let checkpoint = if mode == "apply" {
+                        let paths: Vec<PathBuf> = fuzzy
+                            .iter()
+                            .map(|file| file.resolved_path.clone())
+                            .collect();
+                        Some(create_checkpoint(
+                            &self.workspace_root,
+                            &paths,
+                            "patch.apply fuzzy",
+                        )?)
+                    } else {
+                        None
+                    };
                     if mode == "apply" {
                         for file in &fuzzy {
                             if let Some(parent) = file.resolved_path.parent() {
@@ -455,16 +510,32 @@ impl ToolExecutor {
                         }
                     }
                     let fuzzy_matches: usize = fuzzy.iter().map(|file| file.fuzzy_matches).sum();
+                    let checkpoint_suffix = checkpoint
+                        .as_ref()
+                        .map(|path| format!("; checkpoint={}", path.display()))
+                        .unwrap_or_default();
                     return Ok(ToolDispatch::with_artifact(
                         format!(
-                            "patch {mode} succeeded via fuzzy fallback for {} file(s), {fuzzy_matches} fuzzy hunk(s); artifact={}\n{}",
+                            "patch {mode} succeeded via fuzzy fallback for {} file(s), {fuzzy_matches} fuzzy hunk(s); artifact={}{}\n{}",
                             fuzzy.len(),
                             artifact_path.display(),
+                            checkpoint_suffix,
                             review,
                         ),
                         artifact_path,
                     ));
                 }
+                let checkpoint = if mode == "apply" {
+                    let paths_for_checkpoint: Vec<PathBuf> =
+                        paths.iter().map(PathBuf::from).collect();
+                    Some(create_checkpoint(
+                        &self.workspace_root,
+                        &paths_for_checkpoint,
+                        "patch.apply",
+                    )?)
+                } else {
+                    None
+                };
                 if mode == "apply" {
                     let apply = tokio::process::Command::new("git")
                         .arg("apply")
@@ -479,11 +550,16 @@ impl ToolExecutor {
                         );
                     }
                 }
+                let checkpoint_suffix = checkpoint
+                    .as_ref()
+                    .map(|path| format!("; checkpoint={}", path.display()))
+                    .unwrap_or_default();
                 Ok(ToolDispatch::with_artifact(
                     format!(
-                        "patch {mode} succeeded for {} path(s); artifact={}\n{}",
+                        "patch {mode} succeeded for {} path(s); artifact={}{}\n{}",
                         paths.len(),
                         artifact_path.display(),
+                        checkpoint_suffix,
                         review,
                     ),
                     artifact_path,
@@ -749,6 +825,25 @@ impl ToolExecutor {
                     String::from_utf8_lossy(&commit.stdout).to_string(),
                 ))
             }
+            "git.checkpoint" => {
+                let paths = req_string_array(&action.params, "paths")?;
+                let reason = action.params["reason"]
+                    .as_str()
+                    .unwrap_or("manual checkpoint");
+                let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+                let manifest = create_checkpoint(&self.workspace_root, &paths, reason)?;
+                Ok(ToolDispatch::with_artifact(
+                    format!("checkpoint created: {}", manifest.display()),
+                    manifest,
+                ))
+            }
+            "git.undo" => {
+                let checkpoint = action.params["checkpoint"].as_str();
+                Ok(ToolDispatch::output(undo_checkpoint(
+                    &self.workspace_root,
+                    checkpoint,
+                )?))
+            }
             "ollama.complete" => {
                 let ollama = self
                     .ollama
@@ -858,6 +953,7 @@ impl ToolExecutor {
     fn write_command_artifact(
         &self,
         command: &str,
+        sandbox: &str,
         exit_code: Option<i32>,
         success: bool,
         stdout: &str,
@@ -870,6 +966,7 @@ impl ToolExecutor {
         let path = dir.join(format!("{}.json", uuid::Uuid::new_v4()));
         let artifact = CommandOutputArtifact {
             command,
+            sandbox,
             exit_code,
             success,
             stdout,
@@ -1089,6 +1186,25 @@ fn req_str<'a>(p: &'a serde_json::Value, key: &str) -> Result<&'a str> {
         .ok_or_else(|| anyhow::anyhow!("missing param '{key}'"))
 }
 
+fn req_string_array(p: &serde_json::Value, key: &str) -> Result<Vec<String>> {
+    let values = p[key]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("missing array param '{key}'"))?;
+    let mut out = Vec::with_capacity(values.len());
+    for value in values {
+        out.push(
+            value
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("param '{key}' must contain only strings"))?
+                .to_string(),
+        );
+    }
+    if out.is_empty() {
+        anyhow::bail!("param '{key}' must contain at least one path");
+    }
+    Ok(out)
+}
+
 fn req_usize(p: &serde_json::Value, key: &str) -> Result<usize> {
     p[key]
         .as_u64()
@@ -1167,6 +1283,8 @@ fn is_known_builtin_tool(tool_name: &str) -> bool {
             | "web.search"
             | "patch.review"
             | "patch.apply"
+            | "git.checkpoint"
+            | "git.undo"
             | "git.diff"
             | "git.status"
             | "git.log"
@@ -1363,6 +1481,8 @@ mod tests {
             "web.fetch",
             "patch.review",
             "patch.apply",
+            "git.checkpoint",
+            "git.undo",
         ] {
             assert!(
                 is_known_builtin_tool(name),
@@ -1496,7 +1616,9 @@ mod tests {
 
         let apply = executor.execute(&fuzzy_patch_action("apply")).await;
         assert!(apply.success, "{:?}", apply.error);
-        assert!(apply.output.contains("patch apply succeeded via fuzzy fallback"));
+        assert!(apply
+            .output
+            .contains("patch apply succeeded via fuzzy fallback"));
         assert_eq!(
             std::fs::read_to_string(root.join("src/lib.rs")).unwrap(),
             "pub fn add(left: i32, right: i32) -> i32 {\n        left + right\n}\n"
@@ -1540,6 +1662,7 @@ mod tests {
             .await;
         assert!(obs.success, "{:?}", obs.error);
         assert!(obs.output.contains("hello professor x"));
+        assert!(obs.output.contains("[sandbox: "));
         assert!(obs.output.contains("[full output:"));
         assert_eq!(obs.artifacts.len(), 1);
 
@@ -1551,6 +1674,9 @@ mod tests {
         let artifact: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&files[0]).unwrap()).unwrap();
         assert_eq!(artifact["command"], "printf 'hello professor x'");
+        assert!(
+            artifact["sandbox"] == "bubblewrap" || artifact["sandbox"] == "fallback-policy-only"
+        );
         assert_eq!(artifact["success"], true);
         assert_eq!(artifact["stdout"], "hello professor x");
 
@@ -1594,6 +1720,39 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("expected exactly one match"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn git_undo_restores_checkpoint_created_by_write() {
+        let root = temp_workspace();
+        let registry = Arc::new(std::sync::RwLock::new(ToolRegistry::new()));
+        let executor = ToolExecutor::new(registry).with_workspace_root(root.clone());
+
+        let write = executor
+            .execute(&write_action("src/lib.rs", "pub fn x() { 7 }\n"))
+            .await;
+        assert!(write.success, "{:?}", write.error);
+        assert!(write.output.contains("checkpoint="));
+        assert_eq!(
+            std::fs::read_to_string(root.join("src/lib.rs")).unwrap(),
+            "pub fn x() { 7 }\n"
+        );
+
+        let undo = executor
+            .execute(&Action {
+                tool_name: "git.undo".to_string(),
+                params: json!({}),
+                risk_score: 64,
+            })
+            .await;
+        assert!(undo.success, "{:?}", undo.error);
+        assert!(undo.output.contains("undid checkpoint"));
+        assert_eq!(
+            std::fs::read_to_string(root.join("src/lib.rs")).unwrap(),
+            "pub fn x() {}\n"
+        );
 
         let _ = std::fs::remove_dir_all(root);
     }

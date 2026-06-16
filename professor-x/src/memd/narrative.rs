@@ -17,7 +17,6 @@
 /// coherence (do the episodes form a continuous story?) is the deeper sense of
 /// ICS. The anticipated arc is a prediction — the gap between anticipated and
 /// actual is FED at the narrative level.
-
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
@@ -164,8 +163,16 @@ pub fn build_narrative_prompt(
          TURNING_POINT: <what changed, or 'none yet' if still unfolding>\n\
          LESSON: <what you learned>\n\
          ANTICIPATED_ARC: <where your story seems to be heading next>",
-        prior = if prior_recap.is_empty() { "This is the first chapter of your story." } else { prior_recap },
-        arc = if prior_anticipated_arc.is_empty() { "(none)" } else { prior_anticipated_arc },
+        prior = if prior_recap.is_empty() {
+            "This is the first chapter of your story."
+        } else {
+            prior_recap
+        },
+        arc = if prior_anticipated_arc.is_empty() {
+            "(none)"
+        } else {
+            prior_anticipated_arc
+        },
         round = round,
         summary = behavior_summary,
     )
@@ -239,8 +246,26 @@ mod tests {
     #[test]
     fn append_and_story_orders_by_round() {
         let store = fresh_store();
-        store.append(&NarrativeEpisode::new(0, "beginnings", "born", "none yet", "I exist", "learn tools")).unwrap();
-        store.append(&NarrativeEpisode::new(10, "first wins", "passed planning", "memory.read first", "retrieve before acting", "deepen")).unwrap();
+        store
+            .append(&NarrativeEpisode::new(
+                0,
+                "beginnings",
+                "born",
+                "none yet",
+                "I exist",
+                "learn tools",
+            ))
+            .unwrap();
+        store
+            .append(&NarrativeEpisode::new(
+                10,
+                "first wins",
+                "passed planning",
+                "memory.read first",
+                "retrieve before acting",
+                "deepen",
+            ))
+            .unwrap();
         let story = store.story().unwrap();
         assert_eq!(story.len(), 2);
         assert_eq!(story[0].chapter, "beginnings");
@@ -268,8 +293,12 @@ mod tests {
     #[test]
     fn story_recap_summarizes_recent_chapters() {
         let store = fresh_store();
-        store.append(&NarrativeEpisode::new(0, "a", "i", "t", "lesson-a", "arc")).unwrap();
-        store.append(&NarrativeEpisode::new(10, "b", "i", "t", "lesson-b", "arc")).unwrap();
+        store
+            .append(&NarrativeEpisode::new(0, "a", "i", "t", "lesson-a", "arc"))
+            .unwrap();
+        store
+            .append(&NarrativeEpisode::new(10, "b", "i", "t", "lesson-b", "arc"))
+            .unwrap();
         let recap = store.story_recap(5).unwrap();
         assert!(recap.contains("lesson-a"));
         assert!(recap.contains("lesson-b"));

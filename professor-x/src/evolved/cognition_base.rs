@@ -1,7 +1,6 @@
 /// Cognition base — accumulated knowledge injected into each evolution cycle.
 /// Mirrors ASI-Evolve CognitionItem dataclass (utils/structures.py).
 /// Quality formula from EvolveR (arXiv:2510.16079): (success+1)/(use+2)
-
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};

@@ -84,7 +84,9 @@ pub fn print_snapshot(memory: Arc<MemoryManager>, events: Arc<EventStore>) -> Re
     );
     println!(
         "    artifacts: {} attempts, {} rounds, {} null-baselines",
-        snapshot.hiro_attempt_artifacts, snapshot.hiro_round_artifacts, snapshot.hiro_null_artifacts
+        snapshot.hiro_attempt_artifacts,
+        snapshot.hiro_round_artifacts,
+        snapshot.hiro_null_artifacts
     );
     println!(
         "  metacognition: {} entries, {} verified, MCA {} over {} sample(s)",
@@ -134,7 +136,8 @@ pub fn print_snapshot(memory: Arc<MemoryManager>, events: Arc<EventStore>) -> Re
     println!("  work loops: {} runs", snapshot.work_loop_count);
     println!(
         "  autonomous queue: {} pending / {} recent",
-        snapshot.pending_autonomy_queue, snapshot.recent_autonomy_queue.len()
+        snapshot.pending_autonomy_queue,
+        snapshot.recent_autonomy_queue.len()
     );
     for item in snapshot.recent_autonomy_queue.iter().take(3) {
         println!("    {}", autonomy_queue_item_summary(item, 110));
@@ -143,10 +146,7 @@ pub fn print_snapshot(memory: Arc<MemoryManager>, events: Arc<EventStore>) -> Re
         }
     }
     if let Some(gate) = &snapshot.latest_work_loop_gate {
-        println!(
-            "    current gate: {}",
-            work_loop_gate_summary(gate, 110)
-        );
+        println!("    current gate: {}", work_loop_gate_summary(gate, 110));
     }
     if let Some(run) = &snapshot.latest_work_loop {
         println!(
@@ -177,7 +177,11 @@ pub fn print_snapshot(memory: Arc<MemoryManager>, events: Arc<EventStore>) -> Re
             );
         }
         for gate in snapshot.recent_work_loop_gates.iter().take(5) {
-            println!("      gate {}: {}", gate.cycle, work_loop_gate_summary(gate, 96));
+            println!(
+                "      gate {}: {}",
+                gate.cycle,
+                work_loop_gate_summary(gate, 96)
+            );
         }
     }
     println!("  coding sessions: {} runs", snapshot.coding_session_count);
@@ -700,10 +704,7 @@ fn hiro_artifact_root(repo: &Path) -> PathBuf {
     }
 }
 
-fn latest_mca(
-    metacog: &MetacognitiveStore,
-    hiro_round_count: u32,
-) -> Result<(Option<f32>, usize)> {
+fn latest_mca(metacog: &MetacognitiveStore, hiro_round_count: u32) -> Result<(Option<f32>, usize)> {
     if hiro_round_count == 0 {
         return Ok((None, 0));
     }
@@ -939,7 +940,7 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &ObserverApp) {
         Line::from(vec![
             Span::styled("HIRO        ", label()),
             Span::raw(format!(
-            "{} rounds / pass@3 {pass}",
+                "{} rounds / pass@3 {pass}",
                 app.snapshot.hiro_rounds
             )),
         ]),
@@ -1090,7 +1091,9 @@ fn draw_science(frame: &mut Frame, area: Rect, app: &ObserverApp) {
         metacognition_detail(app),
         ipe_detail(app),
         latest_autonomous_run_detail(&app.snapshot.latest_autonomous_run),
-        Line::from("Run --lab --run-now for daemon plus observer; --observe follows an existing run."),
+        Line::from(
+            "Run --lab --run-now for daemon plus observer; --observe follows an existing run.",
+        ),
     ];
     note_lines.extend(recent_metacog_detail(&app.snapshot.recent_metacog));
     note_lines.extend(latest_run_detail(&app.snapshot.latest_run));
@@ -1327,7 +1330,10 @@ fn latest_work_loop_gate_line(gate: &Option<WorkLoopGateRecord>) -> Line<'static
     match gate {
         Some(gate) => Line::from(vec![
             Span::styled("gate    ", label()),
-            Span::styled(format!("{:<8}", gate.status), gate_status_style(&gate.status)),
+            Span::styled(
+                format!("{:<8}", gate.status),
+                gate_status_style(&gate.status),
+            ),
             Span::raw(work_loop_gate_summary(gate, 62)),
         ]),
         None => Line::from(vec![
@@ -1353,10 +1359,7 @@ fn latest_autonomous_run_line(event: &Option<AgentEvent>) -> Line<'static> {
     }
 }
 
-fn latest_autonomy_queue_line(
-    pending_count: i64,
-    recent: &[AutonomyQueueItem],
-) -> Line<'static> {
+fn latest_autonomy_queue_line(pending_count: i64, recent: &[AutonomyQueueItem]) -> Line<'static> {
     match recent.first() {
         Some(item) => Line::from(vec![
             Span::styled("queue   ", label()),
@@ -1401,7 +1404,10 @@ fn latest_coding_session_line(session: &Option<CodingSessionRecord>) -> Line<'st
     match session {
         Some(session) => Line::from(vec![
             Span::styled("code    ", label()),
-            Span::styled(format!("{:<8}", session.status), status_style(&session.status)),
+            Span::styled(
+                format!("{:<8}", session.status),
+                status_style(&session.status),
+            ),
             Span::raw(format!(
                 "{}  {}  {}p/{}o{}  {}",
                 &session.id[..8.min(session.id.len())],
@@ -1435,7 +1441,10 @@ fn latest_transcript_line(transcript: &Option<TranscriptSummary>) -> Line<'stati
     match transcript {
         Some(transcript) => Line::from(vec![
             Span::styled("trace   ", label()),
-            Span::styled(format!("{:<10}", transcript.status), status_style(&transcript.status)),
+            Span::styled(
+                format!("{:<10}", transcript.status),
+                status_style(&transcript.status),
+            ),
             Span::raw(format!(
                 "{}s {}",
                 transcript.step_count,
@@ -1532,7 +1541,10 @@ fn latest_work_loop_gate_detail(
     for gate in recent.iter().take(4) {
         lines.push(Line::from(vec![
             Span::styled(format!("gate {:<2} ", gate.cycle), label()),
-            Span::styled(format!("{:<8}", gate.status), gate_status_style(&gate.status)),
+            Span::styled(
+                format!("{:<8}", gate.status),
+                gate_status_style(&gate.status),
+            ),
             Span::raw(format!(
                 "{} / {}",
                 gate.kind,
@@ -1630,10 +1642,7 @@ fn metacognition_detail(app: &ObserverApp) -> Line<'static> {
         .unwrap_or_else(|| "waiting".to_string());
     Line::from(format!(
         "Metacognition: {} entries / {} verified / MCA {} over {} sample(s)",
-        app.snapshot.metacog_total,
-        app.snapshot.metacog_verified,
-        mca,
-        app.snapshot.mca_samples,
+        app.snapshot.metacog_total, app.snapshot.metacog_verified, mca, app.snapshot.mca_samples,
     ))
 }
 
@@ -1689,13 +1698,16 @@ fn recent_metacog_detail(entries: &[MetacognitiveEntry]) -> Vec<Line<'static>> {
             };
             Line::from(vec![
                 Span::styled(format!("mca r{:<3} ", entry.round), label()),
-                Span::styled(status, status_style(if entry.attribution_correct {
-                    "Complete"
-                } else if entry.actual_improvement != 0.0 {
-                    "Failed"
-                } else {
-                    "Running"
-                })),
+                Span::styled(
+                    status,
+                    status_style(if entry.attribution_correct {
+                        "Complete"
+                    } else if entry.actual_improvement != 0.0 {
+                        "Failed"
+                    } else {
+                        "Running"
+                    }),
+                ),
                 Span::raw(format!(
                     " L{} lever{} conf {:.2} delta {:.3} {}",
                     entry.predicted_layer,
@@ -1745,6 +1757,12 @@ fn latest_run_detail(run: &Option<TaskRun>) -> Vec<Line<'static>> {
                 lines.push(Line::from(vec![
                     Span::styled("failure ", label()),
                     Span::raw(truncate(failure, 96)),
+                ]));
+            }
+            if let Some(class) = run.failure_class {
+                lines.push(Line::from(vec![
+                    Span::styled("class   ", label()),
+                    Span::raw(class.as_str().to_string()),
                 ]));
             }
             if let Some(output) = &run.last_output_preview {
@@ -1799,7 +1817,10 @@ fn latest_work_loop_detail(run: &Option<WorkLoopRunRecord>) -> Vec<Line<'static>
             run.completed_cycles,
             run.failed_cycles,
         )),
-        Line::from(format!("Operator report: {}", truncate(&run.report_path, 90))),
+        Line::from(format!(
+            "Operator report: {}",
+            truncate(&run.report_path, 90)
+        )),
     ];
     for planned in run.planned_jobs.iter().take(3) {
         lines.push(Line::from(vec![
@@ -1858,7 +1879,8 @@ fn event_style(event_type: &str) -> Style {
         Color::Yellow
     } else if event_type.starts_with("evolution.") {
         Color::Magenta
-    } else if event_type.starts_with("autonomous_run.") || event_type.starts_with("autonomy.queue.") {
+    } else if event_type.starts_with("autonomous_run.") || event_type.starts_with("autonomy.queue.")
+    {
         Color::LightCyan
     } else if event_type.starts_with("hiro.") {
         Color::Blue
@@ -1904,13 +1926,37 @@ fn format_event_line(event: &AgentEvent) -> String {
 fn event_evidence_links(event: &AgentEvent) -> Vec<(String, String)> {
     let mut links = Vec::new();
     push_event_payload_link(&mut links, "report", event.payload["report_path"].as_str());
-    push_event_payload_link(&mut links, "result", event.payload["result_report_path"].as_str());
-    push_event_payload_link(&mut links, "journal", event.payload["result_journal_path"].as_str());
-    push_event_payload_link(&mut links, "session", event.payload["session_report_path"].as_str());
-    push_event_payload_link(&mut links, "smoke", event.payload["smoke_report_path"].as_str());
-    push_event_payload_link(&mut links, "transcript", event.payload["transcript_path"].as_str());
+    push_event_payload_link(
+        &mut links,
+        "result",
+        event.payload["result_report_path"].as_str(),
+    );
+    push_event_payload_link(
+        &mut links,
+        "journal",
+        event.payload["result_journal_path"].as_str(),
+    );
+    push_event_payload_link(
+        &mut links,
+        "session",
+        event.payload["session_report_path"].as_str(),
+    );
+    push_event_payload_link(
+        &mut links,
+        "smoke",
+        event.payload["smoke_report_path"].as_str(),
+    );
+    push_event_payload_link(
+        &mut links,
+        "transcript",
+        event.payload["transcript_path"].as_str(),
+    );
     push_event_payload_link(&mut links, "patch", event.payload["patch_path"].as_str());
-    push_event_payload_array(&mut links, "artifact", event.payload["artifacts"].as_array());
+    push_event_payload_array(
+        &mut links,
+        "artifact",
+        event.payload["artifacts"].as_array(),
+    );
     push_event_payload_array(
         &mut links,
         "verify",
@@ -1996,9 +2042,15 @@ mod tests {
         let item = queue_item("passed");
         let commands = autonomy_queue_commands(&item);
 
-        assert!(commands.iter().any(|cmd| cmd.contains("--prof-x-queue-review 12345678")));
-        assert!(commands.iter().any(|cmd| cmd.contains("--prof-x-queue-replay 12345678")));
-        assert!(commands.iter().any(|cmd| cmd.contains("--prof-x-queue-publish 12345678")));
+        assert!(commands
+            .iter()
+            .any(|cmd| cmd.contains("--prof-x-queue-review 12345678")));
+        assert!(commands
+            .iter()
+            .any(|cmd| cmd.contains("--prof-x-queue-replay 12345678")));
+        assert!(commands
+            .iter()
+            .any(|cmd| cmd.contains("--prof-x-queue-publish 12345678")));
     }
 
     #[test]

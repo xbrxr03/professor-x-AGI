@@ -1,7 +1,6 @@
 /// Task DAG node. Execution trace follows ReAct format (arXiv:2210.03629).
 /// Reflexion buffer from arXiv:2303.11366 (max 3 reflections, oldest evicted).
 /// Max attempts default 4 from Voyager's 4-round timeout pattern (arXiv:2305.16291).
-
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -110,11 +109,14 @@ impl TaskNode {
         if self.reflections.is_empty() {
             return None;
         }
-        Some(self.reflections.iter()
-            .enumerate()
-            .map(|(i, r)| format!("Reflection {}: {r}", i + 1))
-            .collect::<Vec<_>>()
-            .join("\n"))
+        Some(
+            self.reflections
+                .iter()
+                .enumerate()
+                .map(|(i, r)| format!("Reflection {}: {r}", i + 1))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
     }
 
     /// Format execution steps as ReAct trace for context injection.
@@ -129,14 +131,19 @@ impl TaskNode {
             .map(|s| {
                 format!(
                     "Thought {}: {}\nAction {}: {}({})\nObservation {}: {}",
-                    s.index, s.thought,
-                    s.index, s.action.tool_name,
+                    s.index,
+                    s.thought,
+                    s.index,
+                    s.action.tool_name,
                     serde_json::to_string(&s.action.params).unwrap_or_default(),
                     s.index,
                     if s.observation.success {
                         s.observation.output.chars().take(800).collect::<String>()
                     } else {
-                        format!("ERROR: {}", s.observation.error.as_deref().unwrap_or("unknown"))
+                        format!(
+                            "ERROR: {}",
+                            s.observation.error.as_deref().unwrap_or("unknown")
+                        )
                     }
                 )
             })
@@ -145,19 +152,28 @@ impl TaskNode {
     }
 
     pub fn steps_text(&self) -> String {
-        self.steps.iter().map(|s| {
-            format!(
-                "Thought {}: {}\nAction {}: {}({})\nObservation {}: {}",
-                s.index, s.thought,
-                s.index, s.action.tool_name,
-                serde_json::to_string(&s.action.params).unwrap_or_default(),
-                s.index,
-                if s.observation.success {
-                    s.observation.output.chars().take(500).collect::<String>()
-                } else {
-                    format!("ERROR: {}", s.observation.error.as_deref().unwrap_or("unknown"))
-                }
-            )
-        }).collect::<Vec<_>>().join("\n")
+        self.steps
+            .iter()
+            .map(|s| {
+                format!(
+                    "Thought {}: {}\nAction {}: {}({})\nObservation {}: {}",
+                    s.index,
+                    s.thought,
+                    s.index,
+                    s.action.tool_name,
+                    serde_json::to_string(&s.action.params).unwrap_or_default(),
+                    s.index,
+                    if s.observation.success {
+                        s.observation.output.chars().take(500).collect::<String>()
+                    } else {
+                        format!(
+                            "ERROR: {}",
+                            s.observation.error.as_deref().unwrap_or("unknown")
+                        )
+                    }
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }

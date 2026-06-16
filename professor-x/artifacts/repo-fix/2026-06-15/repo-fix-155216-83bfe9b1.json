@@ -1,0 +1,26 @@
+{
+  "run_id": "83bfe9b1-ab60-415e-a4c0-8197e9ae7ab4",
+  "recorded_at": "2026-06-15T15:52:16.010827722+00:00",
+  "harness_commit": "bc57650",
+  "manifest_path": "/tmp/px-repofix-one.J5Rgdc.json",
+  "model": "qwen3:8b-q4_K_M",
+  "passed": 1,
+  "ran": 1,
+  "pass_at_1": 1.0,
+  "tasks": [
+    {
+      "id": "fix_001",
+      "description": "In calc.py, the add(a, b) function returns a - b instead of a + b. Fix it so the tests pass.",
+      "setup": "scripts/benchmarks/repo_fix/fix_001",
+      "verify_cmd": "python3 check.py",
+      "pre_exit": 1,
+      "post_exit": 0,
+      "expect_exit": 0,
+      "passed": true,
+      "made_edit": true,
+      "workdir": null,
+      "transcript_path": "artifacts/transcripts/2026-06-15/d2661b6a-ca7d-4550-ad99-1bbc1eb93b57.json",
+      "diff_summary": "diff -ru '--exclude=__pycache__' '--exclude=*.pyc' '--exclude=.git' '--exclude=artifacts' '--exclude=target' scripts/benchmarks/repo_fix/fix_001/calc.py /tmp/px-repofix-fix_001-2045552-f5f5b59f785e4291bce14124428e32ff/calc.py\n--- scripts/benchmarks/repo_fix/fix_001/calc.py\t2026-06-15 09:50:19.573541250 -0400\n+++ /tmp/px-repofix-fix_001-2045552-f5f5b59f785e4291bce14124428e32ff/calc.py\t2026-06-15 11:52:12.575991632 -0400\n@@ -1,2 +1,2 @@\n def add(a, b):\n-    return a - b\n+    return a + b"
+    }
+  ]
+}

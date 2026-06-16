@@ -1,0 +1,31 @@
+{
+  "id": "283ab5d3-b02a-41d6-8062-70b5363d9665",
+  "generated_at": "2026-06-16T02:51:04.937699729+00:00",
+  "goal": "repo patch coding session: verify, apply, and commit /tmp/px-operator-goal-20260616-023901-record-coding-session-evidence.diff",
+  "requested_goal": "repo patch coding session: verify, apply, and commit /tmp/px-operator-goal-20260616-023901-record-coding-session-evidence.diff",
+  "exercise": "repo_patch_apply_commit",
+  "status": "failed",
+  "workspace": "repo-root verified apply commit",
+  "smoke_id": null,
+  "smoke_report_path": null,
+  "session_report_path": "artifacts/coding-sessions/2026-06-16/session-032238-283ab5d3.json",
+  "transcript_path": null,
+  "checks": [
+    "stale-session repair after 3 later daemon starts"
+  ],
+  "plan_steps": [
+    "Policy-gate the patch through patch.apply before sandbox work",
+    "Verify the unified diff in an isolated worktree",
+    "Apply the verified diff to main only if sandbox checks pass",
+    "Run main cargo check and create git commit evidence",
+    "Record a coding-session report that points at the apply artifact"
+  ],
+  "step_outcomes": [
+    "stale session reconciled after 31 minute(s) idle"
+  ],
+  "artifacts": [
+    "/tmp/px-operator-goal-20260616-023901-record-coding-session-evidence.diff",
+    "artifacts/coding-sessions/2026-06-16/session-032238-283ab5d3.evidence.md"
+  ],
+  "failure_reason": "stale coding session recovered: 3 later Professor X process starts were recorded after last session activity at 2026-06-16T02:51:04.960101426+00:00 and no terminal report was written for 31 minute(s)"
+}

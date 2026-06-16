@@ -67,7 +67,10 @@ Assistant-grade interactive experience (the REPL today is operator-grade):
 - ☐ **`/memory`** — view/edit what the agent remembers (CLAUDE.md-style).
 - ☐ **Plan mode + todo display** (Claude Code) — show the agent's plan/checklist live.
 - ☐ **Session resume / history** — `/resume`, up-arrow command history.
-- ☐ **`/undo`** — revert the last applied change (git-backed).
+- ✓ **`/undo`** — revert the last applied change using git-backed path checkpoints.
+- ✓ **Shell OS sandbox posture** — `shell.restricted` now prefers Bubblewrap isolation
+  when the host permits user namespaces and records `sandbox=bubblewrap` or
+  `sandbox=fallback-policy-only` in command observations/artifacts.
 - ☐ **`/add` / `/drop` files** (Aider) — manage the working set.
 - ☐ **Slash-command autocomplete + a clean banner/help split** (assistant vs operator).
 - ✓ **Full ratatui TUI** (`profx --tui`) — interactive: type tasks, watch the agent
