@@ -14,6 +14,7 @@ use anyhow::Result;
 use chrono::Utc;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::{info, warn};
 
 use crate::evolved::analyzer::Analyzer;
@@ -31,6 +32,7 @@ use crate::memd::MemoryManager;
 use crate::ollama::{ChatMessage, ModelOptions, OllamaClient};
 
 const REPO_FIX_GATE_TASK_LIMIT: usize = 4;
+const DEFAULT_REPO_FIX_GATE_TIMEOUT_SECS: u64 = 600;
 const EMPIRICAL_SCORE_TOLERANCE: f32 = 0.001;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -849,6 +851,22 @@ fn parse_repo_fix_pass_at_1(output: &str) -> Option<f32> {
     })
 }
 
+fn repo_fix_gate_timeout_from_env(value: Option<&str>) -> Duration {
+    value
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .map(Duration::from_secs)
+        .unwrap_or_else(|| Duration::from_secs(DEFAULT_REPO_FIX_GATE_TIMEOUT_SECS))
+}
+
+fn repo_fix_gate_timeout() -> Duration {
+    repo_fix_gate_timeout_from_env(
+        std::env::var("PROFESSOR_X_REPO_FIX_GATE_TIMEOUT_SECS")
+            .ok()
+            .as_deref(),
+    )
+}
+
 async fn run_repo_fix_gate_binary(
     binary: &Path,
     current_dir: &Path,
@@ -864,8 +882,9 @@ async fn run_repo_fix_gate_binary(
     std::fs::create_dir_all(&events_dir)?;
     std::fs::create_dir_all(&transcripts_dir)?;
     std::fs::create_dir_all(&artifacts_dir)?;
-
-    let output = tokio::process::Command::new(binary)
+    let timeout = repo_fix_gate_timeout();
+    let mut command = tokio::process::Command::new(binary);
+    command
         .args(["--repo-fix-bench", "--model", model])
         .current_dir(current_dir)
         .env("PROFESSOR_X_DATA_DIR", &data_dir)
@@ -873,8 +892,15 @@ async fn run_repo_fix_gate_binary(
         .env("PROFESSOR_X_TRANSCRIPT_DIR", &transcripts_dir)
         .env("PROFESSOR_X_ARTIFACT_REPORT_DIR", &artifacts_dir)
         .env("REPO_FIX_TASKS", manifest_path)
-        .output()
-        .await?;
+        .kill_on_drop(true);
+
+    let output = match tokio::time::timeout(timeout, command.output()).await {
+        Ok(output) => output?,
+        Err(_) => {
+            let _ = std::fs::remove_dir_all(&temp_root);
+            anyhow::bail!("repo-fix bench timed out after {}s", timeout.as_secs());
+        }
+    };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -2455,6 +2481,30 @@ mod tests {
         let output = "repo-fix fix_001 pre=1 post=0 -> PASS\n\n=== REPO-FIX BENCH ===\npass@1 = 0.750  (3/4 tasks)\n";
 
         assert_eq!(parse_repo_fix_pass_at_1(output), Some(0.75));
+    }
+
+    #[test]
+    fn repo_fix_gate_timeout_defaults_when_env_missing_or_invalid() {
+        assert_eq!(
+            repo_fix_gate_timeout_from_env(None),
+            Duration::from_secs(DEFAULT_REPO_FIX_GATE_TIMEOUT_SECS)
+        );
+        assert_eq!(
+            repo_fix_gate_timeout_from_env(Some("0")),
+            Duration::from_secs(DEFAULT_REPO_FIX_GATE_TIMEOUT_SECS)
+        );
+        assert_eq!(
+            repo_fix_gate_timeout_from_env(Some("not-a-number")),
+            Duration::from_secs(DEFAULT_REPO_FIX_GATE_TIMEOUT_SECS)
+        );
+    }
+
+    #[test]
+    fn repo_fix_gate_timeout_respects_positive_override() {
+        assert_eq!(
+            repo_fix_gate_timeout_from_env(Some("42")),
+            Duration::from_secs(42)
+        );
     }
 
     #[test]
