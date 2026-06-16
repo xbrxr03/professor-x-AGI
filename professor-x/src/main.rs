@@ -836,7 +836,7 @@ where
                     .get(i + 1)
                     .filter(|next| !next.starts_with("--"))
                     .and_then(|next| next.parse::<u32>().ok());
-                cli.operator_run_commit_cycles = Some(cycles.unwrap_or(5));
+                cli.operator_run_commit_cycles = Some(cycles.unwrap_or(6));
                 i += if cycles.is_some() { 2 } else { 1 };
             }
             "--operator-run-publish" | "--operator-run-commit-publish" => {
@@ -844,7 +844,7 @@ where
                     .get(i + 1)
                     .filter(|next| !next.starts_with("--"))
                     .and_then(|next| next.parse::<u32>().ok());
-                cli.operator_run_commit_cycles = Some(cycles.unwrap_or(5));
+                cli.operator_run_commit_cycles = Some(cycles.unwrap_or(6));
                 cli.publish_after_run = true;
                 i += if cycles.is_some() { 2 } else { 1 };
             }
@@ -853,7 +853,7 @@ where
                     .get(i + 1)
                     .filter(|next| !next.starts_with("--"))
                     .and_then(|next| next.parse::<u32>().ok());
-                cli.operator_run_live_cycles = Some(cycles.unwrap_or(5));
+                cli.operator_run_live_cycles = Some(cycles.unwrap_or(6));
                 i += if cycles.is_some() { 2 } else { 1 };
             }
             "--operator-run-publish-live"
@@ -863,7 +863,7 @@ where
                     .get(i + 1)
                     .filter(|next| !next.starts_with("--"))
                     .and_then(|next| next.parse::<u32>().ok());
-                cli.operator_run_live_cycles = Some(cycles.unwrap_or(5));
+                cli.operator_run_live_cycles = Some(cycles.unwrap_or(6));
                 cli.publish_after_run = true;
                 i += if cycles.is_some() { 2 } else { 1 };
             }
@@ -884,7 +884,7 @@ where
                     .get(i + 1)
                     .filter(|next| !next.starts_with("--"))
                     .and_then(|next| next.parse::<u32>().ok());
-                cli.autonomous_run_commit_cycles = Some(cycles.unwrap_or(5));
+                cli.autonomous_run_commit_cycles = Some(cycles.unwrap_or(6));
                 i += if cycles.is_some() { 2 } else { 1 };
             }
             "--autonomous-run-publish"
@@ -895,7 +895,7 @@ where
                     .get(i + 1)
                     .filter(|next| !next.starts_with("--"))
                     .and_then(|next| next.parse::<u32>().ok());
-                cli.autonomous_run_commit_cycles = Some(cycles.unwrap_or(5));
+                cli.autonomous_run_commit_cycles = Some(cycles.unwrap_or(6));
                 cli.publish_after_run = true;
                 i += if cycles.is_some() { 2 } else { 1 };
             }
@@ -2667,7 +2667,13 @@ async fn run_patch_apply_commit_live(events: Arc<EventStore>, patch_path: PathBu
     }
 }
 
-fn write_autonomous_patch_apply_smoke_patch() -> Result<PathBuf> {
+fn write_patch_apply_commit_patch(operator_goal: Option<&str>) -> Result<PathBuf> {
+    if let Some(goal) = operator_goal
+        .map(normalize_operator_goal)
+        .filter(|goal| !goal.is_empty())
+    {
+        return Ok(write_operator_skill_patch(&goal)?.patch_path);
+    }
     let skill_name = format!(
         "px-autonomous-patch-{}",
         chrono::Utc::now().format("%Y%m%d-%H%M%S")
@@ -3979,18 +3985,31 @@ fn plan_next_autonomy_queue_item(recent_runs: &[WorkLoopRunRecord]) -> AutonomyQ
         };
     }
 
-    if !operator_runs.iter().any(|run| {
+    let has_patch_apply_commit = operator_runs.iter().any(|run| {
         run.smoke_records
             .iter()
             .any(|record| record.kind == "patch_apply_commit" && record.passed)
-    }) {
+    });
+    let has_operator_commit = operator_runs.iter().any(|run| {
+        run.smoke_records
+            .iter()
+            .any(|record| record.kind == "operator_commit" && record.passed)
+    });
+    if !has_patch_apply_commit || !has_operator_commit {
+        let reason = if !has_patch_apply_commit {
+            "core proposal dry-run evidence exists but no passed patch_apply_commit gate is recorded"
+                .to_string()
+        } else {
+            "verified patch apply evidence exists but no passed operator_commit gate is recorded"
+                .to_string()
+        };
         return AutonomyQueuePlan {
-            goal: "advance to commit-capable autonomy: run verified patch apply and commit gate after core safety coverage".to_string(),
+            goal: "advance to commit-capable autonomy: run verified patch apply and final operator commit gates after core safety coverage".to_string(),
             kind: "operator_run".to_string(),
             profile: WorkLoopProfile::Commit,
-            cycles: 5,
+            cycles: 6,
             priority: 60,
-            reason: "core proposal dry-run evidence exists but no passed patch_apply_commit gate is recorded".to_string(),
+            reason,
         };
     }
 
@@ -4183,7 +4202,7 @@ fn enqueue_operator_autonomy_goal(
     let cycles = match profile {
         WorkLoopProfile::Basic => 1,
         WorkLoopProfile::Core => 4,
-        WorkLoopProfile::Commit => 5,
+        WorkLoopProfile::Commit => 6,
     };
     let priority = match profile {
         WorkLoopProfile::Basic => 45,
@@ -4959,13 +4978,10 @@ async fn run_work_loop_job(
             })
         }
         WorkLoopJob::PatchApplyCommit => {
-            let patch_path = write_autonomous_patch_apply_smoke_patch()?;
-            let (report, path) = execute_patch_apply_commit(
-                Arc::clone(&events),
-                patch_path,
-                context.and_then(|ctx| ctx.operator_goal.clone()),
-            )
-            .await?;
+            let operator_goal = context.and_then(|ctx| ctx.operator_goal.clone());
+            let patch_path = write_patch_apply_commit_patch(operator_goal.as_deref())?;
+            let (report, path) =
+                execute_patch_apply_commit(Arc::clone(&events), patch_path, operator_goal).await?;
             Ok(WorkLoopSmokeRecord {
                 cycle: 0,
                 kind: job.kind().to_string(),
@@ -9377,7 +9393,7 @@ async fn run_interactive_tasks(
             continue;
         }
         if let Some(rest) = input.strip_prefix("/run-commit") {
-            let cycles = rest.trim().parse::<u32>().unwrap_or(5);
+            let cycles = rest.trim().parse::<u32>().unwrap_or(6);
             record_console_command(&events, "run-commit", Some(cycles.to_string()))?;
             run_autonomous_operator_run(
                 Arc::clone(&registry),
@@ -9792,7 +9808,7 @@ fn format_operator_help() -> String {
         "Professor X operator commands",
         "",
         "Watch him work",
-        "  cargo run -- --prof-x-live 5",
+        "  cargo run -- --prof-x-live 6",
         "  cargo run -- --prof-x-enqueue \"tighten the next harness gap\"",
         "  cargo run -- --prof-x-enqueue-commit \"capture a verified skill improvement\"",
         "  cargo run -- --prof-x-plan",
@@ -10950,7 +10966,7 @@ fn format_prof_x_brief(
         }
         None => {
             lines.push("  no coding session recorded yet".to_string());
-            lines.push("  command /run-commit 5 after safety gates are green".to_string());
+            lines.push("  command /run-commit 6 after safety gates are green".to_string());
         }
     }
 
@@ -13635,7 +13651,7 @@ mod tests {
         let help = format_operator_help();
 
         assert!(help.contains("Professor X operator commands"));
-        assert!(help.contains("--prof-x-live 5"));
+        assert!(help.contains("--prof-x-live 6"));
         assert!(help.contains("--prof-x-enqueue"));
         assert!(help.contains("--prof-x-enqueue-commit"));
         assert!(help.contains("--prof-x-plan"));
@@ -14178,6 +14194,23 @@ mod tests {
     }
 
     #[test]
+    fn patch_apply_commit_patch_uses_operator_goal_when_present() {
+        let patch_path =
+            write_patch_apply_commit_patch(Some(" preserve operator goal provenance ")).unwrap();
+        let file_name = patch_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let diff = std::fs::read_to_string(&patch_path).unwrap();
+
+        assert!(file_name.starts_with(OPERATOR_SKILL_PREFIX));
+        assert!(diff.contains("Operator goal: preserve operator goal provenance"));
+
+        let _ = std::fs::remove_file(patch_path);
+    }
+
+    #[test]
     fn conductor_skills_include_generated_operator_goals() {
         let skills_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("skills")
@@ -14209,6 +14242,18 @@ mod tests {
         assert!(plan[0].reason.contains("latest operator run failed"));
         assert_eq!(plan[1].kind, "coding_smoke");
         assert_eq!(plan.len(), 3);
+    }
+
+    #[test]
+    fn commit_cli_defaults_match_full_profile_gate_count() {
+        let cli = parse_args_from(["professor-x", "--operator-run-commit"]);
+        assert_eq!(cli.operator_run_commit_cycles, Some(6));
+
+        let cli = parse_args_from(["professor-x", "--prof-x-live"]);
+        assert_eq!(cli.operator_run_live_cycles, Some(6));
+
+        let cli = parse_args_from(["professor-x", "--prof-x-run-commit"]);
+        assert_eq!(cli.autonomous_run_commit_cycles, Some(6));
     }
 
     #[test]
@@ -14274,7 +14319,7 @@ mod tests {
     #[test]
     fn queued_commit_profile_goal_targets_verified_patch_apply_gate() {
         let mut jobs =
-            plan_work_loop_jobs(WorkLoopRunKind::Operator, WorkLoopProfile::Commit, 5, &[]);
+            plan_work_loop_jobs(WorkLoopRunKind::Operator, WorkLoopProfile::Commit, 6, &[]);
         let context = WorkLoopRunContext {
             queue_id: Some("queue-12345678".to_string()),
             operator_goal: Some("apply and commit a verified patch with git evidence".to_string()),
@@ -14433,9 +14478,31 @@ mod tests {
         let plan = plan_next_autonomy_queue_item(&recent);
 
         assert_eq!(plan.profile, WorkLoopProfile::Commit);
-        assert_eq!(plan.cycles, 5);
+        assert_eq!(plan.cycles, 6);
         assert_eq!(plan.priority, 60);
         assert!(plan.reason.contains("patch_apply_commit"));
+    }
+
+    #[test]
+    fn autonomy_planner_requires_operator_commit_after_patch_apply_gate() {
+        let recent = vec![work_loop_run(
+            "operator",
+            0,
+            vec![
+                smoke("coding_smoke", true),
+                smoke("evolution_smoke", true),
+                smoke("hiro_smoke", true),
+                smoke("proposal_dry_run", true),
+                smoke("patch_apply_commit", true),
+            ],
+        )];
+
+        let plan = plan_next_autonomy_queue_item(&recent);
+
+        assert_eq!(plan.profile, WorkLoopProfile::Commit);
+        assert_eq!(plan.cycles, 6);
+        assert_eq!(plan.priority, 60);
+        assert!(plan.reason.contains("operator_commit"));
     }
 
     #[test]
