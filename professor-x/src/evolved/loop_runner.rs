@@ -30,11 +30,26 @@ use crate::memd::self_authored_tests::SelfAuthoredTest;
 use crate::memd::MemoryManager;
 use crate::ollama::{ChatMessage, ModelOptions, OllamaClient};
 
+const REPO_FIX_GATE_TASK_LIMIT: usize = 4;
+const EMPIRICAL_SCORE_TOLERANCE: f32 = 0.001;
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EmpiricalVerificationEvidence {
+    pub benchmark: String,
+    pub task_count: usize,
+    pub baseline_score: f32,
+    pub candidate_score: f32,
+    pub score_delta: f32,
+    pub passed: bool,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct VerificationOutcome {
     pub accepted: bool,
     pub reason: String,
     pub checks: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<EmpiricalVerificationEvidence>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -174,6 +189,22 @@ fn expected_component_summary(layer: u8) -> &'static str {
     }
 }
 
+fn empirical_repo_fix_evidence(
+    task_count: usize,
+    baseline_score: f32,
+    candidate_score: f32,
+) -> EmpiricalVerificationEvidence {
+    let score_delta = candidate_score - baseline_score;
+    EmpiricalVerificationEvidence {
+        benchmark: "repo_fix_subset".to_string(),
+        task_count,
+        baseline_score,
+        candidate_score,
+        score_delta,
+        passed: score_delta >= -EMPIRICAL_SCORE_TOLERANCE,
+    }
+}
+
 pub async fn verify_node_in_sandbox(
     repo_root: &Path,
     node: &EvolutionNode,
@@ -188,6 +219,7 @@ pub async fn verify_node_in_sandbox(
                     reward_scan.reason, reward_scan.confidence
                 ),
                 checks: vec!["reward_hacking_scan".to_string()],
+                evidence: None,
             },
             diff: String::new(),
         });
@@ -230,6 +262,7 @@ pub async fn verify_diff_in_sandbox(repo_root: &Path, diff: &str) -> Result<Sand
                     reward_scan.reason, reward_scan.confidence
                 ),
                 checks: vec!["reward_hacking_scan".to_string()],
+                evidence: None,
             },
             diff: String::new(),
         });
@@ -279,6 +312,7 @@ async fn verify_node_inside_worktree(
                     node.target_component
                 ),
                 checks,
+                evidence: None,
             },
             diff: String::new(),
         });
@@ -291,6 +325,7 @@ async fn verify_node_inside_worktree(
                 accepted: false,
                 reason: "proposal has no known changed paths".to_string(),
                 checks,
+                evidence: None,
             },
             diff: String::new(),
         });
@@ -304,6 +339,7 @@ async fn verify_node_inside_worktree(
                 accepted: false,
                 reason: "verification rejected proposal: no material file diff".to_string(),
                 checks,
+                evidence: None,
             },
             diff: String::new(),
         });
@@ -317,6 +353,7 @@ async fn verify_node_inside_worktree(
                 accepted: false,
                 reason: compile.reason,
                 checks,
+                evidence: None,
             },
             diff: String::new(),
         });
@@ -330,6 +367,7 @@ async fn verify_node_inside_worktree(
                 accepted: false,
                 reason: regressions.reason,
                 checks,
+                evidence: None,
             },
             diff: String::new(),
         });
@@ -341,6 +379,7 @@ async fn verify_node_inside_worktree(
             accepted: true,
             reason: "sandbox verification passed".to_string(),
             checks,
+            evidence: None,
         },
         diff,
     })
@@ -357,6 +396,7 @@ async fn verify_diff_inside_worktree(worktree: &Path, diff: &str) -> Result<Sand
                 accepted: false,
                 reason: "verification rejected patch: empty diff".to_string(),
                 checks,
+                evidence: None,
             },
             diff: String::new(),
         });
@@ -370,6 +410,7 @@ async fn verify_diff_inside_worktree(worktree: &Path, diff: &str) -> Result<Sand
                 accepted: false,
                 reason: "verification rejected patch: no material file diff".to_string(),
                 checks,
+                evidence: None,
             },
             diff: String::new(),
         });
@@ -383,6 +424,7 @@ async fn verify_diff_inside_worktree(worktree: &Path, diff: &str) -> Result<Sand
                 accepted: false,
                 reason: compile.reason,
                 checks,
+                evidence: None,
             },
             diff: String::new(),
         });
@@ -396,6 +438,7 @@ async fn verify_diff_inside_worktree(worktree: &Path, diff: &str) -> Result<Sand
                 accepted: false,
                 reason: regressions.reason,
                 checks,
+                evidence: None,
             },
             diff: String::new(),
         });
@@ -407,6 +450,7 @@ async fn verify_diff_inside_worktree(worktree: &Path, diff: &str) -> Result<Sand
             accepted: true,
             reason: "sandbox patch verification passed".to_string(),
             checks,
+            evidence: None,
         },
         diff: verified_diff,
     })
@@ -704,6 +748,7 @@ async fn run_compile_check_at(root: &Path) -> Result<VerificationOutcome> {
             accepted: true,
             reason: "no Cargo.toml found; compile check skipped".to_string(),
             checks: vec!["cargo_check_skipped".to_string()],
+            evidence: None,
         });
     };
 
@@ -717,6 +762,7 @@ async fn run_compile_check_at(root: &Path) -> Result<VerificationOutcome> {
             accepted: true,
             reason: "cargo check passed".to_string(),
             checks: vec!["cargo_check".to_string()],
+            evidence: None,
         });
     }
 
@@ -728,6 +774,7 @@ async fn run_compile_check_at(root: &Path) -> Result<VerificationOutcome> {
             stderr.lines().take(8).collect::<Vec<_>>().join(" ")
         ),
         checks: vec!["cargo_check".to_string()],
+        evidence: None,
     })
 }
 
@@ -741,6 +788,7 @@ async fn run_regression_tests_at(root: &Path) -> Result<VerificationOutcome> {
             accepted: true,
             reason: "no Cargo.toml found; regression tests skipped".to_string(),
             checks: vec!["cargo_test_skipped".to_string()],
+            evidence: None,
         });
     };
 
@@ -754,6 +802,7 @@ async fn run_regression_tests_at(root: &Path) -> Result<VerificationOutcome> {
             accepted: true,
             reason: "cargo test --bins passed".to_string(),
             checks: vec!["cargo_test".to_string()],
+            evidence: None,
         });
     }
 
@@ -770,7 +819,171 @@ async fn run_regression_tests_at(root: &Path) -> Result<VerificationOutcome> {
         accepted: false,
         reason: format!("cargo test --bins failed: {detail}"),
         checks: vec!["cargo_test".to_string()],
+        evidence: None,
     })
+}
+
+fn repo_fix_gate_crate_dir(root: &Path) -> PathBuf {
+    if root.join("professor-x/Cargo.toml").exists() {
+        root.join("professor-x")
+    } else {
+        root.to_path_buf()
+    }
+}
+
+fn subset_repo_fix_manifest(json: &str, limit: usize) -> Result<String> {
+    let mut manifest: serde_json::Value = serde_json::from_str(json)?;
+    let tasks = manifest
+        .get_mut("tasks")
+        .and_then(|tasks| tasks.as_array_mut())
+        .ok_or_else(|| anyhow::anyhow!("repo-fix manifest missing tasks array"))?;
+    tasks.truncate(limit.max(1));
+    Ok(serde_json::to_string_pretty(&manifest)?)
+}
+
+fn parse_repo_fix_pass_at_1(output: &str) -> Option<f32> {
+    output.lines().rev().find_map(|line| {
+        line.strip_prefix("pass@1 = ")
+            .and_then(|rest| rest.split_whitespace().next())
+            .and_then(|value| value.parse::<f32>().ok())
+    })
+}
+
+async fn run_repo_fix_gate_binary(
+    binary: &Path,
+    current_dir: &Path,
+    manifest_path: &Path,
+    model: &str,
+) -> Result<f32> {
+    let temp_root = std::env::temp_dir().join(format!("px-repofix-gate-{}", uuid::Uuid::new_v4()));
+    let data_dir = temp_root.join("data");
+    let events_dir = temp_root.join("events");
+    let transcripts_dir = temp_root.join("transcripts");
+    let artifacts_dir = temp_root.join("artifacts");
+    std::fs::create_dir_all(&data_dir)?;
+    std::fs::create_dir_all(&events_dir)?;
+    std::fs::create_dir_all(&transcripts_dir)?;
+    std::fs::create_dir_all(&artifacts_dir)?;
+
+    let output = tokio::process::Command::new(binary)
+        .args(["--repo-fix-bench", "--model", model])
+        .current_dir(current_dir)
+        .env("PROFESSOR_X_DATA_DIR", &data_dir)
+        .env("PROFESSOR_X_EVENT_LOG_DIR", &events_dir)
+        .env("PROFESSOR_X_TRANSCRIPT_DIR", &transcripts_dir)
+        .env("PROFESSOR_X_ARTIFACT_REPORT_DIR", &artifacts_dir)
+        .env("REPO_FIX_TASKS", manifest_path)
+        .output()
+        .await?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let score = parse_repo_fix_pass_at_1(&stdout).or_else(|| parse_repo_fix_pass_at_1(&stderr));
+    let _ = std::fs::remove_dir_all(&temp_root);
+
+    if let Some(score) = score {
+        return Ok(score);
+    }
+
+    let detail = [stdout.as_ref(), stderr.as_ref()]
+        .into_iter()
+        .flat_map(|text| text.lines())
+        .filter(|line| !line.trim().is_empty())
+        .take(10)
+        .collect::<Vec<_>>()
+        .join(" ");
+    anyhow::bail!("repo-fix bench did not report pass@1: {detail}");
+}
+
+async fn measure_repo_fix_empirical_gate(
+    repo_root: &Path,
+    diff: &str,
+    model: &str,
+) -> Result<EmpiricalVerificationEvidence> {
+    let crate_dir = repo_fix_gate_crate_dir(repo_root);
+    let manifest_json =
+        std::fs::read_to_string(crate_dir.join("scripts/benchmarks/repo_fix/tasks.json"))?;
+    let limited_manifest = subset_repo_fix_manifest(&manifest_json, REPO_FIX_GATE_TASK_LIMIT)?;
+    let manifest_path =
+        std::env::temp_dir().join(format!("px-repofix-subset-{}.json", uuid::Uuid::new_v4()));
+    std::fs::write(&manifest_path, limited_manifest)?;
+
+    let baseline_binary = std::env::current_exe()?;
+    let baseline_score =
+        run_repo_fix_gate_binary(&baseline_binary, &crate_dir, &manifest_path, model).await?;
+
+    let worktree = std::env::temp_dir().join(format!("px-evolve-measure-{}", uuid::Uuid::new_v4()));
+    let add = tokio::process::Command::new("git")
+        .args(["worktree", "add", "--detach"])
+        .arg(&worktree)
+        .arg("HEAD")
+        .current_dir(repo_root)
+        .output()
+        .await?;
+    if !add.status.success() {
+        let _ = std::fs::remove_file(&manifest_path);
+        anyhow::bail!(
+            "git worktree add failed for empirical gate: {}",
+            String::from_utf8_lossy(&add.stderr)
+        );
+    }
+
+    let outcome = async {
+        let patch_path =
+            std::env::temp_dir().join(format!("px-empirical-verify-{}.diff", uuid::Uuid::new_v4()));
+        std::fs::write(&patch_path, diff)?;
+        let apply = tokio::process::Command::new("git")
+            .args(["apply", "--recount", "-C1"])
+            .arg(&patch_path)
+            .current_dir(&worktree)
+            .output()
+            .await?;
+        let _ = std::fs::remove_file(&patch_path);
+        if !apply.status.success() {
+            anyhow::bail!(
+                "empirical gate patch apply failed: {}",
+                String::from_utf8_lossy(&apply.stderr)
+            );
+        }
+
+        let candidate_crate_dir = repo_fix_gate_crate_dir(&worktree);
+        let build = tokio::process::Command::new("cargo")
+            .args(["build", "--bins", "--quiet"])
+            .current_dir(&candidate_crate_dir)
+            .output()
+            .await?;
+        if !build.status.success() {
+            anyhow::bail!(
+                "empirical gate cargo build failed: {}",
+                String::from_utf8_lossy(&build.stderr)
+            );
+        }
+
+        let candidate_binary = candidate_crate_dir.join("target/debug/professor-x");
+        let candidate_score = run_repo_fix_gate_binary(
+            &candidate_binary,
+            &candidate_crate_dir,
+            &manifest_path,
+            model,
+        )
+        .await?;
+        Ok::<EmpiricalVerificationEvidence, anyhow::Error>(empirical_repo_fix_evidence(
+            REPO_FIX_GATE_TASK_LIMIT,
+            baseline_score,
+            candidate_score,
+        ))
+    }
+    .await;
+
+    let cleanup = cleanup_worktree(repo_root, &worktree).await;
+    let _ = std::fs::remove_file(&manifest_path);
+    if let Err(err) = cleanup {
+        warn!(
+            "evolved: failed to clean empirical gate worktree {}: {err}",
+            worktree.display()
+        );
+    }
+    outcome
 }
 
 async fn apply_verified_diff(repo_root: &Path, diff: &str) -> Result<()> {
@@ -1564,6 +1777,7 @@ impl EvolvedLoop {
                 accepted: false,
                 reason: node.analysis.clone(),
                 checks: vec!["dhe_component_alignment".to_string()],
+                evidence: None,
             })?;
             return Ok(());
         }
@@ -1578,6 +1792,7 @@ impl EvolvedLoop {
                 accepted: false,
                 reason: node.analysis.clone(),
                 checks: vec!["component_policy".to_string()],
+                evidence: None,
             })?;
             return Ok(());
         }
@@ -1593,6 +1808,7 @@ impl EvolvedLoop {
                 accepted: false,
                 reason: node.analysis.clone(),
                 checks: vec!["main_worktree_clean".to_string()],
+                evidence: None,
             })?;
             return Ok(());
         }
@@ -1613,7 +1829,51 @@ impl EvolvedLoop {
             return Ok(());
         }
 
-        let verification_outcome = verification.outcome.clone();
+        let mut verification_outcome = verification.outcome.clone();
+        match measure_repo_fix_empirical_gate(&repo_root, &verification.diff, self.ollama.model())
+            .await
+        {
+            Ok(evidence) => {
+                verification_outcome
+                    .checks
+                    .push("repo_fix_empirical_gate".to_string());
+                let evidence_summary = format!(
+                    "repo-fix subset pass@1 baseline {:.3} candidate {:.3} delta {:+.3} on {} task(s)",
+                    evidence.baseline_score,
+                    evidence.candidate_score,
+                    evidence.score_delta,
+                    evidence.task_count
+                );
+                verification_outcome.evidence = Some(evidence.clone());
+                if !evidence.passed {
+                    node.status = crate::evolved::proposer::NodeStatus::Rejected;
+                    node.manifest.verification_status = VerificationStatus::Rejected;
+                    node.manifest.verified_at = Some(Utc::now());
+                    node.analysis =
+                        format!("empirical repo-fix gate rejected proposal: {evidence_summary}");
+                    verification_outcome.accepted = false;
+                    verification_outcome.reason = node.analysis.clone();
+                    node.results = serde_json::to_value(verification_outcome)?;
+                    return Ok(());
+                }
+                verification_outcome.reason =
+                    format!("{}; {evidence_summary}", verification_outcome.reason);
+            }
+            Err(err) => {
+                node.status = crate::evolved::proposer::NodeStatus::Rejected;
+                node.manifest.verification_status = VerificationStatus::Rejected;
+                node.manifest.verified_at = Some(Utc::now());
+                node.analysis = format!("empirical repo-fix gate failed: {err}");
+                verification_outcome.accepted = false;
+                verification_outcome
+                    .checks
+                    .push("repo_fix_empirical_gate".to_string());
+                verification_outcome.reason = node.analysis.clone();
+                verification_outcome.evidence = None;
+                node.results = serde_json::to_value(verification_outcome)?;
+                return Ok(());
+            }
+        }
         let prompt = Analyzer::build_prompt(
             &node.motivation,
             &node.diff,
@@ -1632,7 +1892,14 @@ impl EvolvedLoop {
 
         let recent_success = tracker.success_rate(5);
         node.status = crate::evolved::proposer::NodeStatus::Accepted;
-        node.score = (node.score + recent_success.max(0.1)) / 2.0;
+        node.score = verification_outcome
+            .evidence
+            .as_ref()
+            .map(|evidence| {
+                ((recent_success.max(0.1) + evidence.candidate_score.max(0.0)) / 2.0)
+                    .clamp(0.0, 1.0)
+            })
+            .unwrap_or_else(|| (node.score + recent_success.max(0.1)) / 2.0);
         node.results = serde_json::to_value(verification_outcome)?;
         node.manifest.verification_status = VerificationStatus::Confirmed;
         node.manifest.verified_at = Some(Utc::now());
@@ -2163,6 +2430,48 @@ mod tests {
             args,
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    #[test]
+    fn subset_repo_fix_manifest_limits_task_count() {
+        let manifest = r#"{
+          "tasks": [
+            {"id": "fix_001"},
+            {"id": "fix_002"},
+            {"id": "fix_003"}
+          ]
+        }"#;
+
+        let subset = subset_repo_fix_manifest(manifest, 2).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&subset).unwrap();
+
+        assert_eq!(parsed["tasks"].as_array().unwrap().len(), 2);
+        assert_eq!(parsed["tasks"][0]["id"], "fix_001");
+        assert_eq!(parsed["tasks"][1]["id"], "fix_002");
+    }
+
+    #[test]
+    fn parse_repo_fix_pass_at_1_reads_bench_output() {
+        let output = "repo-fix fix_001 pre=1 post=0 -> PASS\n\n=== REPO-FIX BENCH ===\npass@1 = 0.750  (3/4 tasks)\n";
+
+        assert_eq!(parse_repo_fix_pass_at_1(output), Some(0.75));
+    }
+
+    #[test]
+    fn empirical_repo_fix_evidence_rejects_regression() {
+        let evidence = empirical_repo_fix_evidence(4, 0.75, 0.50);
+
+        assert_eq!(evidence.benchmark, "repo_fix_subset");
+        assert_eq!(evidence.score_delta, -0.25);
+        assert!(!evidence.passed);
+    }
+
+    #[test]
+    fn empirical_repo_fix_evidence_allows_no_regression() {
+        let evidence = empirical_repo_fix_evidence(4, 0.50, 0.50);
+
+        assert!(evidence.passed);
+        assert_eq!(evidence.score_delta, 0.0);
     }
 
     #[tokio::test]
