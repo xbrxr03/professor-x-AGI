@@ -28,14 +28,22 @@ pip install -q unsloth "trl<0.10" peft bitsandbytes accelerate datasets \
   || { echo "STOP: pip install failed"; exit 1; }
 
 # 2. Build release + generate diverse fixtures + collect TEST-VERIFIED trajectories.
-echo "== [2/6] build + generate fixtures + collect verified trajectories =="
+# TEACHER DISTILLATION: collect with a STRONGER teacher (qwen3:14b, which fits the 3060's 12GB
+# and — verified pre-reboot — solves the hard tasks the 8B fails: fix_004, fix_013). Distilling the
+# teacher's *verified* solutions into the 8B student teaches the failure frontier, which a
+# self-distillation pass (8B on its own passes) cannot. This is what gives the gate real headroom
+# above the 0.857 baseline. Override with TEACHER_MODEL= if desired. (32B is too slow here: a
+# ~19GB q4 model exceeds 12GB VRAM and falls back to CPU.)
+echo "== [2/6] build + generate fixtures + collect TEACHER-verified trajectories =="
 cargo build --release --quiet
 python3 distill/gen_fixtures.py
-for pass in 1 2 3; do          # a few passes: the stochastic 8B solves different subsets -> coverage
-  echo "  collection pass $pass…"
+TEACHER_MODEL="${TEACHER_MODEL:-qwen3:14b-q4_K_M}"
+echo "  teacher model: $TEACHER_MODEL  (student/base for QLoRA stays qwen3:8b)"
+for pass in 1 2; do            # a couple passes: the stochastic teacher covers different subsets
+  echo "  teacher collection pass $pass…"
   REPO_FIX_TASKS=scripts/benchmarks/repo_fix/tasks_corpus.json \
   PROFESSOR_X_DATA_DIR="$HOME/.professor-x" ./target/release/professor-x \
-    --repo-fix-bench --model qwen3:8b-q4_K_M 2>/dev/null | grep "pass@1" || true
+    --repo-fix-bench --model "$TEACHER_MODEL" 2>/dev/null | grep "pass@1" || true
 done
 
 # 3. Curate -> SFT data.
