@@ -63,9 +63,10 @@ python3 distill/train_qlora.py || { echo "STOP: training failed (see above)"; ex
 # 5. Serve the distilled model — auto-detect the produced artifact, no manual Modelfile edit.
 echo "== [5/6] serve distilled model =="
 cd distill
-if ls out/gguf/*Q4_K_M*.gguf >/dev/null 2>&1; then
-  G=$(ls out/gguf/*Q4_K_M*.gguf | head -1)
-  printf 'FROM ./%s\nPARAMETER temperature 0.3\nPARAMETER num_ctx 16384\n' "$G" > Modelfile
+# Case-insensitive match: unsloth may name the merged file *Q4_K_M* OR *q4_k_m*.
+MERGED_GGUF=$(ls out/gguf/*.gguf 2>/dev/null | grep -iE 'q4_k_m' | head -1)
+if [ -n "$MERGED_GGUF" ]; then
+  printf 'FROM ./%s\nPARAMETER temperature 0.3\nPARAMETER num_ctx 16384\n' "$MERGED_GGUF" > Modelfile
 elif [ -f out/gguf/adapter.gguf ]; then
   printf 'FROM qwen3:8b-q4_K_M\nADAPTER ./out/gguf/adapter.gguf\nPARAMETER temperature 0.3\nPARAMETER num_ctx 16384\n' > Modelfile
 else

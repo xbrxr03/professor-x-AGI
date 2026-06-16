@@ -34,6 +34,9 @@ OUT = os.path.join(HERE, "out")
 BASE_MODEL = os.environ.get("PX_BASE_MODEL", "unsloth/Qwen3-8B-unsloth-bnb-4bit")
 MAX_SEQ = int(os.environ.get("PX_MAX_SEQ", "8192"))
 EPOCHS = float(os.environ.get("PX_EPOCHS", "1"))
+# Base is Qwen3 but the harness serves via Ollama's Qwen3 template. If the distilled model
+# behaves oddly, try PX_CHAT_TEMPLATE=qwen3 (template/serve mismatch is the first suspect).
+CHAT_TEMPLATE = os.environ.get("PX_CHAT_TEMPLATE", "qwen-2.5")
 LR = float(os.environ.get("PX_LR", "2e-4"))
 
 
@@ -67,7 +70,7 @@ def main():
                         "gate_proj", "up_proj", "down_proj"],
         use_gradient_checkpointing="unsloth",
     )
-    tokenizer = get_chat_template(tokenizer, chat_template="qwen-2.5")
+    tokenizer = get_chat_template(tokenizer, chat_template=CHAT_TEMPLATE)
 
     ds = load_dataset("json", data_files=DATA, split="train")
 
