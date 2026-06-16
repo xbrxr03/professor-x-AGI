@@ -8,7 +8,7 @@
   "accepted": true,
   "applied": true,
   "commit": "28edf18",
-  "report_commit": null,
+  "report_commit": "2081f56",
   "reason": "sandbox verification passed and committed 28edf18",
   "checks": [
     "main_worktree_clean",
