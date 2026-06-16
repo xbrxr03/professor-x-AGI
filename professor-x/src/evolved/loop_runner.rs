@@ -52,6 +52,12 @@ pub struct VerificationOutcome {
     pub checks: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence: Option<EmpiricalVerificationEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_commit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_commit: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -222,14 +228,19 @@ pub async fn verify_node_in_sandbox(
                 ),
                 checks: vec!["reward_hacking_scan".to_string()],
                 evidence: None,
+                sandbox_branch: None,
+                sandbox_commit: None,
+                applied_commit: None,
             },
             diff: String::new(),
         });
     }
 
+    let sandbox_branch = format!("px-evolve-verify-{}", uuid::Uuid::new_v4());
     let worktree = std::env::temp_dir().join(format!("px-evolve-{}", uuid::Uuid::new_v4()));
     let add = tokio::process::Command::new("git")
-        .args(["worktree", "add", "--detach"])
+        .args(["worktree", "add", "-b"])
+        .arg(&sandbox_branch)
         .arg(&worktree)
         .arg("HEAD")
         .current_dir(repo_root)
@@ -242,13 +253,22 @@ pub async fn verify_node_in_sandbox(
         );
     }
 
-    let result = verify_node_inside_worktree(&worktree, node).await;
+    let result = verify_node_inside_worktree(&worktree, &sandbox_branch, node).await;
     let cleanup = cleanup_worktree(repo_root, &worktree).await;
     if let Err(e) = cleanup {
         warn!(
             "evolved: failed to clean sandbox worktree {}: {e}",
             worktree.display()
         );
+    }
+    let keep_branch = matches!(&result, Ok(verification) if verification.outcome.accepted);
+    if !keep_branch {
+        if let Err(err) = cleanup_sandbox_branch_at(repo_root, Some(&sandbox_branch)).await {
+            warn!(
+                "evolved: failed to clean sandbox branch {}: {err}",
+                sandbox_branch
+            );
+        }
     }
     result
 }
@@ -265,6 +285,9 @@ pub async fn verify_diff_in_sandbox(repo_root: &Path, diff: &str) -> Result<Sand
                 ),
                 checks: vec!["reward_hacking_scan".to_string()],
                 evidence: None,
+                sandbox_branch: None,
+                sandbox_commit: None,
+                applied_commit: None,
             },
             diff: String::new(),
         });
@@ -298,6 +321,7 @@ pub async fn verify_diff_in_sandbox(repo_root: &Path, diff: &str) -> Result<Sand
 
 async fn verify_node_inside_worktree(
     worktree: &Path,
+    sandbox_branch: &str,
     node: &EvolutionNode,
 ) -> Result<SandboxVerification> {
     let mut checks = vec![
@@ -315,6 +339,9 @@ async fn verify_node_inside_worktree(
                 ),
                 checks,
                 evidence: None,
+                sandbox_branch: None,
+                sandbox_commit: None,
+                applied_commit: None,
             },
             diff: String::new(),
         });
@@ -328,6 +355,9 @@ async fn verify_node_inside_worktree(
                 reason: "proposal has no known changed paths".to_string(),
                 checks,
                 evidence: None,
+                sandbox_branch: None,
+                sandbox_commit: None,
+                applied_commit: None,
             },
             diff: String::new(),
         });
@@ -342,6 +372,9 @@ async fn verify_node_inside_worktree(
                 reason: "verification rejected proposal: no material file diff".to_string(),
                 checks,
                 evidence: None,
+                sandbox_branch: None,
+                sandbox_commit: None,
+                applied_commit: None,
             },
             diff: String::new(),
         });
@@ -356,6 +389,9 @@ async fn verify_node_inside_worktree(
                 reason: compile.reason,
                 checks,
                 evidence: None,
+                sandbox_branch: None,
+                sandbox_commit: None,
+                applied_commit: None,
             },
             diff: String::new(),
         });
@@ -370,18 +406,35 @@ async fn verify_node_inside_worktree(
                 reason: regressions.reason,
                 checks,
                 evidence: None,
+                sandbox_branch: None,
+                sandbox_commit: None,
+                applied_commit: None,
             },
             diff: String::new(),
         });
     }
 
     let diff = collect_diff_at(worktree, &paths).await?;
+    let sandbox_commit = create_sandbox_commit_at(
+        worktree,
+        &paths,
+        &format!(
+            "sandbox verify: {:?} - {}",
+            node.target_component,
+            node.motivation.chars().take(60).collect::<String>()
+        ),
+    )
+    .await?;
+    checks.push("sandbox_commit".to_string());
     Ok(SandboxVerification {
         outcome: VerificationOutcome {
             accepted: true,
             reason: "sandbox verification passed".to_string(),
             checks,
             evidence: None,
+            sandbox_branch: Some(sandbox_branch.to_string()),
+            sandbox_commit: Some(sandbox_commit),
+            applied_commit: None,
         },
         diff,
     })
@@ -399,6 +452,9 @@ async fn verify_diff_inside_worktree(worktree: &Path, diff: &str) -> Result<Sand
                 reason: "verification rejected patch: empty diff".to_string(),
                 checks,
                 evidence: None,
+                sandbox_branch: None,
+                sandbox_commit: None,
+                applied_commit: None,
             },
             diff: String::new(),
         });
@@ -413,6 +469,9 @@ async fn verify_diff_inside_worktree(worktree: &Path, diff: &str) -> Result<Sand
                 reason: "verification rejected patch: no material file diff".to_string(),
                 checks,
                 evidence: None,
+                sandbox_branch: None,
+                sandbox_commit: None,
+                applied_commit: None,
             },
             diff: String::new(),
         });
@@ -427,6 +486,9 @@ async fn verify_diff_inside_worktree(worktree: &Path, diff: &str) -> Result<Sand
                 reason: compile.reason,
                 checks,
                 evidence: None,
+                sandbox_branch: None,
+                sandbox_commit: None,
+                applied_commit: None,
             },
             diff: String::new(),
         });
@@ -441,6 +503,9 @@ async fn verify_diff_inside_worktree(worktree: &Path, diff: &str) -> Result<Sand
                 reason: regressions.reason,
                 checks,
                 evidence: None,
+                sandbox_branch: None,
+                sandbox_commit: None,
+                applied_commit: None,
             },
             diff: String::new(),
         });
@@ -453,6 +518,9 @@ async fn verify_diff_inside_worktree(worktree: &Path, diff: &str) -> Result<Sand
             reason: "sandbox patch verification passed".to_string(),
             checks,
             evidence: None,
+            sandbox_branch: None,
+            sandbox_commit: None,
+            applied_commit: None,
         },
         diff: verified_diff,
     })
@@ -682,6 +750,50 @@ async fn collect_diff_at(worktree: &Path, paths: &[PathBuf]) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+async fn create_sandbox_commit_at(
+    worktree: &Path,
+    paths: &[PathBuf],
+    message: &str,
+) -> Result<String> {
+    let mut add = tokio::process::Command::new("git");
+    add.arg("add").arg("--").current_dir(worktree);
+    for path in paths {
+        add.arg(path);
+    }
+    let add = add.output().await?;
+    if !add.status.success() {
+        anyhow::bail!(
+            "sandbox git add failed: {}",
+            String::from_utf8_lossy(&add.stderr)
+        );
+    }
+
+    let commit = tokio::process::Command::new("git")
+        .args(["commit", "-m", message])
+        .current_dir(worktree)
+        .output()
+        .await?;
+    if !commit.status.success() {
+        anyhow::bail!(
+            "sandbox git commit failed: {}",
+            String::from_utf8_lossy(&commit.stderr)
+        );
+    }
+
+    let head = tokio::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(worktree)
+        .output()
+        .await?;
+    if !head.status.success() {
+        anyhow::bail!(
+            "sandbox git rev-parse failed: {}",
+            String::from_utf8_lossy(&head.stderr)
+        );
+    }
+    Ok(String::from_utf8_lossy(&head.stdout).trim().to_string())
+}
+
 async fn apply_patch_to_index_at(worktree: &Path, diff: &str) -> Result<()> {
     let patch_path =
         std::env::temp_dir().join(format!("px-patch-verify-{}.diff", uuid::Uuid::new_v4()));
@@ -751,6 +863,9 @@ async fn run_compile_check_at(root: &Path) -> Result<VerificationOutcome> {
             reason: "no Cargo.toml found; compile check skipped".to_string(),
             checks: vec!["cargo_check_skipped".to_string()],
             evidence: None,
+            sandbox_branch: None,
+            sandbox_commit: None,
+            applied_commit: None,
         });
     };
 
@@ -765,6 +880,9 @@ async fn run_compile_check_at(root: &Path) -> Result<VerificationOutcome> {
             reason: "cargo check passed".to_string(),
             checks: vec!["cargo_check".to_string()],
             evidence: None,
+            sandbox_branch: None,
+            sandbox_commit: None,
+            applied_commit: None,
         });
     }
 
@@ -777,6 +895,9 @@ async fn run_compile_check_at(root: &Path) -> Result<VerificationOutcome> {
         ),
         checks: vec!["cargo_check".to_string()],
         evidence: None,
+        sandbox_branch: None,
+        sandbox_commit: None,
+        applied_commit: None,
     })
 }
 
@@ -791,6 +912,9 @@ async fn run_regression_tests_at(root: &Path) -> Result<VerificationOutcome> {
             reason: "no Cargo.toml found; regression tests skipped".to_string(),
             checks: vec!["cargo_test_skipped".to_string()],
             evidence: None,
+            sandbox_branch: None,
+            sandbox_commit: None,
+            applied_commit: None,
         });
     };
 
@@ -805,6 +929,9 @@ async fn run_regression_tests_at(root: &Path) -> Result<VerificationOutcome> {
             reason: "cargo test --bins passed".to_string(),
             checks: vec!["cargo_test".to_string()],
             evidence: None,
+            sandbox_branch: None,
+            sandbox_commit: None,
+            applied_commit: None,
         });
     }
 
@@ -822,6 +949,9 @@ async fn run_regression_tests_at(root: &Path) -> Result<VerificationOutcome> {
         reason: format!("cargo test --bins failed: {detail}"),
         checks: vec!["cargo_test".to_string()],
         evidence: None,
+        sandbox_branch: None,
+        sandbox_commit: None,
+        applied_commit: None,
     })
 }
 
@@ -1050,6 +1180,26 @@ async fn apply_verified_diff(repo_root: &Path, diff: &str) -> Result<()> {
     Ok(())
 }
 
+async fn cherry_pick_verified_commit(repo_root: &Path, commit: &str) -> Result<String> {
+    let output = tokio::process::Command::new("git")
+        .args(["cherry-pick", "-x", commit])
+        .current_dir(repo_root)
+        .output()
+        .await?;
+    if !output.status.success() {
+        let _ = tokio::process::Command::new("git")
+            .args(["cherry-pick", "--abort"])
+            .current_dir(repo_root)
+            .output()
+            .await;
+        anyhow::bail!(
+            "verified sandbox commit cherry-pick failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    git_head(repo_root).await
+}
+
 fn evolution_artifact_root(repo_root: &Path) -> PathBuf {
     let nested = repo_root.join("professor-x/artifacts/evolution");
     if nested.exists() {
@@ -1126,6 +1276,31 @@ async fn cleanup_worktree(repo_root: &Path, worktree: &Path) -> Result<()> {
         std::fs::remove_dir_all(worktree)?;
     }
     Ok(())
+}
+
+async fn cleanup_sandbox_branch_at(repo_root: &Path, branch: Option<&str>) -> Result<()> {
+    let Some(branch) = branch.filter(|branch| !branch.trim().is_empty()) else {
+        return Ok(());
+    };
+    let remove = tokio::process::Command::new("git")
+        .args(["branch", "-D", branch])
+        .current_dir(repo_root)
+        .output()
+        .await?;
+    if !remove.status.success() {
+        anyhow::bail!(
+            "git branch -D {} failed: {}",
+            branch,
+            String::from_utf8_lossy(&remove.stderr)
+        );
+    }
+    Ok(())
+}
+
+fn applied_commit_from_results(results: &serde_json::Value) -> Option<String> {
+    serde_json::from_value::<VerificationOutcome>(results.clone())
+        .ok()
+        .and_then(|outcome| outcome.applied_commit)
 }
 
 fn default_repo_root() -> PathBuf {
@@ -1804,6 +1979,9 @@ impl EvolvedLoop {
                 reason: node.analysis.clone(),
                 checks: vec!["dhe_component_alignment".to_string()],
                 evidence: None,
+                sandbox_branch: None,
+                sandbox_commit: None,
+                applied_commit: None,
             })?;
             return Ok(());
         }
@@ -1819,6 +1997,9 @@ impl EvolvedLoop {
                 reason: node.analysis.clone(),
                 checks: vec!["component_policy".to_string()],
                 evidence: None,
+                sandbox_branch: None,
+                sandbox_commit: None,
+                applied_commit: None,
             })?;
             return Ok(());
         }
@@ -1835,6 +2016,9 @@ impl EvolvedLoop {
                 reason: node.analysis.clone(),
                 checks: vec!["main_worktree_clean".to_string()],
                 evidence: None,
+                sandbox_branch: None,
+                sandbox_commit: None,
+                applied_commit: None,
             })?;
             return Ok(());
         }
@@ -1856,6 +2040,7 @@ impl EvolvedLoop {
         }
 
         let mut verification_outcome = verification.outcome.clone();
+        let sandbox_branch = verification_outcome.sandbox_branch.clone();
         match measure_repo_fix_empirical_gate(&repo_root, &verification.diff, self.ollama.model())
             .await
         {
@@ -1872,6 +2057,14 @@ impl EvolvedLoop {
                 );
                 verification_outcome.evidence = Some(evidence.clone());
                 if !evidence.passed {
+                    if let Err(err) =
+                        cleanup_sandbox_branch_at(&repo_root, sandbox_branch.as_deref()).await
+                    {
+                        warn!(
+                            "evolved: failed to clean rejected sandbox branch {:?}: {err}",
+                            sandbox_branch
+                        );
+                    }
                     node.status = crate::evolved::proposer::NodeStatus::Rejected;
                     node.manifest.verification_status = VerificationStatus::Rejected;
                     node.manifest.verified_at = Some(Utc::now());
@@ -1886,6 +2079,14 @@ impl EvolvedLoop {
                     format!("{}; {evidence_summary}", verification_outcome.reason);
             }
             Err(err) => {
+                if let Err(cleanup_err) =
+                    cleanup_sandbox_branch_at(&repo_root, sandbox_branch.as_deref()).await
+                {
+                    warn!(
+                        "evolved: failed to clean sandbox branch after empirical gate error {:?}: {cleanup_err}",
+                        sandbox_branch
+                    );
+                }
                 node.status = crate::evolved::proposer::NodeStatus::Rejected;
                 node.manifest.verification_status = VerificationStatus::Rejected;
                 node.manifest.verified_at = Some(Utc::now());
@@ -1914,7 +2115,35 @@ impl EvolvedLoop {
         let (analysis, lesson) = Analyzer::parse_response(&answer);
         node.analysis = analysis.clone();
 
-        apply_verified_diff(&repo_root, &verification.diff).await?;
+        if let Some(sandbox_commit) = verification_outcome.sandbox_commit.clone() {
+            verification_outcome
+                .checks
+                .push("main_cherry_pick".to_string());
+            match cherry_pick_verified_commit(&repo_root, &sandbox_commit).await {
+                Ok(applied_commit) => {
+                    verification_outcome.applied_commit = Some(applied_commit);
+                }
+                Err(err) => {
+                    if let Err(cleanup_err) =
+                        cleanup_sandbox_branch_at(&repo_root, sandbox_branch.as_deref()).await
+                    {
+                        warn!(
+                            "evolved: failed to clean sandbox branch after cherry-pick failure {:?}: {cleanup_err}",
+                            sandbox_branch
+                        );
+                    }
+                    return Err(err);
+                }
+            }
+        } else {
+            apply_verified_diff(&repo_root, &verification.diff).await?;
+        }
+        if let Err(err) = cleanup_sandbox_branch_at(&repo_root, sandbox_branch.as_deref()).await {
+            warn!(
+                "evolved: failed to clean accepted sandbox branch {:?}: {err}",
+                sandbox_branch
+            );
+        }
 
         let recent_success = tracker.success_rate(5);
         node.status = crate::evolved::proposer::NodeStatus::Accepted;
@@ -2181,6 +2410,10 @@ impl EvolvedLoop {
     }
 
     async fn commit_node(&self, node: &EvolutionNode) -> Result<Option<String>> {
+        if let Some(commit) = applied_commit_from_results(&node.results) {
+            return Ok(Some(commit));
+        }
+
         let repo_root = default_repo_root();
         let paths = changed_paths_for_node_at(&repo_root, node);
         if paths.is_empty() {
@@ -2458,6 +2691,21 @@ mod tests {
         );
     }
 
+    fn git_stdout(root: &Path, args: &[&str]) -> String {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
     #[test]
     fn subset_repo_fix_manifest_limits_task_count() {
         let manifest = r#"{
@@ -2540,8 +2788,56 @@ mod tests {
             .checks
             .iter()
             .any(|check| check == "cargo_test"));
+        assert!(verified.outcome.sandbox_commit.is_some());
+        assert!(verified.outcome.sandbox_branch.is_some());
+        assert!(verified
+            .outcome
+            .checks
+            .iter()
+            .any(|check| check == "sandbox_commit"));
         assert!(verified.diff.contains("skills/conductor/fallback.md"));
         assert!(!root.join("skills/conductor/fallback.md").exists());
+        let sandbox_branch = verified.outcome.sandbox_branch.clone().unwrap();
+        assert_eq!(
+            git_stdout(&root, &["rev-parse", "--verify", &sandbox_branch]),
+            verified.outcome.sandbox_commit.clone().unwrap()
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn verified_sandbox_commit_can_be_cherry_picked_back_to_main() {
+        let root = temp_git_repo();
+        let node = skill_node(
+            "fallback",
+            "When a shell command fails, read stderr, choose one smaller diagnostic command, and retry once.\n",
+        );
+
+        let verified = verify_node_in_sandbox(&root, &node).await.unwrap();
+        let sandbox_commit = verified.outcome.sandbox_commit.clone().unwrap();
+        let sandbox_branch = verified.outcome.sandbox_branch.clone().unwrap();
+
+        let applied_commit = cherry_pick_verified_commit(&root, &sandbox_commit)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            applied_commit,
+            git_stdout(&root, &["rev-parse", "--short", "HEAD"])
+        );
+        let applied = std::fs::read_to_string(root.join("skills/conductor/fallback.md")).unwrap();
+        assert!(applied.contains("retry once"));
+
+        cleanup_sandbox_branch_at(&root, Some(&sandbox_branch))
+            .await
+            .unwrap();
+        let branch_check = std::process::Command::new("git")
+            .args(["rev-parse", "--verify", &sandbox_branch])
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert!(!branch_check.status.success());
 
         let _ = std::fs::remove_dir_all(root);
     }
@@ -2761,5 +3057,24 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn applied_commit_from_results_reads_verified_apply_commit() {
+        let value = serde_json::to_value(VerificationOutcome {
+            accepted: true,
+            reason: "ok".to_string(),
+            checks: vec!["sandbox_commit".to_string(), "main_cherry_pick".to_string()],
+            evidence: None,
+            sandbox_branch: Some("px-evolve-verify-123".to_string()),
+            sandbox_commit: Some("deadbeef".to_string()),
+            applied_commit: Some("abc1234".to_string()),
+        })
+        .unwrap();
+
+        assert_eq!(
+            applied_commit_from_results(&value).as_deref(),
+            Some("abc1234")
+        );
     }
 }
