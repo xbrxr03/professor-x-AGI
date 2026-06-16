@@ -83,6 +83,44 @@ pub async fn applied_commit_verdict(repo_root: &Path, commit: &str) -> Result<Ro
     })
 }
 
+/// Rollback-safe revert: undo an accepted autonomous commit that turned out bad, leaving a
+/// clean recorded `git revert` (which the verdict above then reads as `Reverted`). Refuses if
+/// the worktree is dirty (so we never entangle the revert with unrelated changes) or the commit
+/// is unknown. Returns the new revert commit's short hash.
+pub async fn revert_commit(repo_root: &Path, commit: &str) -> Result<String> {
+    // Must resolve, or there is nothing to revert.
+    git_rev_parse(repo_root, commit).await?;
+    // A dirty tree would make `git revert` ambiguous / unsafe.
+    let status = tokio::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(repo_root)
+        .output()
+        .await?;
+    if !String::from_utf8_lossy(&status.stdout).trim().is_empty() {
+        anyhow::bail!("refusing to revert {commit}: worktree is not clean");
+    }
+    let out = tokio::process::Command::new("git")
+        .args(["revert", "--no-edit", commit])
+        .current_dir(repo_root)
+        .output()
+        .await?;
+    if !out.status.success() {
+        // Abort any partial revert so the tree is left clean.
+        let _ = tokio::process::Command::new("git")
+            .args(["revert", "--abort"])
+            .current_dir(repo_root)
+            .output()
+            .await;
+        anyhow::bail!("git revert {commit} failed: {}", String::from_utf8_lossy(&out.stderr));
+    }
+    let head = tokio::process::Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .current_dir(repo_root)
+        .output()
+        .await?;
+    Ok(String::from_utf8_lossy(&head.stdout).trim().to_string())
+}
+
 /// Synchronous variant for sync render paths (one-shot status/observer views). Same logic via
 /// blocking `std::process` — cheap enough for a one-shot status document.
 pub fn applied_commit_verdict_blocking(repo_root: &Path, commit: &str) -> RollbackVerdict {
@@ -233,6 +271,45 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(v.status, RollbackStatus::Missing, "{v:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn revert_commit_undoes_a_bad_change_and_verdict_reads_reverted() {
+        let dir = std::env::temp_dir().join(format!("px-revert-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        git(&dir, &["init", "-q"]).await;
+        git(&dir, &["config", "user.email", "t@t"]).await;
+        git(&dir, &["config", "user.name", "t"]).await;
+        std::fs::write(dir.join("base.txt"), "ok").unwrap();
+        git(&dir, &["add", "."]).await;
+        git(&dir, &["commit", "-qm", "base"]).await;
+        std::fs::write(dir.join("bad.txt"), "regression").unwrap();
+        git(&dir, &["add", "."]).await;
+        git(&dir, &["commit", "-qm", "bad autonomous change"]).await;
+        let bad = String::from_utf8_lossy(
+            &tokio::process::Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(&dir)
+                .output()
+                .await
+                .unwrap()
+                .stdout,
+        )
+        .trim()
+        .to_string();
+
+        // Rollback-safe revert, then the verdict must flip to Reverted and the file is gone.
+        let revert = revert_commit(&dir, &bad).await.unwrap();
+        assert!(!revert.is_empty());
+        assert!(!dir.join("bad.txt").exists(), "revert should remove the bad file");
+        let v = applied_commit_verdict(&dir, &bad).await.unwrap();
+        assert_eq!(v.status, RollbackStatus::Reverted, "{v:?}");
+
+        // A dirty tree is refused.
+        std::fs::write(dir.join("dirty.txt"), "uncommitted").unwrap();
+        assert!(revert_commit(&dir, &bad).await.is_err(), "dirty tree must be refused");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

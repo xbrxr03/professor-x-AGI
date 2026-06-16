@@ -148,6 +148,8 @@ struct CliArgs {
     self_rebuild_check: bool,
     /// Report whether an accepted autonomous commit still holds (vs reverted/missing) against HEAD.
     rollback_verdict_commit: Option<String>,
+    /// Rollback-safe revert: undo a bad accepted autonomous commit with a recorded git revert.
+    rollback_commit: Option<String>,
     /// Internal: target of a hot-reload re-exec; prints the generation and exits (probe).
     self_reload_probe: bool,
     repo_fix_bench: bool,
@@ -349,6 +351,7 @@ where
         self_rebuild_reexec: false,
         self_rebuild_check: false,
         rollback_verdict_commit: None,
+        rollback_commit: None,
         self_reload_probe: false,
         repo_fix_bench: false,
         evolve_on_repofix: None,
@@ -653,6 +656,10 @@ where
             }
             "--rollback-verdict" if i + 1 < args.len() => {
                 cli.rollback_verdict_commit = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--rollback-commit" if i + 1 < args.len() => {
+                cli.rollback_commit = Some(args[i + 1].clone());
                 i += 2;
             }
             "--self-reload-probe" => {
@@ -1294,6 +1301,10 @@ async fn main() -> Result<()> {
 
     if let Some(commit) = cli.rollback_verdict_commit.clone() {
         return run_rollback_verdict(Arc::clone(&events), commit).await;
+    }
+
+    if let Some(commit) = cli.rollback_commit.clone() {
+        return run_rollback_commit(Arc::clone(&events), commit).await;
     }
 
     if cli.self_rebuild_reexec {
@@ -2714,6 +2725,28 @@ async fn run_rollback_verdict(events: Arc<EventStore>, commit: String) -> Result
         "evolution.rollback.verdict",
         format!("accepted commit {commit} verdict: {}", verdict.status.as_str()),
         serde_json::to_value(&verdict).unwrap_or_default(),
+    )?;
+    Ok(())
+}
+
+/// Rollback-safe revert: undo a bad accepted autonomous commit with a recorded git revert, then
+/// confirm the verdict flipped to reverted. The structural counterpart to autonomous acceptance.
+async fn run_rollback_commit(events: Arc<EventStore>, commit: String) -> Result<()> {
+    use crate::evolved::rollback;
+    let repo_root = default_repo_root();
+    let revert = rollback::revert_commit(&repo_root, &commit).await?;
+    let verdict = rollback::applied_commit_verdict(&repo_root, &commit).await?;
+    println!("rolled back {commit}: revert commit {revert}, verdict now {}", verdict.status.as_str());
+    events.append(
+        None,
+        None,
+        "evolution.rollback.reverted",
+        format!("rolled back accepted commit {commit} via revert {revert}"),
+        serde_json::json!({
+            "commit": commit,
+            "revert_commit": revert,
+            "verdict": verdict.status.as_str(),
+        }),
     )?;
     Ok(())
 }
