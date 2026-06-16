@@ -142,6 +142,10 @@ struct CliArgs {
     patch_apply_live_path: Option<PathBuf>,
     /// Validate HIRO task inventory and evaluator substrate and exit.
     hiro_smoke: bool,
+    /// Rebuild the release binary and re-exec into it (close the evolve→apply loop, no restart).
+    self_rebuild_reexec: bool,
+    /// Internal: target of a hot-reload re-exec; prints the generation and exits (probe).
+    self_reload_probe: bool,
     repo_fix_bench: bool,
     evolve_on_repofix: Option<u32>,
     evolve_skill_on_repofix: Option<u32>,
@@ -338,6 +342,8 @@ where
         patch_apply_path: None,
         patch_apply_live_path: None,
         hiro_smoke: false,
+        self_rebuild_reexec: false,
+        self_reload_probe: false,
         repo_fix_bench: false,
         evolve_on_repofix: None,
         evolve_skill_on_repofix: None,
@@ -629,6 +635,14 @@ where
             }
             "--hiro-smoke" => {
                 cli.hiro_smoke = true;
+                i += 1;
+            }
+            "--self-rebuild-reexec" | "--hot-reload" => {
+                cli.self_rebuild_reexec = true;
+                i += 1;
+            }
+            "--self-reload-probe" => {
+                cli.self_reload_probe = true;
                 i += 1;
             }
             "--repo-fix-bench" => {
@@ -1251,6 +1265,17 @@ async fn main() -> Result<()> {
 
     if cli.proposal_dry_run_live {
         return run_evolution_proposal_dry_run_live(Arc::clone(&events)).await;
+    }
+
+    if cli.self_reload_probe {
+        // Target of a hot-reload re-exec: proves the freshly-built binary launched itself.
+        let generation = crate::evolved::hot_reload::current_generation();
+        println!("hot-reload probe: running as generation {generation} (re-exec succeeded)");
+        return Ok(());
+    }
+
+    if cli.self_rebuild_reexec {
+        return run_self_rebuild_reexec(Arc::clone(&events)).await;
     }
 
     if let Some(path) = cli.patch_verify_path {
@@ -2645,6 +2670,73 @@ async fn run_patch_apply_commit(events: Arc<EventStore>, patch_path: PathBuf) ->
         anyhow::bail!("patch apply commit did not commit an accepted patch");
     }
     Ok(())
+}
+
+/// Close the evolve→apply→measure loop with no operator restart: rebuild the release binary
+/// from the (already-committed) source and re-exec into it. Safety is structural — we only
+/// re-exec after a clean `cargo build --release`, and a generation cap bounds reloads.
+#[cfg(unix)]
+async fn run_self_rebuild_reexec(events: Arc<EventStore>) -> Result<()> {
+    use crate::evolved::hot_reload::{self, ReloadDecision, DEFAULT_MAX_GENERATIONS};
+    let repo_root = default_repo_root();
+    let generation = hot_reload::current_generation();
+    println!(
+        "hot-reload: rebuilding release binary at generation {generation} (no operator restart)…"
+    );
+    events.append(
+        None,
+        None,
+        "hot_reload.started",
+        "rebuilding release binary to apply a committed self-change without a restart",
+        serde_json::json!({
+            "generation": generation,
+            "max_generations": DEFAULT_MAX_GENERATIONS,
+            "harness_commit": git_head(&repo_root).unwrap_or_else(|_| "unknown".to_string()),
+        }),
+    )?;
+
+    // On a successful re-exec this call never returns (the process image is replaced by the
+    // freshly built binary running `--self-reload-probe`); we only fall through on a
+    // deliberate Stay decision (build failed / generation cap) or an exec error.
+    let decision = hot_reload::reload_after_commit(
+        &repo_root,
+        &["--self-reload-probe".to_string()],
+        DEFAULT_MAX_GENERATIONS,
+    )
+    .await?;
+
+    match decision {
+        ReloadDecision::StayBuildFailed => {
+            events.append(
+                None,
+                None,
+                "hot_reload.skipped",
+                "rebuild failed — kept the current binary, loop continues",
+                serde_json::json!({ "generation": generation, "reason": "build_failed" }),
+            )?;
+            anyhow::bail!("hot-reload: cargo build --release failed; kept the running binary");
+        }
+        ReloadDecision::StayGenerationCap { generation } => {
+            println!("hot-reload: generation cap reached ({generation}); not re-exec'ing.");
+            events.append(
+                None,
+                None,
+                "hot_reload.capped",
+                "generation cap reached — stopping auto-reload for this lineage",
+                serde_json::json!({ "generation": generation, "reason": "generation_cap" }),
+            )?;
+            Ok(())
+        }
+        ReloadDecision::Reexec { .. } => {
+            // Reached only if exec() itself failed (reload_after_commit would otherwise not return).
+            anyhow::bail!("hot-reload: re-exec into the rebuilt binary did not take effect");
+        }
+    }
+}
+
+#[cfg(not(unix))]
+async fn run_self_rebuild_reexec(_events: Arc<EventStore>) -> Result<()> {
+    anyhow::bail!("hot-reload (self-rebuild + re-exec) is only supported on Unix");
 }
 
 async fn run_patch_apply_commit_live(events: Arc<EventStore>, patch_path: PathBuf) -> Result<()> {

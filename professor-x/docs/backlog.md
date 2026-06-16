@@ -9,10 +9,20 @@ analysis. Status: ☐ open · ◐ in progress · ✓ done.
   Removes a network/process dependency and speeds every embed (retrieve_ice,
   binding, cognition, case-based confidence). jcode runs vector inference locally
   with no external service.
-- ☐ **Persistent server + hot-reload** (HIGH, larger build). Mirror jcode's
+- ◐ **Persistent server + hot-reload** (HIGH, larger build). Mirror jcode's
   SelfDev/hot_exec: a persistent server so the evolution loop can apply a verified
   change *live* instead of requiring an operator restart. Closes the
   evolve→apply→measure loop without manual intervention.
+  **Landed (primitive):** `src/evolved/hot_reload.rs` + `--self-rebuild-reexec`
+  (alias `--hot-reload`). After a verified self-change is committed, it rebuilds
+  `cargo build --release` and `exec`s into the new binary (`--self-reload-probe`
+  confirms the relaunch). Structural safety: re-exec ONLY on a clean build (a broken
+  self-edit can't replace a working binary), a generation cap (`PROFESSOR_X_RELOAD_GENERATION`,
+  default 8) bounds reload storms, and the running binary is moved aside before relink to
+  avoid `ETXTBSY`. 4 unit tests on the decision policy; full suite 337 green.
+  **Remaining:** wire it as the operator loop's final cycle after `operator_commit` so the
+  live loop self-applies; the live re-exec itself is a self-modifying action gated behind
+  explicit operator authorization.
 - ☐ **Swarm file-conflict handling** (MEDIUM). jcode's swarm-core gives agents
   shared-repo access with conflict avoidance. Prof X's sub-agents (`agent.delegate`)
   have no scope arbitration — add scope-locks so parallel sub-agents can't clobber.
