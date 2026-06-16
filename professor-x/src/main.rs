@@ -12952,6 +12952,12 @@ struct EvolutionArtifactStatus {
     empirical_gate: Option<evolved::loop_runner::EmpiricalVerificationEvidence>,
     empirical_gate_summary: Option<String>,
     diff_bytes: Option<usize>,
+    /// The commit an accepted self-change landed as (from VerificationOutcome::applied_commit).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    applied_commit: Option<String>,
+    /// Rollback monitoring: does that accepted commit still hold against HEAD (held/reverted/missing)?
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rollback: Option<evolved::rollback::RollbackVerdict>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -12963,6 +12969,12 @@ struct StoredEvolutionArtifactStatus {
     analysis: Option<String>,
     verification: Option<evolved::loop_runner::VerificationOutcome>,
     diff_bytes: Option<usize>,
+    /// Accepted operator-commit / patch-verification artifacts store the landed commit at the
+    /// top level (with `applied: true`), not under `verification.applied_commit`.
+    #[serde(default)]
+    commit: Option<String>,
+    #[serde(default)]
+    applied: Option<bool>,
 }
 
 fn empirical_gate_summary(
@@ -13005,6 +13017,22 @@ fn evolution_artifact_status_from_event(
         if let Ok(stored) = serde_json::from_str::<StoredEvolutionArtifactStatus>(&raw) {
             let verification = stored.verification.clone();
             let evidence = verification.as_ref().and_then(|value| value.evidence.clone());
+            // Rollback monitoring: if this artifact recorded an accepted applied_commit, report
+            // whether that commit still holds against HEAD (held/reverted/missing).
+            let applied_commit = verification
+                .as_ref()
+                .and_then(|value| value.applied_commit.clone())
+                .or_else(|| {
+                    // Accepted operator-commit/patch artifacts: landed commit at top level.
+                    if stored.applied == Some(true) {
+                        stored.commit.clone()
+                    } else {
+                        None
+                    }
+                });
+            let rollback = applied_commit
+                .as_ref()
+                .map(|commit| evolved::rollback::applied_commit_verdict_blocking(repo_root, commit));
             let reason = verification
                 .as_ref()
                 .map(|value| value.reason.trim().to_string())
@@ -13028,6 +13056,8 @@ fn evolution_artifact_status_from_event(
                 empirical_gate_summary: evidence.as_ref().map(empirical_gate_summary),
                 empirical_gate: evidence,
                 diff_bytes: stored.diff_bytes,
+                applied_commit,
+                rollback,
             });
         }
     }
@@ -13049,6 +13079,8 @@ fn evolution_artifact_status_from_event(
         empirical_gate: None,
         empirical_gate_summary: None,
         diff_bytes: None,
+        applied_commit: None,
+        rollback: None,
     })
 }
 
@@ -16377,6 +16409,8 @@ mod tests {
             empirical_gate: None,
             empirical_gate_summary: None,
             diff_bytes: Some(707),
+            applied_commit: None,
+            rollback: None,
         };
         let queued = queue_item(
             "make Prof X work visible in the cockpit",
@@ -16516,6 +16550,80 @@ mod tests {
                 .unwrap()
                 .contains("cargo run -- --repair-coding-sessions 10")
         }));
+    }
+
+    #[test]
+    fn accepted_artifact_surfaces_applied_commit_and_rollback_verdict() {
+        let root = std::env::temp_dir().join(format!("px-rollback-status-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&root)
+                .output()
+                .unwrap()
+                .status
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "t@t"]);
+        git(&["config", "user.name", "t"]);
+        std::fs::write(root.join("seed.txt"), "x").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "accepted self-change"]);
+        let head = String::from_utf8_lossy(
+            &std::process::Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(&root)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .trim()
+        .to_string();
+
+        let artifact_dir = root.join("artifacts/evolution/accepted/2026-06-16");
+        std::fs::create_dir_all(&artifact_dir).unwrap();
+        let artifact_path = artifact_dir.join("operator-commit-000000.json");
+        std::fs::write(
+            &artifact_path,
+            serde_json::json!({
+                "generated_at": "2026-06-16T03:00:27Z",
+                "status": "Accepted",
+                "target_component": "SkillDefinition(\"X\")",
+                "accepted": true,
+                "applied": true,
+                "commit": head,
+                "reason": "sandbox verification passed and committed",
+                "diff_bytes": 452
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let event = memd::events::AgentEvent {
+            id: 91,
+            timestamp: chrono::Utc::now(),
+            session_id: None,
+            task_id: None,
+            event_type: "evolution.operator.committed".to_string(),
+            summary: "operator committed verified proposal".to_string(),
+            payload: serde_json::json!({
+                "artifact_path": "artifacts/evolution/accepted/2026-06-16/operator-commit-000000.json",
+            }),
+        };
+
+        let summary = latest_evolution_artifact_status(&root, std::slice::from_ref(&event)).unwrap();
+        assert_eq!(summary.applied_commit.as_deref(), Some(head.as_str()));
+        let rollback = summary.rollback.expect("accepted commit should carry a rollback verdict");
+        assert_eq!(
+            rollback.status,
+            evolved::rollback::RollbackStatus::Held,
+            "the commit is HEAD, so it must read as held: {rollback:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

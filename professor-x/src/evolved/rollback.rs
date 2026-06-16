@@ -15,7 +15,7 @@
 use anyhow::Result;
 use std::path::Path;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RollbackStatus {
     Held,
     Reverted,
@@ -37,7 +37,7 @@ impl RollbackStatus {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RollbackVerdict {
     pub commit: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -81,6 +81,46 @@ pub async fn applied_commit_verdict(repo_root: &Path, commit: &str) -> Result<Ro
         reverted_by,
         status,
     })
+}
+
+/// Synchronous variant for sync render paths (one-shot status/observer views). Same logic via
+/// blocking `std::process` — cheap enough for a one-shot status document.
+pub fn applied_commit_verdict_blocking(repo_root: &Path, commit: &str) -> RollbackVerdict {
+    let run = |args: &[&str]| -> Option<std::process::Output> {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(repo_root)
+            .output()
+            .ok()
+    };
+    let resolved = run(&["rev-parse", "--verify", "--quiet", &format!("{commit}^{{commit}}")])
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+    let present_in_head = resolved.is_some()
+        && run(&["merge-base", "--is-ancestor", commit, "HEAD"])
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+    let reverted_by = if present_in_head {
+        let needle = resolved.as_deref().unwrap_or(commit);
+        run(&["log", "HEAD", "--format=%H", &format!("--grep=This reverts commit {needle}")])
+            .filter(|o| o.status.success())
+            .and_then(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .map(|l| l.trim().to_string())
+                    .find(|l| !l.is_empty())
+            })
+    } else {
+        None
+    };
+    let status = classify(present_in_head, reverted_by.is_some());
+    RollbackVerdict {
+        commit: commit.to_string(),
+        resolved,
+        present_in_head,
+        reverted_by,
+        status,
+    }
 }
 
 /// Resolve a (possibly short) ref to a full commit hash; `Err` if git does not know it.
