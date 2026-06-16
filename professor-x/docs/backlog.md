@@ -20,9 +20,14 @@ analysis. Status: ☐ open · ◐ in progress · ✓ done.
   self-edit can't replace a working binary), a generation cap (`PROFESSOR_X_RELOAD_GENERATION`,
   default 8) bounds reload storms, and the running binary is moved aside before relink to
   avoid `ETXTBSY`. 4 unit tests on the decision policy; full suite 337 green.
-  **Remaining:** wire it as the operator loop's final cycle after `operator_commit` so the
-  live loop self-applies; the live re-exec itself is a self-modifying action gated behind
-  explicit operator authorization.
+  Runnable safety gate `--self-rebuild-check` (alias `--verify-rebuild`) rebuilds the committed
+  tree release-clean WITHOUT re-exec — the mandatory precondition before any hot-reload, and
+  self-contained/verifiable (demonstrated live: OK, exit 0). It caught a real manifest-dir bug
+  (git root ≠ crate dir); `hot_reload::manifest_dir()` now resolves the layout from the running
+  binary's path.
+  **Remaining:** wire it as the operator loop's post-`operator_commit` step so the live loop
+  self-applies. That live re-exec is a self-modifying autonomous action — gated behind explicit
+  operator authorization (the auto-classifier blocks it until then).
 - ☐ **Swarm file-conflict handling** (MEDIUM). jcode's swarm-core gives agents
   shared-repo access with conflict avoidance. Prof X's sub-agents (`agent.delegate`)
   have no scope arbitration — add scope-locks so parallel sub-agents can't clobber.
