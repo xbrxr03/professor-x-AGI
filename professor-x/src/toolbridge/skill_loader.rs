@@ -103,6 +103,106 @@ pub fn load_tier2(skill_md_path: &Path) -> Result<String> {
     Ok(std::fs::read_to_string(skill_md_path)?)
 }
 
+/// One structured verification check for a skill (mirrors the artifact-truth layer).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SkillCheck {
+    pub name: String,
+    pub passed: bool,
+    pub detail: String,
+}
+
+/// The verdict that a skill is a usable first-class runtime unit (item #4).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SkillVerification {
+    pub skill: String,
+    pub path: String,
+    pub passed: bool,
+    pub checks: Vec<SkillCheck>,
+}
+
+/// Verify a skill is a well-formed runtime unit before it is trusted at runtime: a valid name, a
+/// real description, a non-trivial body (an actual procedure, not a stub), and a coherent
+/// permission scope (declared `allowed-tools`, if present, must be non-empty and well-formed).
+/// Pure over (frontmatter, content) so it is unit-testable.
+pub fn verify_skill(fm: &SkillFrontmatter, full_content: &str, path: &Path) -> SkillVerification {
+    let chk = |name: &str, passed: bool, detail: String| SkillCheck {
+        name: name.to_string(),
+        passed,
+        detail,
+    };
+    let mut checks = Vec::new();
+
+    checks.push(match validate_skill_name(&fm.name) {
+        Ok(()) => chk("name", true, fm.name.clone()),
+        Err(e) => chk("name", false, e.to_string()),
+    });
+
+    let desc_len = fm.description.trim().len();
+    checks.push(chk(
+        "description",
+        desc_len >= 12,
+        if desc_len >= 12 {
+            format!("{desc_len} chars")
+        } else {
+            "description missing or too short (need >=12 chars)".to_string()
+        },
+    ));
+
+    let body_len = skill_body(full_content).trim().len();
+    checks.push(chk(
+        "body",
+        body_len >= 40,
+        if body_len >= 40 {
+            format!("{body_len} chars of procedure")
+        } else {
+            "body missing or too short (need >=40 chars) — not a usable runtime unit".to_string()
+        },
+    ));
+
+    let scope = match &fm.allowed_tools {
+        None => chk(
+            "permission_scope",
+            true,
+            "no allowed-tools declared (inherits default scope)".to_string(),
+        ),
+        Some(tools) if tools.is_empty() => chk(
+            "permission_scope",
+            false,
+            "allowed-tools declared but empty".to_string(),
+        ),
+        Some(tools) if tools.iter().any(|t| t.trim().is_empty()) => chk(
+            "permission_scope",
+            false,
+            "allowed-tools contains empty entries".to_string(),
+        ),
+        Some(tools) => chk(
+            "permission_scope",
+            true,
+            format!("{} tool(s) granted", tools.len()),
+        ),
+    };
+    checks.push(scope);
+
+    let passed = checks.iter().all(|c| c.passed);
+    SkillVerification {
+        skill: fm.name.clone(),
+        path: path.display().to_string(),
+        passed,
+        checks,
+    }
+}
+
+/// Body = the content after the closing frontmatter `---`.
+fn skill_body(content: &str) -> &str {
+    let trimmed = content.trim_start();
+    if trimmed.starts_with("---") {
+        if let Some(end) = trimmed[3..].find("\n---") {
+            return &trimmed[3 + end + 4..];
+        }
+    }
+    content
+}
+
 /// Scan a skills directory and return all valid Tier 1 frontmatters.
 pub fn scan_skills_dir(skills_dir: &Path) -> Vec<(SkillFrontmatter, std::path::PathBuf)> {
     let mut results = Vec::new();
@@ -220,6 +320,25 @@ fn extract_non_status_line(content: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verify_skill_accepts_a_well_formed_runtime_unit() {
+        let content = "---\nname: px-good-skill\ndescription: Recover cleanly from a failed tool call\nallowed-tools:\n  - fs.read\n  - shell.restricted\n---\n\nWhen a tool fails: inspect the observation, validate outputs, choose one bounded retry, recover.\n";
+        let fm = parse_frontmatter(content).unwrap();
+        let v = verify_skill(&fm, content, Path::new("px-good-skill/SKILL.md"));
+        assert!(v.passed, "well-formed skill should verify: {:?}", v.checks);
+    }
+
+    #[test]
+    fn verify_skill_rejects_stub_body_and_empty_scope() {
+        // Real frontmatter but an empty body and an empty allowed-tools list = not a runtime unit.
+        let content = "---\nname: px-stub\ndescription: A reasonable description here\nallowed-tools: []\n---\n";
+        let fm = parse_frontmatter(content).unwrap();
+        let v = verify_skill(&fm, content, Path::new("px-stub/SKILL.md"));
+        assert!(!v.passed);
+        assert!(v.checks.iter().any(|c| c.name == "body" && !c.passed));
+        assert!(v.checks.iter().any(|c| c.name == "permission_scope" && !c.passed));
+    }
 
     #[test]
     fn legacy_markdown_skill_loads_from_heading_and_purpose() {

@@ -150,6 +150,8 @@ struct CliArgs {
     rollback_verdict_commit: Option<String>,
     /// Rollback-safe revert: undo a bad accepted autonomous commit with a recorded git revert.
     rollback_commit: Option<String>,
+    /// Verify every skill is a well-formed first-class runtime unit; exit non-zero on any invalid.
+    verify_skills: bool,
     /// Internal: target of a hot-reload re-exec; prints the generation and exits (probe).
     self_reload_probe: bool,
     repo_fix_bench: bool,
@@ -352,6 +354,7 @@ where
         self_rebuild_check: false,
         rollback_verdict_commit: None,
         rollback_commit: None,
+        verify_skills: false,
         self_reload_probe: false,
         repo_fix_bench: false,
         evolve_on_repofix: None,
@@ -661,6 +664,10 @@ where
             "--rollback-commit" if i + 1 < args.len() => {
                 cli.rollback_commit = Some(args[i + 1].clone());
                 i += 2;
+            }
+            "--verify-skills" => {
+                cli.verify_skills = true;
+                i += 1;
             }
             "--self-reload-probe" => {
                 cli.self_reload_probe = true;
@@ -1286,6 +1293,10 @@ async fn main() -> Result<()> {
 
     if cli.proposal_dry_run_live {
         return run_evolution_proposal_dry_run_live(Arc::clone(&events)).await;
+    }
+
+    if cli.verify_skills {
+        return run_verify_skills();
     }
 
     if cli.self_reload_probe {
@@ -2726,6 +2737,45 @@ async fn run_rollback_verdict(events: Arc<EventStore>, commit: String) -> Result
         format!("accepted commit {commit} verdict: {}", verdict.status.as_str()),
         serde_json::to_value(&verdict).unwrap_or_default(),
     )?;
+    Ok(())
+}
+
+/// Verify every skill is a well-formed first-class runtime unit (item #4). Scans the skills dir,
+/// runs the structural verifier on each, prints a per-skill verdict, and exits non-zero if any
+/// skill is invalid — so a malformed/stub skill can't silently enter the runtime.
+fn run_verify_skills() -> Result<()> {
+    let skills_dir = ["skills", "professor-x/skills"]
+        .iter()
+        .map(PathBuf::from)
+        .find(|p| p.exists())
+        .unwrap_or_else(|| default_repo_root().join("professor-x/skills"));
+    let skills = toolbridge::skill_loader::scan_skills_dir(&skills_dir);
+    if skills.is_empty() {
+        println!("verify-skills: no skills found under {}", skills_dir.display());
+        return Ok(());
+    }
+    let mut failed = 0usize;
+    for (fm, path) in &skills {
+        let content = std::fs::read_to_string(path).unwrap_or_default();
+        let v = toolbridge::skill_loader::verify_skill(fm, &content, path);
+        if v.passed {
+            println!("  ok    {}", v.skill);
+        } else {
+            failed += 1;
+            let reasons = v
+                .checks
+                .iter()
+                .filter(|c| !c.passed)
+                .map(|c| format!("{}: {}", c.name, c.detail))
+                .collect::<Vec<_>>()
+                .join("; ");
+            println!("  FAIL  {} — {reasons}", v.skill);
+        }
+    }
+    println!("verify-skills: {}/{} valid", skills.len() - failed, skills.len());
+    if failed > 0 {
+        anyhow::bail!("{failed} skill(s) failed verification");
+    }
     Ok(())
 }
 
