@@ -29,7 +29,10 @@ use tokio_util::sync::CancellationToken;
 use crate::agentd::graph::{TaskNode, TaskType};
 use crate::agentd::react::ReactLoop;
 use crate::memd::autonomy_queue::{AutonomyQueueItem, AutonomyQueueStore};
-use crate::memd::coding_sessions::{CodingSessionRecord, CodingSessionStore};
+use crate::memd::coding_sessions::{
+    display_status as coding_session_display_status, stale_candidate, CodingSessionRecord,
+    CodingSessionStaleCandidate, CodingSessionStore,
+};
 use crate::memd::coding_smoke::{CodingSmokeRecord, CodingSmokeStore};
 use crate::memd::events::EventStore;
 use crate::memd::task_runs::{TaskRun, TaskRunStore};
@@ -164,6 +167,11 @@ fn status_payload(st: &AppState) -> Result<serde_json::Value> {
         .unwrap_or_default();
     let queue = AutonomyQueueStore::new(Arc::clone(&st.memory.db)).recent(5)?;
     let latest_session = CodingSessionStore::new(Arc::clone(&st.memory.db)).latest()?;
+    let latest_session_stale = latest_session
+        .as_ref()
+        .map(|session| stale_candidate(&st.events, session, chrono::Utc::now()))
+        .transpose()?
+        .flatten();
     let latest_smoke = CodingSmokeStore::new(Arc::clone(&st.memory.db)).latest()?;
     let work_events = st.events.work_tail(24)?;
 
@@ -179,7 +187,9 @@ fn status_payload(st: &AppState) -> Result<serde_json::Value> {
         "active_gate": latest_gate.as_ref().map(gate_json),
         "gate_ledger": gates.iter().map(gate_json).collect::<Vec<_>>(),
         "queue": queue.iter().map(queue_json).collect::<Vec<_>>(),
-        "latest_coding_session": latest_session.as_ref().map(coding_session_json),
+        "latest_coding_session": latest_session
+            .as_ref()
+            .map(|session| coding_session_json(session, latest_session_stale.as_ref())),
         "latest_coding_smoke": latest_smoke.as_ref().map(coding_smoke_json),
         "work_events": work_events.iter().map(|event| json!({
             "id": event.id,
@@ -191,6 +201,7 @@ fn status_payload(st: &AppState) -> Result<serde_json::Value> {
             "cargo run -- --tui",
             "cargo run -- --cockpit",
             "cargo run -- --status-json",
+            "cargo run -- --repair-coding-sessions 10",
             "cargo run -- --prof-x-step-live 1",
             "cargo run -- --prof-x-live-publish 6"
         ],
@@ -298,12 +309,20 @@ fn queue_json(item: &AutonomyQueueItem) -> serde_json::Value {
     })
 }
 
-fn coding_session_json(session: &CodingSessionRecord) -> serde_json::Value {
+fn coding_session_json(
+    session: &CodingSessionRecord,
+    stale: Option<&CodingSessionStaleCandidate>,
+) -> serde_json::Value {
     json!({
         "id": session.id,
         "short_id": short_id(&session.id),
         "goal": session.goal,
-        "status": session.status,
+        "status": coding_session_display_status(session, stale),
+        "stored_status": session.status,
+        "stale": stale.is_some(),
+        "stale_reason": stale.as_ref().map(|candidate| candidate.reason.as_str()),
+        "stale_last_activity_at": stale.as_ref().map(|candidate| candidate.last_activity_at.to_rfc3339()),
+        "stale_idle_minutes": stale.as_ref().map(|candidate| candidate.idle_minutes),
         "workspace": session.workspace,
         "checks": session.checks,
         "artifacts": session.artifacts,
@@ -312,6 +331,7 @@ fn coding_session_json(session: &CodingSessionRecord) -> serde_json::Value {
         "transcript_path": session.transcript_path,
         "failure_reason": session.failure_reason,
         "generated_at": session.generated_at.to_rfc3339(),
+        "repair_command": stale.as_ref().map(|_| "cargo run -- --repair-coding-sessions 10"),
     })
 }
 

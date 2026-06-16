@@ -14,7 +14,7 @@ mod tui;
 mod util;
 
 use anyhow::{Context, Result};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -38,7 +38,10 @@ use evolved::CognitionStore;
 use evolved::{EvolvedLoop, HiroRunner};
 use failure::{classify_failure_mode, normalize_failure_mode, FailureClass};
 use memd::autonomy_queue::{autonomy_queue_brief, AutonomyQueueItem, AutonomyQueueStore};
-use memd::coding_sessions::{CodingSessionRecord, CodingSessionStore};
+use memd::coding_sessions::{
+    display_status as coding_session_display_status, stale_candidate, CodingSessionRecord,
+    CodingSessionStaleCandidate, CodingSessionStore,
+};
 use memd::coding_smoke::{CodingSmokeRecord, CodingSmokeStore};
 use memd::events::EventStore;
 use memd::pinned::PinnedEntry;
@@ -166,6 +169,8 @@ struct CliArgs {
     skill_patch_commit_live_goal: Option<String>,
     /// Print the last N coding-agent sessions and exit.
     coding_sessions_limit: Option<usize>,
+    /// Reconcile stale coding-agent sessions that never wrote a terminal report.
+    repair_coding_sessions_limit: Option<usize>,
     /// Review one coding-agent session by id prefix, or 'latest'.
     coding_session_review: Option<String>,
     /// Publish one coding-agent session evidence bundle by id prefix, or 'latest'.
@@ -349,6 +354,7 @@ where
         skill_patch_live_goal: None,
         skill_patch_commit_live_goal: None,
         coding_sessions_limit: None,
+        repair_coding_sessions_limit: None,
         coding_session_review: None,
         coding_session_publish: None,
         supervised_loop_cycles: None,
@@ -704,6 +710,14 @@ where
                 cli.coding_sessions_limit = Some(limit.unwrap_or(10));
                 i += if limit.is_some() { 2 } else { 1 };
             }
+            "--repair-coding-sessions" | "--prof-x-code-repair" => {
+                let limit = args
+                    .get(i + 1)
+                    .filter(|next| !next.starts_with("--"))
+                    .and_then(|next| next.parse::<usize>().ok());
+                cli.repair_coding_sessions_limit = Some(limit.unwrap_or(10));
+                i += if limit.is_some() { 2 } else { 1 };
+            }
             "--coding-session-review" | "--prof-x-code-review" | "--session-review" => {
                 let value = args
                     .get(i + 1)
@@ -967,6 +981,7 @@ async fn main() -> Result<()> {
         || cli.transcripts_limit.is_some()
         || cli.task_runs_limit.is_some()
         || cli.coding_sessions_limit.is_some()
+        || cli.repair_coding_sessions_limit.is_some()
         || cli.coding_session_review.is_some()
         || cli.autonomy_queue_limit.is_some()
         || cli.autonomy_enqueue_goal.is_some()
@@ -1056,6 +1071,10 @@ async fn main() -> Result<()> {
 
     if let Some(limit) = cli.coding_sessions_limit {
         return print_coding_sessions(Arc::clone(&memory), limit);
+    }
+
+    if let Some(limit) = cli.repair_coding_sessions_limit {
+        return repair_stale_coding_sessions(Arc::clone(&memory), Arc::clone(&events), limit);
     }
 
     if let Some(session_ref) = cli.coding_session_review {
@@ -10013,6 +10032,7 @@ fn format_operator_help() -> String {
         "Give him a bounded coding-agent task",
         "  cargo run -- --prof-x-code-live \"update one safe local fixture\"",
         "  cargo run -- --coding-sessions 5",
+        "  cargo run -- --repair-coding-sessions 10",
         "  cargo run -- --prof-x-code-review latest",
         "  cargo run -- --prof-x-code-publish latest",
         "",
@@ -10107,18 +10127,132 @@ fn print_task_runs(memory: Arc<MemoryManager>, limit: usize) -> Result<()> {
     Ok(())
 }
 
+fn stale_coding_session_map(
+    events: &EventStore,
+    sessions: &[CodingSessionRecord],
+) -> Result<HashMap<String, CodingSessionStaleCandidate>> {
+    let mut stale = HashMap::new();
+    let now = chrono::Utc::now();
+    for session in sessions {
+        if let Some(candidate) = stale_candidate(events, session, now)? {
+            stale.insert(session.id.clone(), candidate);
+        }
+    }
+    Ok(stale)
+}
+
+fn coding_session_repair_command(limit: usize) -> String {
+    format!("cargo run -- --repair-coding-sessions {limit}")
+}
+
+fn repair_stale_coding_sessions(
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    limit: usize,
+) -> Result<()> {
+    let sessions = CodingSessionStore::new(Arc::clone(&memory.db)).running(limit.max(1))?;
+    let stale = stale_coding_session_map(&events, &sessions)?;
+    if stale.is_empty() {
+        println!("No stale coding sessions required repair.");
+        return Ok(());
+    }
+
+    let mut repaired = Vec::new();
+    for session in sessions {
+        let Some(candidate) = stale.get(&session.id) else {
+            continue;
+        };
+        let (report_path, evidence_path) = repair_stale_coding_session(
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            &session,
+            candidate,
+        )?;
+        repaired.push((session, candidate.clone(), report_path, evidence_path));
+    }
+
+    println!("Repaired {} stale coding session(s)", repaired.len());
+    for (session, candidate, report_path, evidence_path) in repaired {
+        println!(
+            "  {} repaired after {} minute(s) idle and {} later process starts",
+            short_fragment(&session.id),
+            candidate.idle_minutes,
+            candidate.newer_process_starts
+        );
+        println!("    report: {}", report_path.display());
+        println!("    evidence: {}", evidence_path.display());
+    }
+    Ok(())
+}
+
+fn repair_stale_coding_session(
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    session: &CodingSessionRecord,
+    candidate: &CodingSessionStaleCandidate,
+) -> Result<(PathBuf, PathBuf)> {
+    let mut checks = session.checks.clone();
+    checks.push(format!(
+        "stale-session repair after {} later daemon starts",
+        candidate.newer_process_starts
+    ));
+    let mut step_outcomes = session.step_outcomes.clone();
+    step_outcomes.push(format!(
+        "stale session reconciled after {} minute(s) idle",
+        candidate.idle_minutes
+    ));
+    let mut artifacts = session.artifacts.clone();
+    artifacts.sort();
+    artifacts.dedup();
+    let mut report = CodingSessionReport {
+        id: session.id.clone(),
+        generated_at: session.generated_at.to_rfc3339(),
+        goal: session.goal.clone(),
+        requested_goal: session.goal.clone(),
+        exercise: session.exercise.clone(),
+        status: "failed".to_string(),
+        workspace: session.workspace.clone(),
+        smoke_id: session.smoke_id,
+        smoke_report_path: session.smoke_report_path.clone(),
+        session_report_path: None,
+        transcript_path: session.transcript_path.clone(),
+        checks,
+        plan_steps: session.plan_steps.clone(),
+        step_outcomes,
+        artifacts,
+        failure_reason: Some(format!(
+            "stale coding session recovered: {}",
+            candidate.reason
+        )),
+    };
+    let event_session_id =
+        uuid::Uuid::parse_str(&session.id).unwrap_or_else(|_| uuid::Uuid::new_v4());
+    persist_coding_session_terminal_report(
+        memory,
+        events,
+        event_session_id,
+        session.generated_at,
+        &mut report,
+        "repaired stale coding-session evidence written to",
+        "repaired stale coding-session report written to",
+    )
+}
+
 fn print_coding_sessions(memory: Arc<MemoryManager>, limit: usize) -> Result<()> {
     let sessions = CodingSessionStore::new(Arc::clone(&memory.db)).recent(limit)?;
     if sessions.is_empty() {
         println!("No coding sessions recorded yet.");
         return Ok(());
     }
+    let events = EventStore::new(Arc::clone(&memory.db));
+    let stale = stale_coding_session_map(&events, &sessions)?;
     println!("Recent coding sessions");
     for session in sessions {
+        let stale_candidate = stale.get(&session.id);
         println!(
             "{} {} session={} exercise={} smoke={} checks={} artifacts={}{} {}",
             session.generated_at.format("%Y-%m-%d %H:%M:%S"),
-            session.status,
+            coding_session_display_status(&session, stale_candidate),
             &session.id[..8.min(session.id.len())],
             session.exercise,
             session
@@ -10133,6 +10267,10 @@ fn print_coding_sessions(memory: Arc<MemoryManager>, limit: usize) -> Result<()>
             truncate(&session.goal, 90),
         );
         println!("  report: {}", session.session_report_path);
+        if let Some(candidate) = stale_candidate {
+            println!("  stale: {}", truncate(&candidate.reason, 160));
+            println!("  repair: {}", coding_session_repair_command(limit.max(1)));
+        }
         if !session.checks.is_empty() {
             println!("  checks: {}", session.checks.join(", "));
         }
@@ -10161,10 +10299,15 @@ fn print_coding_session_review(memory: Arc<MemoryManager>, session_ref: &str) ->
         println!("No coding session found for '{session_ref}'.");
         return Ok(());
     };
+    let events = EventStore::new(Arc::clone(&memory.db));
+    let stale_candidate = stale_candidate(&events, &session, chrono::Utc::now())?;
     let repo_root = default_repo_root();
     println!("Professor X coding session review");
     println!("  session: {}", session.id);
-    println!("  status: {}", session.status);
+    println!(
+        "  status: {}",
+        coding_session_display_status(&session, stale_candidate.as_ref())
+    );
     println!("  exercise: {}", session.exercise);
     println!("  generated: {}", session.generated_at.to_rfc3339());
     println!("  goal: {}", session.goal);
@@ -10190,6 +10333,9 @@ fn print_coding_session_review(memory: Arc<MemoryManager>, session_ref: &str) ->
     }
     if let Some(reason) = &session.failure_reason {
         println!("  failure: {}", truncate(reason, 180));
+    }
+    if let Some(candidate) = &stale_candidate {
+        println!("  stale: {}", truncate(&candidate.reason, 180));
     }
 
     println!("Plan");
@@ -10229,7 +10375,14 @@ fn print_coding_session_review(memory: Arc<MemoryManager>, session_ref: &str) ->
     }
 
     println!("Publish readiness");
-    print_coding_session_publish_readiness(&repo_root, &session)?;
+    if stale_candidate.is_some() {
+        println!(
+            "  blocked: repair the stale session first with {}",
+            coding_session_repair_command(10)
+        );
+    } else {
+        print_coding_session_publish_readiness(&repo_root, &session)?;
+    }
 
     println!("Commands");
     println!(
@@ -10248,6 +10401,9 @@ fn print_coding_session_review(memory: Arc<MemoryManager>, session_ref: &str) ->
         "  publish evidence: cargo run -- --prof-x-code-publish {}",
         short_fragment(&session.id)
     );
+    if stale_candidate.is_some() {
+        println!("  repair stale row: cargo run -- --prof-x-code-repair 10");
+    }
     println!("  watch: cargo run -- --observe-work");
     Ok(())
 }
@@ -12319,6 +12475,11 @@ fn render_work_status_json(
     let latest_task_run = TaskRunStore::new(Arc::clone(&memory.db)).latest()?;
     let latest_run = WorkLoopRunStore::new(Arc::clone(&memory.db)).latest()?;
     let latest_coding_session = CodingSessionStore::new(Arc::clone(&memory.db)).latest()?;
+    let latest_coding_session_stale = latest_coding_session
+        .as_ref()
+        .map(|session| stale_candidate(&events, session, chrono::Utc::now()))
+        .transpose()?
+        .flatten();
     let latest_coding_smoke = CodingSmokeStore::new(Arc::clone(&memory.db)).latest()?;
     let recent_queue = AutonomyQueueStore::new(Arc::clone(&memory.db)).recent(5)?;
     let runtime_line = cockpit_runtime_line(&repo_root);
@@ -12339,6 +12500,7 @@ fn render_work_status_json(
         latest_task_run.as_ref(),
         latest_run.as_ref(),
         latest_coding_session.as_ref(),
+        latest_coding_session_stale.as_ref(),
         latest_coding_smoke.as_ref(),
         latest_gate.as_ref(),
         &recent_gates,
@@ -12389,6 +12551,7 @@ fn format_work_status_json(
     latest_task_run: Option<&TaskRun>,
     latest_run: Option<&WorkLoopRunRecord>,
     latest_coding_session: Option<&CodingSessionRecord>,
+    latest_coding_session_stale: Option<&CodingSessionStaleCandidate>,
     latest_coding_smoke: Option<&CodingSmokeRecord>,
     latest_gate: Option<&WorkLoopGateRecord>,
     recent_gates: &[WorkLoopGateRecord],
@@ -12412,13 +12575,15 @@ fn format_work_status_json(
         "active_gate": latest_gate.map(work_status_gate_json),
         "gate_ledger": recent_gates.iter().take(8).map(work_status_gate_json).collect::<Vec<_>>(),
         "autonomous_queue": recent_queue.iter().take(5).map(work_status_queue_json).collect::<Vec<_>>(),
-        "latest_coding_session": latest_coding_session.map(work_status_coding_session_json),
+        "latest_coding_session": latest_coding_session
+            .map(|session| work_status_coding_session_json(session, latest_coding_session_stale)),
         "latest_coding_smoke": latest_coding_smoke.map(work_status_coding_smoke_json),
         "recent_events": recent_events.iter().map(work_status_event_json).collect::<Vec<_>>(),
         "commands": [
             "cargo run -- --status-json",
             "cargo run -- --cockpit",
             "cargo run -- --observe-work",
+            "cargo run -- --repair-coding-sessions 10",
             "cargo run -- --prof-x-live-publish 6",
             "cargo run -- --replay latest",
             "cargo run -- --run-review latest"
@@ -12525,14 +12690,23 @@ fn work_status_queue_json(item: &AutonomyQueueItem) -> serde_json::Value {
     })
 }
 
-fn work_status_coding_session_json(session: &CodingSessionRecord) -> serde_json::Value {
+fn work_status_coding_session_json(
+    session: &CodingSessionRecord,
+    stale: Option<&CodingSessionStaleCandidate>,
+) -> serde_json::Value {
     serde_json::json!({
         "id": session.id,
         "short_id": short_fragment(&session.id),
         "generated_at": session.generated_at.to_rfc3339(),
         "goal": session.goal,
         "exercise": session.exercise,
-        "status": session.status,
+        "status": coding_session_display_status(session, stale),
+        "stored_status": session.status,
+        "stale": stale.is_some(),
+        "stale_reason": stale.as_ref().map(|candidate| candidate.reason.as_str()),
+        "stale_last_activity_at": stale.as_ref().map(|candidate| candidate.last_activity_at.to_rfc3339()),
+        "stale_idle_minutes": stale.as_ref().map(|candidate| candidate.idle_minutes),
+        "stale_newer_process_starts": stale.as_ref().map(|candidate| candidate.newer_process_starts),
         "workspace": session.workspace,
         "commit": coding_session_commit_hint(session),
         "checks": session.checks,
@@ -12542,6 +12716,7 @@ fn work_status_coding_session_json(session: &CodingSessionRecord) -> serde_json:
         "transcript_path": session.transcript_path,
         "last_outcome": session.step_outcomes.last(),
         "failure_reason": session.failure_reason,
+        "repair_command": stale.as_ref().map(|_| coding_session_repair_command(10)),
     })
 }
 
@@ -13850,6 +14025,7 @@ mod tests {
         assert!(help.contains("--task-evidence latest"));
         assert!(help.contains("--inspect latest"));
         assert!(help.contains("--prof-x-code-live"));
+        assert!(help.contains("--repair-coding-sessions 10"));
         assert!(help.contains("--prof-x-code-review latest"));
         assert!(help.contains("--prof-x-code-publish latest"));
         assert!(help.contains("--prof-x-skill-live"));
@@ -13875,6 +14051,14 @@ mod tests {
     fn status_json_flag_is_inspect_only() {
         let cli = parse_args_from(["professor-x", "--prof-x-status-json"]);
         assert!(cli.status_json);
+        assert!(!cli.run_now);
+        assert!(!cli.lab);
+    }
+
+    #[test]
+    fn repair_coding_sessions_flag_is_inspect_only() {
+        let cli = parse_args_from(["professor-x", "--repair-coding-sessions", "7"]);
+        assert_eq!(cli.repair_coding_sessions_limit, Some(7));
         assert!(!cli.run_now);
         assert!(!cli.lab);
     }
@@ -14431,6 +14615,106 @@ mod tests {
         assert!(work
             .iter()
             .any(|event| event.event_type == "coding.session.evidence_written"));
+        assert!(work
+            .iter()
+            .any(|event| event.event_type == "coding.session.failed"));
+
+        if let Some(previous) = previous_report_dir {
+            std::env::set_var("PROFESSOR_X_CODING_SESSION_REPORT_DIR", previous);
+        } else {
+            std::env::remove_var("PROFESSOR_X_CODING_SESSION_REPORT_DIR");
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn repair_stale_coding_sessions_reconciles_old_running_rows() {
+        let root = std::env::temp_dir().join(format!("px-session-repair-{}", uuid::Uuid::new_v4()));
+        let report_dir = root.join("reports");
+        let data_dir = root.join("data");
+        let previous_report_dir = std::env::var("PROFESSOR_X_CODING_SESSION_REPORT_DIR").ok();
+        std::fs::create_dir_all(&report_dir).unwrap();
+        std::env::set_var("PROFESSOR_X_CODING_SESSION_REPORT_DIR", &report_dir);
+
+        let memory = Arc::new(MemoryManager::open(&data_dir).unwrap());
+        let events = Arc::new(EventStore::new(Arc::clone(&memory.db)));
+        let session_id = uuid::Uuid::new_v4();
+        let generated_at = chrono::Utc::now() - chrono::Duration::minutes(90);
+
+        CodingSessionStore::new(Arc::clone(&memory.db))
+            .insert(&CodingSessionRecord {
+                id: session_id.to_string(),
+                generated_at,
+                goal: "repair stale row".to_string(),
+                exercise: "repo_patch_apply_commit".to_string(),
+                status: "running".to_string(),
+                workspace: Some("repo-root verified apply commit".to_string()),
+                smoke_id: None,
+                smoke_report_path: None,
+                session_report_path: "pending".to_string(),
+                transcript_path: None,
+                artifacts: vec!["/tmp/example.diff".to_string()],
+                checks: Vec::new(),
+                plan_steps: vec!["Verify patch".to_string()],
+                step_outcomes: Vec::new(),
+                failure_reason: None,
+                recorded_at: generated_at,
+            })
+            .unwrap();
+        memory
+            .db
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO agent_events
+                 (timestamp, session_id, task_id, event_type, summary, payload)
+                 VALUES (?1, NULL, NULL, ?2, ?3, ?4)",
+                rusqlite::params![
+                    generated_at.to_rfc3339(),
+                    "coding.session.started",
+                    "starting repo patch commit coding-agent session",
+                    serde_json::json!({
+                        "session_id": session_id.to_string(),
+                        "mode": "repo_patch_apply_commit",
+                    })
+                    .to_string(),
+                ],
+            )
+            .unwrap();
+        events
+            .append(
+                None,
+                None,
+                "daemon.started",
+                "Professor X process started",
+                serde_json::json!({}),
+            )
+            .unwrap();
+        events
+            .append(
+                None,
+                None,
+                "daemon.started",
+                "Professor X process started",
+                serde_json::json!({}),
+            )
+            .unwrap();
+
+        repair_stale_coding_sessions(Arc::clone(&memory), Arc::clone(&events), 10).unwrap();
+
+        let stored = CodingSessionStore::new(Arc::clone(&memory.db))
+            .get_by_ref(&session_id.to_string())
+            .unwrap()
+            .unwrap();
+        let work = events.work_tail(8).unwrap();
+        assert_eq!(stored.status, "failed");
+        assert_ne!(stored.session_report_path, "pending");
+        assert!(std::path::Path::new(&stored.session_report_path).exists());
+        assert!(stored
+            .failure_reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("stale coding session recovered"));
         assert!(work
             .iter()
             .any(|event| event.event_type == "coding.session.failed"));
@@ -15813,6 +16097,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             &[],
             std::slice::from_ref(&queued),
         );
@@ -15847,6 +16132,53 @@ mod tests {
             .unwrap()
             .iter()
             .any(|cmd| { cmd.as_str().unwrap().contains("cargo run -- --status-json") }));
+        assert!(value["commands"].as_array().unwrap().iter().any(|cmd| {
+            cmd.as_str()
+                .unwrap()
+                .contains("cargo run -- --repair-coding-sessions 10")
+        }));
+    }
+
+    #[test]
+    fn work_status_coding_session_json_marks_stale_sessions() {
+        let now = chrono::Utc::now();
+        let session = CodingSessionRecord {
+            id: "12345678-aaaa-bbbb-cccc-123456789abc".to_string(),
+            generated_at: now,
+            goal: "repair stale row".to_string(),
+            exercise: "repo_patch_apply_commit".to_string(),
+            status: "running".to_string(),
+            workspace: Some("repo-root".to_string()),
+            smoke_id: None,
+            smoke_report_path: None,
+            session_report_path: "pending".to_string(),
+            transcript_path: None,
+            artifacts: Vec::new(),
+            checks: Vec::new(),
+            plan_steps: Vec::new(),
+            step_outcomes: Vec::new(),
+            failure_reason: None,
+            recorded_at: now,
+        };
+        let stale = CodingSessionStaleCandidate {
+            session_id: session.id.clone(),
+            last_activity_at: now,
+            idle_minutes: 91,
+            newer_process_starts: 3,
+            reason: "3 later Professor X process starts were recorded".to_string(),
+        };
+
+        let value = work_status_coding_session_json(&session, Some(&stale));
+
+        assert_eq!(value["status"], "stale");
+        assert_eq!(value["stored_status"], "running");
+        assert_eq!(value["stale"], true);
+        assert_eq!(value["stale_idle_minutes"], 91);
+        assert_eq!(value["stale_newer_process_starts"], 3);
+        assert!(value["repair_command"]
+            .as_str()
+            .unwrap()
+            .contains("--repair-coding-sessions 10"));
     }
 
     #[test]

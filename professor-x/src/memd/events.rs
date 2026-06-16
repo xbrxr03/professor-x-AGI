@@ -157,6 +157,38 @@ impl EventStore {
         }
     }
 
+    pub fn latest_for_session(&self, session_ref: &str) -> Result<Option<AgentEvent>> {
+        let db = self.db.lock().unwrap();
+        let mut stmt = db.prepare(
+            "SELECT id, timestamp, session_id, task_id, event_type, summary, payload
+             FROM agent_events
+             WHERE session_id = ?1 OR payload LIKE ?2
+             ORDER BY id DESC
+             LIMIT 1",
+        )?;
+        let payload_fragment = format!("%\"session_id\":\"{session_ref}\"%");
+        let mut rows = stmt.query_map(params![session_ref, payload_fragment], parse_event)?;
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn count_type_after_timestamp(
+        &self,
+        event_type: &str,
+        timestamp: DateTime<Utc>,
+    ) -> Result<i64> {
+        let db = self.db.lock().unwrap();
+        Ok(db.query_row(
+            "SELECT COUNT(*)
+             FROM agent_events
+             WHERE event_type = ?1 AND timestamp > ?2",
+            params![event_type, timestamp.to_rfc3339()],
+            |row| row.get(0),
+        )?)
+    }
+
     pub fn for_task(&self, task_id: Uuid, limit: usize) -> Result<Vec<AgentEvent>> {
         let limit = limit.clamp(1, 2000) as i64;
         let db = self.db.lock().unwrap();
@@ -333,6 +365,102 @@ mod tests {
                 .unwrap()
                 .payload["profile"],
             "core"
+        );
+    }
+
+    #[test]
+    fn latest_for_session_matches_payload_session_id() {
+        let db = Arc::new(Mutex::new(Connection::open_in_memory().unwrap()));
+        db.lock()
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE agent_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    session_id TEXT,
+                    task_id TEXT,
+                    event_type TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    payload TEXT NOT NULL DEFAULT '{}'
+                );",
+            )
+            .unwrap();
+        let store = EventStore::new(db);
+
+        store
+            .append(
+                None,
+                None,
+                "coding.session.started",
+                "started coding session",
+                serde_json::json!({
+                    "session_id": "session-123",
+                    "mode": "repo_patch_verify",
+                }),
+            )
+            .unwrap();
+
+        let event = store.latest_for_session("session-123").unwrap().unwrap();
+        assert_eq!(event.event_type, "coding.session.started");
+        assert_eq!(event.payload["mode"], "repo_patch_verify");
+    }
+
+    #[test]
+    fn count_type_after_timestamp_counts_newer_rows() {
+        let db = Arc::new(Mutex::new(Connection::open_in_memory().unwrap()));
+        db.lock()
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE agent_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    session_id TEXT,
+                    task_id TEXT,
+                    event_type TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    payload TEXT NOT NULL DEFAULT '{}'
+                );",
+            )
+            .unwrap();
+        let store = EventStore::new(db);
+        store
+            .append(
+                None,
+                None,
+                "daemon.started",
+                "start 1",
+                serde_json::json!({}),
+            )
+            .unwrap();
+        let pivot = Utc::now();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        store
+            .append(
+                None,
+                None,
+                "daemon.started",
+                "start 2",
+                serde_json::json!({}),
+            )
+            .unwrap();
+        store
+            .append(None, None, "tool.started", "tool", serde_json::json!({}))
+            .unwrap();
+        store
+            .append(
+                None,
+                None,
+                "daemon.started",
+                "start 3",
+                serde_json::json!({}),
+            )
+            .unwrap();
+
+        assert_eq!(
+            store
+                .count_type_after_timestamp("daemon.started", pivot)
+                .unwrap(),
+            2
         );
     }
 }
