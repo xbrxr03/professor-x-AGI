@@ -67,22 +67,53 @@ fi
 ollama create professor-x-distilled -f Modelfile || { echo "STOP: ollama create failed"; exit 1; }
 cd ..
 
-# 6. ICS-GATE: keep the distilled model ONLY if it measurably beats baseline (ungameable bench).
-echo "== [6/6] ICS-GATE: distilled vs baseline on repo-fix =="
+# 6. ICS-GATE: keep the distilled model ONLY if its MEAN repo-fix pass@1 (over K passes) beats
+#    baseline by > MDE. Multi-pass averaging guards against the single-measurement noise tail that
+#    produced an earlier false "rise" (the retracted M4 mirage). Writes a durable before/after
+#    artifact and cross-checks the post-reboot baseline against the pinned pre-reboot baseline.
+echo "== [6/6] ICS-GATE: distilled vs baseline on repo-fix (K-pass mean) =="
+GATE_PASSES="${GATE_PASSES:-3}"
 get() { PROFESSOR_X_DATA_DIR="$HOME/.professor-x" ./target/release/professor-x \
         --repo-fix-bench --model "$1" 2>/dev/null | grep -oP 'pass@1 = \K[0-9.]+' | head -1; }
-BASE=$(get qwen3:8b-q4_K_M)
-DIST=$(get professor-x-distilled)
-echo "  baseline (qwen3:8b) = ${BASE:-?}   distilled = ${DIST:-?}"
-python3 - "$BASE" "$DIST" <<'PY'
-import sys
-b = float(sys.argv[1] or 0); d = float(sys.argv[2] or 0)
+mean() {  # model -> mean pass@1 over GATE_PASSES (samples echoed to stderr)
+  local model="$1" sum=0 n=0 v s=""
+  for k in $(seq 1 "$GATE_PASSES"); do
+    v=$(get "$model"); [ -n "$v" ] || continue
+    sum=$(python3 -c "print($sum+$v)"); n=$((n+1)); s="$s $v"
+  done
+  echo "    $model:$s" >&2
+  [ "$n" -gt 0 ] && python3 -c "print(f'{$sum/$n:.4f}')" || echo ""
+}
+echo "  measuring baseline mean ($GATE_PASSES passes)…"
+BASE=$(mean qwen3:8b-q4_K_M)
+echo "  measuring distilled mean ($GATE_PASSES passes)…"
+DIST=$(mean professor-x-distilled)
+echo "  baseline mean = ${BASE:-?}   distilled mean = ${DIST:-?}   (K=$GATE_PASSES each)"
+
+# Cross-check the post-reboot baseline against the number pinned BEFORE the reboot.
+if [ -f distill/baseline_prereboot.txt ]; then
+  PIN=$(cat distill/baseline_prereboot.txt)
+  echo "  pinned pre-reboot baseline = $PIN (sanity cross-check)"
+fi
+
+REPORT="artifacts/distill/$(date +%Y-%m-%d)/before-after-$(date +%H%M%S).json"
+mkdir -p "$(dirname "$REPORT")"
+python3 - "${BASE:-}" "${DIST:-}" "$GATE_PASSES" "$REPORT" <<'PY'
+import sys, json, datetime
+b = float(sys.argv[1] or 0); d = float(sys.argv[2] or 0); k = int(sys.argv[3]); report = sys.argv[4]
 MDE = 0.05
-if d >= b + MDE:
-    print(f"  ✅ ACCEPT: distillation lifted repo-fix {b:.3f} -> {d:.3f} (>+{MDE}). The model learned.")
-    print("  Next turn: re-run this script — the floor is higher now (the flywheel).")
+accept = (b > 0 or d > 0) and d >= b + MDE
+json.dump({
+  "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+  "benchmark": "repo_fix", "passes_per_model": k, "mde": MDE,
+  "baseline_mean": round(b, 4), "distilled_mean": round(d, 4),
+  "delta": round(d - b, 4), "verdict": "accept" if accept else "reject",
+}, open(report, "w"), indent=2)
+if accept:
+    print(f"  ✅ ACCEPT: distillation lifted repo-fix {b:.3f} -> {d:.3f} (+{d-b:.3f} > MDE {MDE}). The floor rose.")
+    print("  Next turn: re-run this script — the baseline is higher now (the flywheel).")
 else:
-    print(f"  ⛔ REJECT: {b:.3f} -> {d:.3f}, no gain above noise. Keep baseline; grow the corpus")
-    print("  (more generated fixtures / curriculum) and retry. The gate refused an unproven model.")
+    print(f"  ⛔ REJECT: {b:.3f} -> {d:.3f} (+{d-b:.3f} <= MDE {MDE}). No real gain; keep baseline, grow the corpus.")
+print(f"  before/after artifact: {report}")
 PY
 echo "== flywheel turn complete. Full log: $LOG =="
