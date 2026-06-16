@@ -7052,9 +7052,23 @@ fn persist_coding_smoke_artifacts(
     task_id: uuid::Uuid,
     artifacts: &[String],
 ) -> Result<Vec<String>> {
+    // Default base "" makes `base.join("artifacts")` == "artifacts" — i.e. cwd-relative, exactly
+    // as before. Tests pass an explicit base instead of mutating the process-global cwd (which
+    // races with parallel tests).
+    persist_coding_smoke_artifacts_in(Path::new(""), workspace, task_id, artifacts)
+}
+
+fn persist_coding_smoke_artifacts_in(
+    base: &Path,
+    workspace: &Path,
+    task_id: uuid::Uuid,
+    artifacts: &[String],
+) -> Result<Vec<String>> {
     let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let task_short = short_fragment(&task_id.to_string()).to_string();
-    let dest_dir = PathBuf::from("artifacts")
+    // The returned/recorded path stays relative ("artifacts/coding-smoke/..."); `base` only
+    // decides where the bytes physically land (cwd in production, a temp dir under test).
+    let rel_dest_dir = PathBuf::from("artifacts")
         .join("coding-smoke")
         .join(date)
         .join(task_short)
@@ -7067,7 +7081,8 @@ fn persist_coding_smoke_artifacts(
             continue;
         }
         let relative = source.strip_prefix(workspace).unwrap_or(&source);
-        let destination = dest_dir.join(relative);
+        let rel_destination = rel_dest_dir.join(relative);
+        let destination = base.join(&rel_destination);
         if let Some(parent) = destination.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -7078,7 +7093,7 @@ fn persist_coding_smoke_artifacts(
                 destination.display()
             )
         })?;
-        durable.push(destination.to_string_lossy().to_string());
+        durable.push(rel_destination.to_string_lossy().to_string());
     }
     Ok(durable)
 }
@@ -14569,7 +14584,6 @@ mod tests {
 
     #[test]
     fn coding_smoke_artifacts_are_copied_into_repo_evidence() {
-        let original_cwd = std::env::current_dir().unwrap();
         let repo = std::env::temp_dir().join(format!("px-smoke-repo-{}", uuid::Uuid::new_v4()));
         let workspace =
             std::env::temp_dir().join(format!("px-smoke-workspace-{}", uuid::Uuid::new_v4()));
@@ -14588,10 +14602,12 @@ mod tests {
         std::fs::write(&command_artifact, "{}\n").unwrap();
         std::fs::write(&patch_artifact, "diff --git a/src/lib.rs b/src/lib.rs\n").unwrap();
         std::fs::create_dir_all(&repo).unwrap();
-        std::env::set_current_dir(&repo).unwrap();
 
+        // Use an explicit base dir instead of mutating the process-global cwd (which raced with
+        // parallel tests resolving cwd-relative paths — the source of the rare flake).
         let task_id = uuid::Uuid::new_v4();
-        let durable = persist_coding_smoke_artifacts(
+        let durable = persist_coding_smoke_artifacts_in(
+            &repo,
             &workspace,
             task_id,
             &[
@@ -14608,7 +14624,6 @@ mod tests {
         assert!(durable.iter().all(|path| !path.starts_with("/tmp/")));
         assert!(durable.iter().all(|path| repo.join(path).exists()));
 
-        std::env::set_current_dir(original_cwd).unwrap();
         let _ = std::fs::remove_dir_all(repo);
         let _ = std::fs::remove_dir_all(workspace);
     }
@@ -15022,8 +15037,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// Serializes tests that mutate the process-global PROFESSOR_X_CODING_SESSION_REPORT_DIR env
+    /// var so they cannot clobber each other's value when run in parallel.
+    static REPORT_DIR_ENV_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn persist_coding_session_terminal_report_replaces_pending_running_row() {
+        let _env_guard = REPORT_DIR_ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         let root =
             std::env::temp_dir().join(format!("px-session-terminal-{}", uuid::Uuid::new_v4()));
         let report_dir = root.join("reports");
@@ -15133,6 +15153,7 @@ mod tests {
 
     #[test]
     fn repair_stale_coding_sessions_reconciles_old_running_rows() {
+        let _env_guard = REPORT_DIR_ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         let root = std::env::temp_dir().join(format!("px-session-repair-{}", uuid::Uuid::new_v4()));
         let report_dir = root.join("reports");
         let data_dir = root.join("data");
