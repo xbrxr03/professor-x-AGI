@@ -908,6 +908,13 @@ impl ReactLoop {
                 "attempts": task.attempt_count,
                 "steps": task.steps.len(),
                 "failure_mode": failure_mode,
+                // Structured routing (item #3): the real failure's class, the DHE layer/lever it
+                // diagnosed, and the harness component class evolution should target — so the
+                // proposer/observer route from real outcomes without re-parsing freeform text.
+                "failure_class": failure_class.as_str(),
+                "dhe_layer": dhe.failed_layer,
+                "dhe_lever": dhe.recommended_lever,
+                "target_component_class": crate::failure::target_component_class(failure_class),
             }),
         );
 

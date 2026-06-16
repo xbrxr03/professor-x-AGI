@@ -130,6 +130,28 @@ pub fn extract_failure_class(raw: &str) -> Option<FailureClass> {
     parse_failure_class(&raw[start + "[failure:".len()..end])
 }
 
+/// The harness component class a failure should target for evolution — the structured answer to
+/// "failures directly target the right component class". Consistent with the DHE layer routing
+/// (`failure_class_to_dhe`) and the per-layer component hints in loop_runner: retrieval/reasoning
+/// failures want global guidance (SystemPrompt), context/budget failures want HarnessConfig, and
+/// tool-choice/tool-execution failures want a reusable SkillDefinition.
+pub fn target_component_class(class: FailureClass) -> &'static str {
+    match class {
+        FailureClass::Context => "HarnessConfig",
+        FailureClass::ToolSelection
+        | FailureClass::ToolExecution
+        | FailureClass::PolicyDenied => "SkillDefinition",
+        FailureClass::Retrieval
+        | FailureClass::Reasoning
+        | FailureClass::MaxSteps
+        | FailureClass::AnswerMissing
+        | FailureClass::ArtifactValidation
+        | FailureClass::Verification
+        | FailureClass::Cancelled
+        | FailureClass::Unknown => "SystemPrompt",
+    }
+}
+
 pub fn normalize_failure_mode(raw: &str) -> String {
     let trimmed = strip_failure_prefix(raw).trim();
     let class = classify_failure_mode(trimmed);
@@ -174,5 +196,16 @@ mod tests {
             extract_failure_class(&normalized),
             Some(FailureClass::PolicyDenied)
         );
+    }
+
+    #[test]
+    fn failure_class_routes_to_the_right_component_class() {
+        // Tool-choice/execution failures want a reusable skill; budget failures want config;
+        // everything else wants global system-prompt guidance.
+        assert_eq!(target_component_class(FailureClass::ToolExecution), "SkillDefinition");
+        assert_eq!(target_component_class(FailureClass::ToolSelection), "SkillDefinition");
+        assert_eq!(target_component_class(FailureClass::Context), "HarnessConfig");
+        assert_eq!(target_component_class(FailureClass::Reasoning), "SystemPrompt");
+        assert_eq!(target_component_class(FailureClass::MaxSteps), "SystemPrompt");
     }
 }
