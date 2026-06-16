@@ -1,0 +1,22 @@
+{
+  "generated_at": "2026-06-16T02:29:30.028721839+00:00",
+  "mode": "dry_run",
+  "operator_goal": "record bounded commit-capable autonomy evidence after the six-gate scheduler fix",
+  "workspace": "repo-root",
+  "harness_commit": "6b0bf33",
+  "target_component": "SkillDefinition(\"px-operator-proposal-dry-run\")",
+  "motivation": "operator queued goal proposal: record bounded commit-capable autonomy evidence after the six-gate scheduler fix",
+  "accepted": true,
+  "applied": false,
+  "commit": null,
+  "reason": "sandbox verification passed",
+  "checks": [
+    "reward_hacking_scan",
+    "sandbox_worktree",
+    "material_diff",
+    "cargo_check",
+    "cargo_test"
+  ],
+  "diff_hash": "38ac98d979c68c229f0debfc827a7d5774e61a528adcec8c4ef828f65e7975db",
+  "diff_bytes": 1306
+}
