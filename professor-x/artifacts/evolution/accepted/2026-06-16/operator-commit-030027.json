@@ -7,9 +7,9 @@
   "target_component": "SkillDefinition(\"px-operator-autocommit-20260616-025842\")",
   "motivation": "operator queued goal proposal: validate clean-tree repo patch commit session evidence",
   "accepted": true,
-  "applied": false,
-  "commit": null,
-  "reason": "sandbox verification passed",
+  "applied": true,
+  "commit": "105ee96",
+  "reason": "sandbox verification passed and committed 105ee96",
   "checks": [
     "reward_hacking_scan",
     "sandbox_worktree",
