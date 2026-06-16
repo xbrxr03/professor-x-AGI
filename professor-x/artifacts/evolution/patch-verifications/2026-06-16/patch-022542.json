@@ -1,0 +1,23 @@
+{
+  "generated_at": "2026-06-16T02:25:42.915876915+00:00",
+  "mode": "patch_apply_commit",
+  "operator_goal": "record bounded commit-capable autonomy evidence after the six-gate scheduler fix",
+  "patch_path": "/tmp/px-operator-goal-20260616-022358-record-bounded-commit-capable-a.diff",
+  "workspace": "repo-root",
+  "harness_commit": "95b7597",
+  "accepted": true,
+  "applied": false,
+  "commit": null,
+  "report_commit": null,
+  "reason": "sandbox patch verification passed",
+  "checks": [
+    "main_worktree_clean",
+    "reward_hacking_scan",
+    "sandbox_worktree",
+    "material_diff",
+    "cargo_check",
+    "cargo_test"
+  ],
+  "diff_hash": "5ab828c1bb21e960b359865303063eafb94713646b496798f15f4277130d6d39",
+  "diff_bytes": 452
+}
