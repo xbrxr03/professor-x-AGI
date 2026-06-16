@@ -100,7 +100,9 @@ impl ModelOptions {
             num_ctx: Some(32768),
             top_p: Some(0.9),
             stop: None,
-            think: Some(true),
+            // Evolution prompts require strict structured output and must run
+            // on coder-style local models that often reject thinking mode.
+            think: Some(false),
         }
     }
 }
@@ -627,4 +629,17 @@ fn base64_encode(data: &[u8]) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ModelOptions;
+
+    #[test]
+    fn evolution_options_disable_thinking_for_coder_compatibility() {
+        let opts = ModelOptions::for_evolution();
+
+        assert_eq!(opts.think, Some(false));
+        assert_eq!(opts.num_ctx, Some(32768));
+    }
 }
