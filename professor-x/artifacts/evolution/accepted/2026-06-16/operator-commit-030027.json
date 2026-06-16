@@ -1,0 +1,22 @@
+{
+  "generated_at": "2026-06-16T03:00:27.004724009+00:00",
+  "mode": "operator_commit_smoke",
+  "operator_goal": "validate clean-tree repo patch commit session evidence",
+  "workspace": "repo-root",
+  "harness_commit": "b1560fa",
+  "target_component": "SkillDefinition(\"px-operator-autocommit-20260616-025842\")",
+  "motivation": "operator queued goal proposal: validate clean-tree repo patch commit session evidence",
+  "accepted": true,
+  "applied": false,
+  "commit": null,
+  "reason": "sandbox verification passed",
+  "checks": [
+    "reward_hacking_scan",
+    "sandbox_worktree",
+    "material_diff",
+    "cargo_check",
+    "cargo_test"
+  ],
+  "diff_hash": "27fedbaedd7c75ee02cd8d6d8533d8e56e27584367f47392443ec10887f9a08b",
+  "diff_bytes": 1320
+}
