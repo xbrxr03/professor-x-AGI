@@ -1,0 +1,23 @@
+{
+  "generated_at": "2026-06-16T02:54:59.632244774+00:00",
+  "mode": "patch_apply_commit",
+  "operator_goal": "validate clean-tree repo patch commit session evidence",
+  "patch_path": "/tmp/px-operator-goal-20260616-025314-validate-clean-tree-repo-patch.diff",
+  "workspace": "repo-root",
+  "harness_commit": "12ec967",
+  "accepted": true,
+  "applied": false,
+  "commit": null,
+  "report_commit": null,
+  "reason": "sandbox patch verification passed",
+  "checks": [
+    "main_worktree_clean",
+    "reward_hacking_scan",
+    "sandbox_worktree",
+    "material_diff",
+    "cargo_check",
+    "cargo_test"
+  ],
+  "diff_hash": "289afc7f9fe1586a04aa5838540076f8a94e511b39b9e58f16ddf97b673c28d9",
+  "diff_bytes": 448
+}
