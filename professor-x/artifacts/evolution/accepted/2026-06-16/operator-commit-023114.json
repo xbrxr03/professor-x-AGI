@@ -7,9 +7,9 @@
   "target_component": "SkillDefinition(\"px-operator-autocommit-20260616-022930\")",
   "motivation": "operator queued goal proposal: record bounded commit-capable autonomy evidence after the six-gate scheduler fix",
   "accepted": true,
-  "applied": false,
-  "commit": null,
-  "reason": "sandbox verification passed",
+  "applied": true,
+  "commit": "847aac3",
+  "reason": "sandbox verification passed and committed 847aac3",
   "checks": [
     "reward_hacking_scan",
     "sandbox_worktree",
