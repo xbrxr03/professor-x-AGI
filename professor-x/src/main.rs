@@ -152,6 +152,8 @@ struct CliArgs {
     rollback_commit: Option<String>,
     /// Verify every skill is a well-formed first-class runtime unit; exit non-zero on any invalid.
     verify_skills: bool,
+    /// Print autonomy health + alerts from recent supervised runs; exit non-zero if unhealthy.
+    autonomy_health: bool,
     /// Internal: target of a hot-reload re-exec; prints the generation and exits (probe).
     self_reload_probe: bool,
     repo_fix_bench: bool,
@@ -355,6 +357,7 @@ where
         rollback_verdict_commit: None,
         rollback_commit: None,
         verify_skills: false,
+        autonomy_health: false,
         self_reload_probe: false,
         repo_fix_bench: false,
         evolve_on_repofix: None,
@@ -667,6 +670,10 @@ where
             }
             "--verify-skills" => {
                 cli.verify_skills = true;
+                i += 1;
+            }
+            "--autonomy-health" => {
+                cli.autonomy_health = true;
                 i += 1;
             }
             "--self-reload-probe" => {
@@ -1093,6 +1100,10 @@ async fn main() -> Result<()> {
 
     if cli.status_json {
         return print_work_status_json(Arc::clone(&memory), Arc::clone(&events), 16);
+    }
+
+    if cli.autonomy_health {
+        return run_autonomy_health(Arc::clone(&memory));
     }
 
     if let Some(limit) = cli.events_limit {
@@ -2737,6 +2748,34 @@ async fn run_rollback_verdict(events: Arc<EventStore>, commit: String) -> Result
         format!("accepted commit {commit} verdict: {}", verdict.status.as_str()),
         serde_json::to_value(&verdict).unwrap_or_default(),
     )?;
+    Ok(())
+}
+
+/// Autonomy health + alerts (item #5): aggregate recent supervised runs into a Healthy/Degraded/
+/// Unhealthy verdict a daemon or operator can act on; exit non-zero when unhealthy.
+fn run_autonomy_health(memory: Arc<MemoryManager>) -> Result<()> {
+    let runs = WorkLoopRunStore::new(Arc::clone(&memory.db)).recent(20)?;
+    let health = memd::autonomy_health::summarize_autonomy_health(&runs);
+    println!("autonomy health: {}", health.status.as_str());
+    println!(
+        "  runs={} cycles={} passed={} failed={} pass_rate={:.2} failing_streak={}",
+        health.runs,
+        health.total_cycles,
+        health.passed_cycles,
+        health.failed_cycles,
+        health.pass_rate,
+        health.consecutive_failed_runs,
+    );
+    if health.alerts.is_empty() {
+        println!("  alerts: none");
+    } else {
+        for alert in &health.alerts {
+            println!("  ALERT: {alert}");
+        }
+    }
+    if health.status == memd::autonomy_health::HealthStatus::Unhealthy {
+        anyhow::bail!("autonomy is unhealthy");
+    }
     Ok(())
 }
 
@@ -12757,7 +12796,11 @@ fn render_work_status_json(
     let latest_evolution_artifact =
         latest_evolution_artifact_status(&repo_root, &recent_evolution_events);
 
-    Ok(format_work_status_json(
+    // Item #5: roll recent runs into an autonomy-health verdict + alerts, surfaced in status.
+    let recent_runs = WorkLoopRunStore::new(Arc::clone(&memory.db)).recent(20)?;
+    let health = memd::autonomy_health::summarize_autonomy_health(&recent_runs);
+
+    let mut value = format_work_status_json(
         &repo_root,
         &runtime_line,
         &safety_line,
@@ -12771,7 +12814,14 @@ fn render_work_status_json(
         latest_gate.as_ref(),
         &recent_gates,
         &recent_queue,
-    ))
+    );
+    if let serde_json::Value::Object(map) = &mut value {
+        map.insert(
+            "autonomy_health".to_string(),
+            serde_json::to_value(&health).unwrap_or(serde_json::Value::Null),
+        );
+    }
+    Ok(value)
 }
 
 fn render_work_cockpit(
