@@ -1,0 +1,30 @@
+{
+  "id": "3e9d8ad4-360c-4821-912e-0a1924ec7e1e",
+  "generated_at": "2026-06-16T02:51:32.474770895+00:00",
+  "goal": "repo patch coding session: verify, apply, and commit /tmp/px-operator-goal-20260616-023901-record-coding-session-evidence.diff",
+  "requested_goal": "repo patch coding session: verify, apply, and commit /tmp/px-operator-goal-20260616-023901-record-coding-session-evidence.diff",
+  "exercise": "repo_patch_apply_commit",
+  "status": "failed",
+  "workspace": "repo-root verified apply commit",
+  "smoke_id": null,
+  "smoke_report_path": null,
+  "session_report_path": "artifacts/coding-sessions/2026-06-16/session-025132-3e9d8ad4.json",
+  "transcript_path": null,
+  "checks": [],
+  "plan_steps": [
+    "Policy-gate the patch through patch.apply before sandbox work",
+    "Verify the unified diff in an isolated worktree",
+    "Apply the verified diff to main only if sandbox checks pass",
+    "Run main cargo check and create git commit evidence",
+    "Record a coding-session report that points at the apply artifact"
+  ],
+  "step_outcomes": [
+    "policy gate allowed patch.apply apply mode",
+    "apply path aborted before verification artifact: main worktree has source/config/skill changes; refusing patch apply"
+  ],
+  "artifacts": [
+    "/tmp/px-operator-goal-20260616-023901-record-coding-session-evidence.diff",
+    "artifacts/coding-sessions/2026-06-16/session-025132-3e9d8ad4.evidence.md"
+  ],
+  "failure_reason": "main worktree has source/config/skill changes; refusing patch apply"
+}

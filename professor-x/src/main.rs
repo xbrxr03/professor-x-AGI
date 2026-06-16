@@ -3600,6 +3600,15 @@ struct CodingSessionReport {
     failure_reason: Option<String>,
 }
 
+struct RepoPatchCommitCodingSessionOutcome {
+    passed: bool,
+    session_id: String,
+    session_report_path: PathBuf,
+    evidence_path: PathBuf,
+    verification: PatchVerificationReport,
+    verification_path: PathBuf,
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SupervisedLoopReport {
     run_id: String,
@@ -4980,21 +4989,28 @@ async fn run_work_loop_job(
         WorkLoopJob::PatchApplyCommit => {
             let operator_goal = context.and_then(|ctx| ctx.operator_goal.clone());
             let patch_path = write_patch_apply_commit_patch(operator_goal.as_deref())?;
-            let (report, path) =
-                execute_patch_apply_commit(Arc::clone(&events), patch_path, operator_goal).await?;
+            let outcome = execute_repo_patch_commit_coding_session_with_goal(
+                policy,
+                memory,
+                Arc::clone(&events),
+                patch_path,
+                operator_goal,
+            )
+            .await?;
             Ok(WorkLoopSmokeRecord {
                 cycle: 0,
                 kind: job.kind().to_string(),
                 smoke_id: None,
-                passed: report.accepted && report.applied && report.commit.is_some(),
-                report_path: path.display().to_string(),
+                passed: outcome.passed,
+                report_path: outcome.verification_path.display().to_string(),
                 transcript_path: None,
-                workspace: report.workspace,
+                workspace: outcome.verification.workspace,
                 detail: format!(
-                    "{} check(s), commit={}, diff_bytes={}",
-                    report.checks.len(),
-                    report.commit.as_deref().unwrap_or("none"),
-                    report.diff_bytes
+                    "{} check(s), commit={}, diff_bytes={}, session={}",
+                    outcome.verification.checks.len(),
+                    outcome.verification.commit.as_deref().unwrap_or("none"),
+                    outcome.verification.diff_bytes,
+                    short_fragment(&outcome.session_id),
                 ),
             })
         }
@@ -5704,54 +5720,14 @@ async fn run_coding_session_inner(
             .unwrap_or_default(),
         failure_reason,
     };
-    let (report_path, evidence_path) = finalize_coding_session_report(&mut report)?;
-
-    CodingSessionStore::new(Arc::clone(&memory.db)).insert(&CodingSessionRecord {
-        id: session_id.clone(),
+    let (report_path, _evidence_path) = persist_coding_session_terminal_report(
+        Arc::clone(&memory),
+        Arc::clone(&events),
+        uuid::Uuid::parse_str(&session_id)?,
         generated_at,
-        goal: requested_goal,
-        exercise: exercise.name.to_string(),
-        status: report.status.clone(),
-        workspace: report.workspace.clone(),
-        smoke_id: report.smoke_id,
-        smoke_report_path: report.smoke_report_path.clone(),
-        session_report_path: report_path.display().to_string(),
-        transcript_path: report.transcript_path.clone(),
-        artifacts: report.artifacts.clone(),
-        checks: report.checks.clone(),
-        plan_steps,
-        step_outcomes,
-        failure_reason: report.failure_reason.clone(),
-        recorded_at: chrono::Utc::now(),
-    })?;
-
-    events.append(
-        None,
-        None,
-        "coding.session.evidence_written",
-        format!(
-            "coding session evidence written to {}",
-            evidence_path.display()
-        ),
-        serde_json::json!({
-            "session_id": session_id.clone(),
-            "exercise": exercise.name,
-            "session_report_path": report_path.display().to_string(),
-            "evidence_path": evidence_path.display().to_string(),
-            "artifacts": report.artifacts.clone(),
-        }),
-    )?;
-
-    events.append(
-        None,
-        None,
-        if passed {
-            "coding.session.passed"
-        } else {
-            "coding.session.failed"
-        },
-        format!("coding session report written to {}", report_path.display()),
-        serde_json::to_value(&report)?,
+        &mut report,
+        "coding session evidence written to",
+        "coding session report written to",
     )?;
 
     if print_summary {
@@ -5943,11 +5919,110 @@ async fn run_repo_patch_coding_session_with_goal(
         }),
     )?;
     if gate.decision != Decision::Allow {
+        let step_outcomes = vec![format!(
+            "policy gate denied patch.apply check mode: {}",
+            truncate(&gate.reason, 160)
+        )];
+        for (index, outcome) in step_outcomes.iter().enumerate() {
+            events.append(
+                Some(session_id),
+                None,
+                "coding.session.outcome",
+                format!("outcome {}: {}", index + 1, truncate(outcome, 100)),
+                serde_json::json!({
+                    "session_id": session_key.clone(),
+                    "outcome_step": index + 1,
+                    "outcome_total": step_outcomes.len(),
+                    "outcome": outcome,
+                }),
+            )?;
+        }
+        let mut report = CodingSessionReport {
+            id: session_key.clone(),
+            generated_at: generated_at.to_rfc3339(),
+            goal: goal.clone(),
+            requested_goal: goal.clone(),
+            exercise: "repo_patch_verify".to_string(),
+            status: "failed".to_string(),
+            workspace: Some("repo-root sandbox verification".to_string()),
+            smoke_id: None,
+            smoke_report_path: None,
+            session_report_path: None,
+            transcript_path: None,
+            checks: Vec::new(),
+            plan_steps: plan_steps.clone(),
+            step_outcomes,
+            artifacts: vec![patch_path.display().to_string()],
+            failure_reason: Some(format!("policy denied repo patch: {}", gate.reason)),
+        };
+        let _ = persist_coding_session_terminal_report(
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            session_id,
+            generated_at,
+            &mut report,
+            "repo patch coding-session evidence written to",
+            "repo patch coding-session report written to",
+        )?;
         anyhow::bail!("policy denied repo patch: {}", gate.reason);
     }
 
     let (verification, verification_path) =
-        execute_patch_verify(Arc::clone(&events), patch_path.clone()).await?;
+        match execute_patch_verify(Arc::clone(&events), patch_path.clone()).await {
+            Ok(result) => result,
+            Err(err) => {
+                let reason = err.to_string();
+                let step_outcomes = vec![
+                    "policy gate allowed patch.apply check".to_string(),
+                    format!(
+                        "verify path aborted before verification artifact: {}",
+                        truncate(&reason, 160)
+                    ),
+                ];
+                for (index, outcome) in step_outcomes.iter().enumerate() {
+                    events.append(
+                        Some(session_id),
+                        None,
+                        "coding.session.outcome",
+                        format!("outcome {}: {}", index + 1, truncate(outcome, 100)),
+                        serde_json::json!({
+                            "session_id": session_key.clone(),
+                            "outcome_step": index + 1,
+                            "outcome_total": step_outcomes.len(),
+                            "outcome": outcome,
+                        }),
+                    )?;
+                }
+                let mut report = CodingSessionReport {
+                    id: session_key.clone(),
+                    generated_at: generated_at.to_rfc3339(),
+                    goal: goal.clone(),
+                    requested_goal: goal.clone(),
+                    exercise: "repo_patch_verify".to_string(),
+                    status: "failed".to_string(),
+                    workspace: Some("repo-root sandbox verification".to_string()),
+                    smoke_id: None,
+                    smoke_report_path: None,
+                    session_report_path: None,
+                    transcript_path: None,
+                    checks: Vec::new(),
+                    plan_steps: plan_steps.clone(),
+                    step_outcomes,
+                    artifacts: vec![patch_path.display().to_string()],
+                    failure_reason: Some(reason),
+                };
+                let _ = persist_coding_session_terminal_report(
+                    Arc::clone(&memory),
+                    Arc::clone(&events),
+                    session_id,
+                    generated_at,
+                    &mut report,
+                    "repo patch coding-session evidence written to",
+                    "repo patch coding-session report written to",
+                )?;
+                return Err(err);
+            }
+        };
     let passed = verification.accepted;
     let checks = verification.checks.clone();
     let step_outcomes = vec![
@@ -6000,57 +6075,14 @@ async fn run_repo_patch_coding_session_with_goal(
             Some(verification.reason.clone())
         },
     };
-    let (report_path, evidence_path) = finalize_coding_session_report(&mut report)?;
-
-    CodingSessionStore::new(Arc::clone(&memory.db)).insert(&CodingSessionRecord {
-        id: session_key.clone(),
+    let (report_path, _evidence_path) = persist_coding_session_terminal_report(
+        Arc::clone(&memory),
+        Arc::clone(&events),
+        session_id,
         generated_at,
-        goal,
-        exercise: "repo_patch_verify".to_string(),
-        status: report.status.clone(),
-        workspace: report.workspace.clone(),
-        smoke_id: None,
-        smoke_report_path: None,
-        session_report_path: report_path.display().to_string(),
-        transcript_path: None,
-        artifacts: report.artifacts.clone(),
-        checks: report.checks.clone(),
-        plan_steps,
-        step_outcomes,
-        failure_reason: report.failure_reason.clone(),
-        recorded_at: chrono::Utc::now(),
-    })?;
-
-    events.append(
-        Some(session_id),
-        None,
-        "coding.session.evidence_written",
-        format!(
-            "repo patch coding-session evidence written to {}",
-            evidence_path.display()
-        ),
-        serde_json::json!({
-            "session_id": session_key.clone(),
-            "exercise": "repo_patch_verify",
-            "session_report_path": report_path.display().to_string(),
-            "evidence_path": evidence_path.display().to_string(),
-            "artifacts": report.artifacts.clone(),
-        }),
-    )?;
-
-    events.append(
-        Some(session_id),
-        None,
-        if passed {
-            "coding.session.passed"
-        } else {
-            "coding.session.failed"
-        },
-        format!(
-            "repo patch coding-session report written to {}",
-            report_path.display()
-        ),
-        serde_json::to_value(&report)?,
+        &mut report,
+        "repo patch coding-session evidence written to",
+        "repo patch coding-session report written to",
     )?;
 
     println!(
@@ -6144,6 +6176,51 @@ async fn run_repo_patch_commit_coding_session_with_goal(
     patch_path: PathBuf,
     session_goal: Option<String>,
 ) -> Result<()> {
+    let outcome = execute_repo_patch_commit_coding_session_with_goal(
+        policy,
+        memory,
+        events,
+        patch_path,
+        session_goal,
+    )
+    .await?;
+    println!(
+        "Repo patch commit coding session: {}",
+        if outcome.passed { "passed" } else { "failed" }
+    );
+    println!("  session: {}", outcome.session_id);
+    println!("  report: {}", outcome.session_report_path.display());
+    println!("  evidence: {}", outcome.evidence_path.display());
+    println!("  verification: {}", outcome.verification_path.display());
+    println!("  patch: {}", outcome.verification.patch_path);
+    println!("  checks: {}", outcome.verification.checks.join(", "));
+    println!(
+        "  commit: {}",
+        outcome.verification.commit.as_deref().unwrap_or("none")
+    );
+    println!(
+        "  report commit: {}",
+        outcome
+            .verification
+            .report_commit
+            .as_deref()
+            .unwrap_or("none")
+    );
+    println!("  reason: {}", outcome.verification.reason);
+
+    if !outcome.passed {
+        anyhow::bail!("repo patch commit coding session failed");
+    }
+    Ok(())
+}
+
+async fn execute_repo_patch_commit_coding_session_with_goal(
+    policy: Arc<PolicyEngine>,
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    patch_path: PathBuf,
+    session_goal: Option<String>,
+) -> Result<RepoPatchCommitCodingSessionOutcome> {
     let session_id = uuid::Uuid::new_v4();
     let session_key = session_id.to_string();
     let generated_at = chrono::Utc::now();
@@ -6245,11 +6322,115 @@ async fn run_repo_patch_commit_coding_session_with_goal(
         }),
     )?;
     if gate.decision != Decision::Allow {
+        let step_outcomes = vec![format!(
+            "policy gate denied patch.apply apply mode: {}",
+            truncate(&gate.reason, 160)
+        )];
+        for (index, outcome) in step_outcomes.iter().enumerate() {
+            events.append(
+                Some(session_id),
+                None,
+                "coding.session.outcome",
+                format!("outcome {}: {}", index + 1, truncate(outcome, 100)),
+                serde_json::json!({
+                    "session_id": session_key.clone(),
+                    "outcome_step": index + 1,
+                    "outcome_total": step_outcomes.len(),
+                    "outcome": outcome,
+                }),
+            )?;
+        }
+        let mut report = CodingSessionReport {
+            id: session_key.clone(),
+            generated_at: generated_at.to_rfc3339(),
+            goal: goal.clone(),
+            requested_goal: goal.clone(),
+            exercise: "repo_patch_apply_commit".to_string(),
+            status: "failed".to_string(),
+            workspace: Some("repo-root verified apply commit".to_string()),
+            smoke_id: None,
+            smoke_report_path: None,
+            session_report_path: None,
+            transcript_path: None,
+            checks: Vec::new(),
+            plan_steps: plan_steps.clone(),
+            step_outcomes,
+            artifacts: vec![patch_path.display().to_string()],
+            failure_reason: Some(format!("policy denied repo patch commit: {}", gate.reason)),
+        };
+        let _ = persist_coding_session_terminal_report(
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            session_id,
+            generated_at,
+            &mut report,
+            "repo patch commit coding-session evidence written to",
+            "repo patch commit coding-session report written to",
+        )?;
         anyhow::bail!("policy denied repo patch commit: {}", gate.reason);
     }
 
-    let (verification, verification_path) =
-        execute_patch_apply_commit(Arc::clone(&events), patch_path.clone(), None).await?;
+    let (verification, verification_path) = match execute_patch_apply_commit(
+        Arc::clone(&events),
+        patch_path.clone(),
+        Some(goal.clone()),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(err) => {
+            let reason = err.to_string();
+            let step_outcomes = vec![
+                "policy gate allowed patch.apply apply mode".to_string(),
+                format!(
+                    "apply path aborted before verification artifact: {}",
+                    truncate(&reason, 160)
+                ),
+            ];
+            for (index, outcome) in step_outcomes.iter().enumerate() {
+                events.append(
+                    Some(session_id),
+                    None,
+                    "coding.session.outcome",
+                    format!("outcome {}: {}", index + 1, truncate(outcome, 100)),
+                    serde_json::json!({
+                        "session_id": session_key.clone(),
+                        "outcome_step": index + 1,
+                        "outcome_total": step_outcomes.len(),
+                        "outcome": outcome,
+                    }),
+                )?;
+            }
+            let mut report = CodingSessionReport {
+                id: session_key.clone(),
+                generated_at: generated_at.to_rfc3339(),
+                goal: goal.clone(),
+                requested_goal: goal.clone(),
+                exercise: "repo_patch_apply_commit".to_string(),
+                status: "failed".to_string(),
+                workspace: Some("repo-root verified apply commit".to_string()),
+                smoke_id: None,
+                smoke_report_path: None,
+                session_report_path: None,
+                transcript_path: None,
+                checks: Vec::new(),
+                plan_steps: plan_steps.clone(),
+                step_outcomes,
+                artifacts: vec![patch_path.display().to_string()],
+                failure_reason: Some(reason.clone()),
+            };
+            let _ = persist_coding_session_terminal_report(
+                Arc::clone(&memory),
+                Arc::clone(&events),
+                session_id,
+                generated_at,
+                &mut report,
+                "repo patch commit coding-session evidence written to",
+                "repo patch commit coding-session report written to",
+            )?;
+            return Err(err);
+        }
+    };
     let passed = verification.accepted && verification.applied && verification.commit.is_some();
     let checks = verification.checks.clone();
     let step_outcomes = vec![
@@ -6284,7 +6465,7 @@ async fn run_repo_patch_commit_coding_session_with_goal(
             "coding.session.outcome",
             format!("outcome {}: {}", index + 1, truncate(outcome, 100)),
             serde_json::json!({
-                "session_id": session_key,
+                "session_id": session_key.clone(),
                 "outcome_step": index + 1,
                 "outcome_total": step_outcomes.len(),
                 "outcome": outcome,
@@ -6314,82 +6495,24 @@ async fn run_repo_patch_commit_coding_session_with_goal(
             Some(verification.reason.clone())
         },
     };
-    let (report_path, evidence_path) = finalize_coding_session_report(&mut report)?;
-
-    CodingSessionStore::new(Arc::clone(&memory.db)).insert(&CodingSessionRecord {
-        id: session_key.clone(),
+    let (report_path, evidence_path) = persist_coding_session_terminal_report(
+        Arc::clone(&memory),
+        Arc::clone(&events),
+        session_id,
         generated_at,
-        goal,
-        exercise: "repo_patch_apply_commit".to_string(),
-        status: report.status.clone(),
-        workspace: report.workspace.clone(),
-        smoke_id: None,
-        smoke_report_path: None,
-        session_report_path: report_path.display().to_string(),
-        transcript_path: None,
-        artifacts: report.artifacts.clone(),
-        checks: report.checks.clone(),
-        plan_steps,
-        step_outcomes,
-        failure_reason: report.failure_reason.clone(),
-        recorded_at: chrono::Utc::now(),
-    })?;
-
-    events.append(
-        Some(session_id),
-        None,
-        "coding.session.evidence_written",
-        format!(
-            "repo patch commit coding-session evidence written to {}",
-            evidence_path.display()
-        ),
-        serde_json::json!({
-            "session_id": session_key.clone(),
-            "exercise": "repo_patch_apply_commit",
-            "session_report_path": report_path.display().to_string(),
-            "evidence_path": evidence_path.display().to_string(),
-            "artifacts": report.artifacts.clone(),
-        }),
+        &mut report,
+        "repo patch commit coding-session evidence written to",
+        "repo patch commit coding-session report written to",
     )?;
 
-    events.append(
-        Some(session_id),
-        None,
-        if passed {
-            "coding.session.passed"
-        } else {
-            "coding.session.failed"
-        },
-        format!(
-            "repo patch commit coding-session report written to {}",
-            report_path.display()
-        ),
-        serde_json::to_value(&report)?,
-    )?;
-
-    println!(
-        "Repo patch commit coding session: {}",
-        if passed { "passed" } else { "failed" }
-    );
-    println!("  session: {session_key}");
-    println!("  report: {}", report_path.display());
-    println!("  verification: {}", verification_path.display());
-    println!("  patch: {}", verification.patch_path);
-    println!("  checks: {}", report.checks.join(", "));
-    println!(
-        "  commit: {}",
-        verification.commit.as_deref().unwrap_or("none")
-    );
-    println!(
-        "  report commit: {}",
-        verification.report_commit.as_deref().unwrap_or("none")
-    );
-    println!("  reason: {}", verification.reason);
-
-    if !passed {
-        anyhow::bail!("repo patch commit coding session failed");
-    }
-    Ok(())
+    Ok(RepoPatchCommitCodingSessionOutcome {
+        passed,
+        session_id: session_key,
+        session_report_path: report_path,
+        evidence_path,
+        verification,
+        verification_path,
+    })
 }
 
 async fn run_repo_patch_commit_coding_session_live(
@@ -6668,6 +6791,65 @@ fn write_coding_session_report(report: &CodingSessionReport) -> Result<PathBuf> 
     ));
     std::fs::write(&path, serde_json::to_string_pretty(report)?)?;
     Ok(path)
+}
+
+fn persist_coding_session_terminal_report(
+    memory: Arc<MemoryManager>,
+    events: Arc<EventStore>,
+    session_id: uuid::Uuid,
+    generated_at: chrono::DateTime<chrono::Utc>,
+    report: &mut CodingSessionReport,
+    evidence_summary_prefix: &str,
+    report_summary_prefix: &str,
+) -> Result<(PathBuf, PathBuf)> {
+    let (report_path, evidence_path) = finalize_coding_session_report(report)?;
+
+    CodingSessionStore::new(Arc::clone(&memory.db)).insert(&CodingSessionRecord {
+        id: report.id.clone(),
+        generated_at,
+        goal: report.requested_goal.clone(),
+        exercise: report.exercise.clone(),
+        status: report.status.clone(),
+        workspace: report.workspace.clone(),
+        smoke_id: report.smoke_id,
+        smoke_report_path: report.smoke_report_path.clone(),
+        session_report_path: report_path.display().to_string(),
+        transcript_path: report.transcript_path.clone(),
+        artifacts: report.artifacts.clone(),
+        checks: report.checks.clone(),
+        plan_steps: report.plan_steps.clone(),
+        step_outcomes: report.step_outcomes.clone(),
+        failure_reason: report.failure_reason.clone(),
+        recorded_at: chrono::Utc::now(),
+    })?;
+
+    events.append(
+        Some(session_id),
+        None,
+        "coding.session.evidence_written",
+        format!("{evidence_summary_prefix} {}", evidence_path.display()),
+        serde_json::json!({
+            "session_id": report.id.clone(),
+            "exercise": report.exercise.clone(),
+            "session_report_path": report_path.display().to_string(),
+            "evidence_path": evidence_path.display().to_string(),
+            "artifacts": report.artifacts.clone(),
+        }),
+    )?;
+
+    events.append(
+        Some(session_id),
+        None,
+        if report.status == "passed" {
+            "coding.session.passed"
+        } else {
+            "coding.session.failed"
+        },
+        format!("{report_summary_prefix} {}", report_path.display()),
+        serde_json::to_value(&report)?,
+    )?;
+
+    Ok((report_path, evidence_path))
 }
 
 fn finalize_coding_session_report(report: &mut CodingSessionReport) -> Result<(PathBuf, PathBuf)> {
@@ -14149,6 +14331,115 @@ mod tests {
             .unwrap()
             .iter()
             .any(|value| value.as_str() == Some(evidence_path.to_str().unwrap())));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn persist_coding_session_terminal_report_replaces_pending_running_row() {
+        let root =
+            std::env::temp_dir().join(format!("px-session-terminal-{}", uuid::Uuid::new_v4()));
+        let report_dir = root.join("reports");
+        let data_dir = root.join("data");
+        let previous_report_dir = std::env::var("PROFESSOR_X_CODING_SESSION_REPORT_DIR").ok();
+        std::fs::create_dir_all(&report_dir).unwrap();
+        std::env::set_var("PROFESSOR_X_CODING_SESSION_REPORT_DIR", &report_dir);
+
+        let memory = Arc::new(MemoryManager::open(&data_dir).unwrap());
+        let events = Arc::new(EventStore::new(Arc::clone(&memory.db)));
+        let session_id = uuid::Uuid::new_v4();
+        let generated_at = chrono::Utc::now();
+        let failure_reason =
+            "main worktree has source/config/skill changes; refusing patch apply".to_string();
+
+        CodingSessionStore::new(Arc::clone(&memory.db))
+            .insert(&CodingSessionRecord {
+                id: session_id.to_string(),
+                generated_at,
+                goal: "operator goal".to_string(),
+                exercise: "repo_patch_apply_commit".to_string(),
+                status: "running".to_string(),
+                workspace: Some("repo-root verified apply commit".to_string()),
+                smoke_id: None,
+                smoke_report_path: None,
+                session_report_path: "pending".to_string(),
+                transcript_path: None,
+                artifacts: vec!["/tmp/example.diff".to_string()],
+                checks: Vec::new(),
+                plan_steps: vec![
+                    "Policy-gate the patch through patch.apply before sandbox work".to_string(),
+                ],
+                step_outcomes: Vec::new(),
+                failure_reason: None,
+                recorded_at: generated_at,
+            })
+            .unwrap();
+
+        let mut report = CodingSessionReport {
+            id: session_id.to_string(),
+            generated_at: generated_at.to_rfc3339(),
+            goal: "repo patch coding session".to_string(),
+            requested_goal: "operator goal".to_string(),
+            exercise: "repo_patch_apply_commit".to_string(),
+            status: "failed".to_string(),
+            workspace: Some("repo-root verified apply commit".to_string()),
+            smoke_id: None,
+            smoke_report_path: None,
+            session_report_path: None,
+            transcript_path: None,
+            checks: Vec::new(),
+            plan_steps: vec!["Policy-gate the patch through patch.apply before sandbox work".to_string()],
+            step_outcomes: vec!["apply path aborted before verification artifact: main worktree has source/config/skill changes; refusing patch apply".to_string()],
+            artifacts: vec!["/tmp/example.diff".to_string()],
+            failure_reason: Some(failure_reason.clone()),
+        };
+
+        let (report_path, evidence_path) = persist_coding_session_terminal_report(
+            Arc::clone(&memory),
+            Arc::clone(&events),
+            session_id,
+            generated_at,
+            &mut report,
+            "repo patch commit coding-session evidence written to",
+            "repo patch commit coding-session report written to",
+        )
+        .unwrap();
+
+        let stored = CodingSessionStore::new(Arc::clone(&memory.db))
+            .get_by_ref(&session_id.to_string())
+            .unwrap()
+            .unwrap();
+        let report_json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&report_path).unwrap()).unwrap();
+        let work = events.work_tail(4).unwrap();
+
+        assert_eq!(stored.status, "failed");
+        assert_eq!(stored.goal, "operator goal");
+        assert_eq!(
+            stored.session_report_path,
+            report_path.display().to_string()
+        );
+        assert_eq!(
+            stored.failure_reason.as_deref(),
+            Some(failure_reason.as_str())
+        );
+        assert!(report_path.exists());
+        assert!(evidence_path.exists());
+        assert_eq!(
+            report_json["session_report_path"].as_str(),
+            Some(report_path.to_str().unwrap())
+        );
+        assert!(work
+            .iter()
+            .any(|event| event.event_type == "coding.session.evidence_written"));
+        assert!(work
+            .iter()
+            .any(|event| event.event_type == "coding.session.failed"));
+
+        if let Some(previous) = previous_report_dir {
+            std::env::set_var("PROFESSOR_X_CODING_SESSION_REPORT_DIR", previous);
+        } else {
+            std::env::remove_var("PROFESSOR_X_CODING_SESSION_REPORT_DIR");
+        }
         let _ = std::fs::remove_dir_all(root);
     }
 
