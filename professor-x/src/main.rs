@@ -14786,7 +14786,7 @@ mod tests {
     }
 
     #[test]
-    fn conductor_skills_include_generated_operator_goals() {
+    fn conductor_skills_exclude_ephemeral_operator_provenance_files() {
         let skills_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("skills")
             .join("conductor");
@@ -14796,9 +14796,16 @@ mod tests {
             .map(|(frontmatter, _)| frontmatter.name.as_str())
             .collect::<BTreeSet<_>>();
 
-        assert!(names.contains("px-operator-goal-20260601-134503-make-goals-verified"));
-        assert!(names.contains("px-operator-goal-20260601-135027-preserve-goal-provenance"));
         assert!(names.contains("px-repo-patch-live-commit-smoke-20260601"));
+        assert!(!names
+            .iter()
+            .any(|name| name.starts_with("px-operator-goal-")));
+        assert!(!names
+            .iter()
+            .any(|name| name.starts_with("px-operator-autocommit-")));
+        assert!(!names
+            .iter()
+            .any(|name| name.starts_with("px-autonomous-patch-")));
         assert!(names.iter().all(|name| name.len() <= MAX_SKILL_NAME_LEN));
     }
 

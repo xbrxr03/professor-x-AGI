@@ -9,6 +9,12 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use tracing::warn;
 
+const EPHEMERAL_PROVENANCE_SKILL_PREFIXES: &[&str] = &[
+    "px-operator-goal-",
+    "px-operator-autocommit-",
+    "px-autonomous-patch-",
+];
+
 /// Parsed SKILL.md frontmatter (Tier 1 fields only).
 #[derive(Debug, Clone, Deserialize)]
 pub struct SkillFrontmatter {
@@ -105,6 +111,12 @@ pub fn scan_skills_dir(skills_dir: &Path) -> Vec<(SkillFrontmatter, std::path::P
     results
 }
 
+fn is_ephemeral_provenance_skill_name(name: &str) -> bool {
+    EPHEMERAL_PROVENANCE_SKILL_PREFIXES
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+}
+
 fn scan_skills_dir_inner(skills_dir: &Path, results: &mut Vec<(SkillFrontmatter, PathBuf)>) {
     let Ok(entries) = std::fs::read_dir(skills_dir) else {
         return;
@@ -116,7 +128,13 @@ fn scan_skills_dir_inner(skills_dir: &Path, results: &mut Vec<(SkillFrontmatter,
             let skill_md = path.join("SKILL.md");
             if skill_md.exists() {
                 match load_tier1(&skill_md) {
-                    Ok(fm) => results.push((fm, skill_md)),
+                    Ok(fm) => {
+                        if is_ephemeral_provenance_skill_name(&fm.name) {
+                            warn!("skipping ephemeral provenance skill {:?}", skill_md);
+                            continue;
+                        }
+                        results.push((fm, skill_md));
+                    }
                     Err(e) => warn!("skipping {:?}: {e}", path),
                 }
             } else {
@@ -124,7 +142,13 @@ fn scan_skills_dir_inner(skills_dir: &Path, results: &mut Vec<(SkillFrontmatter,
             }
         } else if path.extension().and_then(|ext| ext.to_str()) == Some("md") {
             match load_legacy_markdown_skill(&path) {
-                Ok(fm) => results.push((fm, path)),
+                Ok(fm) => {
+                    if is_ephemeral_provenance_skill_name(&fm.name) {
+                        warn!("skipping ephemeral provenance skill {:?}", path);
+                        continue;
+                    }
+                    results.push((fm, path));
+                }
                 Err(e) => warn!("skipping {:?}: {e}", path),
             }
         }
@@ -216,5 +240,26 @@ mod tests {
             skills[0].0.description,
             "Run the full autonomous research day."
         );
+    }
+
+    #[test]
+    fn scan_skills_dir_skips_ephemeral_operator_provenance_skills() {
+        let dir = std::env::temp_dir().join(format!("px-skill-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("conductor")).unwrap();
+        std::fs::write(
+            dir.join("conductor/px-operator-goal-20260616-visible-work.md"),
+            "# px-operator-goal-20260616-visible-work\n\nOperator goal: make work visible.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("conductor/retry-plan-generation.md"),
+            "# retry-plan-generation\n\n## Purpose\nRecover after a failed first tool choice.\n",
+        )
+        .unwrap();
+
+        let skills = scan_skills_dir(&dir);
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].0.name, "retry-plan-generation");
     }
 }

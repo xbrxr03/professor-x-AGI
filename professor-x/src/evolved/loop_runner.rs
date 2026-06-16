@@ -106,6 +106,24 @@ fn failure_class_to_dhe(class: FailureClass) -> (u8, u8) {
     }
 }
 
+fn is_ephemeral_autonomy_skill_name(name: &str) -> bool {
+    [
+        "px-operator-goal-",
+        "px-operator-autocommit-",
+        "px-autonomous-patch-",
+        "sandbox_smoke_",
+    ]
+    .iter()
+    .any(|prefix| name.starts_with(prefix))
+}
+
+fn is_reusable_autonomy_target(component: &HarnessComponent) -> bool {
+    match component {
+        HarnessComponent::SkillDefinition(name) => !is_ephemeral_autonomy_skill_name(name),
+        _ => true,
+    }
+}
+
 fn diagnostic_component_hints(layer: u8) -> Vec<&'static str> {
     match layer {
         1 => vec![
@@ -116,10 +134,10 @@ fn diagnostic_component_hints(layer: u8) -> Vec<&'static str> {
             "Target COMPONENT: HarnessConfig. Adjust context budget, memory mix, or step budget so the agent can keep the right evidence in view and avoid context overload.",
         ],
         3 => vec![
-            "Target COMPONENT: SkillDefinition. Define a reusable skill that tells the agent which tool to choose, what preconditions to verify, and how to recover from a wrong initial tool choice.",
+            "Target COMPONENT: SkillDefinition. Define a reusable skill that tells the agent which tool to choose, what preconditions to verify, and how to recover from a wrong initial tool choice. Do not emit an operator/autocommit provenance skill.",
         ],
         4 => vec![
-            "Target COMPONENT: SkillDefinition. Define a reusable skill for tool failure handling: inspect the observation, validate outputs, choose one bounded retry, and recover safely.",
+            "Target COMPONENT: SkillDefinition. Define a reusable skill for tool failure handling: inspect the observation, validate outputs, choose one bounded retry, and recover safely. Do not emit an operator/autocommit provenance skill.",
         ],
         5 => vec![
             "Target COMPONENT: SystemPrompt. Add concise global guidance for final-answer discipline, bounded reasoning, and using observations to satisfy the task contract before finishing.",
@@ -971,7 +989,13 @@ impl EvolvedLoop {
         );
 
         // Sample a node via UCB1 (ASI-Evolve)
-        let candidates = self.node_db.sample_ucb1(3)?;
+        let candidates = self
+            .node_db
+            .sample_ucb1(12)?
+            .into_iter()
+            .filter(|node| is_reusable_autonomy_target(&node.target_component))
+            .take(3)
+            .collect::<Vec<_>>();
 
         // Generate 3 proposals, run Elo tournament, commit winner
         // (Co-Scientist pattern — arXiv:2502.18864)
@@ -985,9 +1009,12 @@ impl EvolvedLoop {
         let proposals: Vec<EvolutionNode> = proposals
             .into_iter()
             .filter(|n| is_autonomously_applyable(&n.target_component))
+            .filter(|n| is_reusable_autonomy_target(&n.target_component))
             .collect();
         if proposals.is_empty() {
-            info!("evolved: no applyable proposals (all targeted non-mutable components)");
+            info!(
+                "evolved: no applyable reusable proposals (all targeted non-mutable or synthetic components)"
+            );
             return Ok(false);
         }
         let mut node = if proposals.len() == 1 {
@@ -2283,6 +2310,29 @@ mod tests {
         );
 
         assert!(!scan.suspicious);
+    }
+
+    #[test]
+    fn reusable_autonomy_target_rejects_ephemeral_operator_skills() {
+        assert!(!is_reusable_autonomy_target(
+            &HarnessComponent::SkillDefinition(
+                "px-operator-goal-20260616-visible-work".to_string(),
+            )
+        ));
+        assert!(!is_reusable_autonomy_target(
+            &HarnessComponent::SkillDefinition("px-autonomous-patch-20260616-010101".to_string(),)
+        ));
+    }
+
+    #[test]
+    fn reusable_autonomy_target_keeps_real_skill_targets() {
+        assert!(is_reusable_autonomy_target(&HarnessComponent::SystemPrompt));
+        assert!(is_reusable_autonomy_target(
+            &HarnessComponent::HarnessConfig
+        ));
+        assert!(is_reusable_autonomy_target(
+            &HarnessComponent::SkillDefinition("retry-plan-generation".to_string(),)
+        ));
     }
 
     #[test]
