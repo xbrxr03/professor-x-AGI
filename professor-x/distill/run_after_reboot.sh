@@ -149,14 +149,23 @@ if [ -z "$MERGED_GGUF" ] && [ -f out/gguf/model.safetensors.index.json ]; then
     || { echo "STOP: quantize failed"; exit 1; }
   MERGED_GGUF=out/gguf/distilled-Q4_K_M.gguf
 fi
+# Build the Modelfile from Ollama's OFFICIAL qwen3 template (+ its `PARAMETER stop <|im_end|>`),
+# swapping only the FROM line to our GGUF. This is critical: a bare Modelfile (FROM + temperature)
+# has no chat template and no stop tokens, so Ollama never halts the model and it loops forever —
+# THAT (not the recipe/merge/quant) was the whole "degenerate model" saga. Cloning the official
+# template makes our distilled model serve exactly like the base.
+build_modelfile() {  # $1 = FROM target (gguf path or base model)
+  { echo "FROM $1"
+    ollama show --modelfile qwen3:8b-q4_K_M 2>/dev/null | sed '/^FROM /d; /^# /d; /^PARAMETER num_ctx/d'
+    echo 'PARAMETER num_ctx 16384'
+  } > Modelfile
+  grep -q 'PARAMETER stop' Modelfile || { echo "STOP: official qwen3 template not captured (is qwen3:8b-q4_K_M pulled?)"; exit 1; }
+}
 if [ -n "$MERGED_GGUF" ]; then
-  printf 'FROM ./%s\nPARAMETER temperature 0.3\nPARAMETER num_ctx 16384\n' "$MERGED_GGUF" > Modelfile
-  ollama create professor-x-distilled -f Modelfile || { echo "STOP: ollama create failed"; exit 1; }
-elif [ -f out/gguf/adapter.gguf ]; then
-  printf 'FROM qwen3:8b-q4_K_M\nADAPTER ./out/gguf/adapter.gguf\nPARAMETER temperature 0.3\nPARAMETER num_ctx 16384\n' > Modelfile
+  build_modelfile "./$MERGED_GGUF"
   ollama create professor-x-distilled -f Modelfile || { echo "STOP: ollama create failed"; exit 1; }
 else
-  echo "STOP: no servable artifact in distill/out/gguf (no GGUF, no safetensors, no adapter)"; exit 1
+  echo "STOP: no servable GGUF in distill/out/gguf (Ollama can't serve LoRA adapters — need a merged GGUF)"; exit 1
 fi
 cd ..
 
