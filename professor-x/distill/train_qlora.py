@@ -33,10 +33,11 @@ OUT = os.path.join(HERE, "out")
 # Match the harness's primary model.
 BASE_MODEL = os.environ.get("PX_BASE_MODEL", "unsloth/Qwen3-8B-unsloth-bnb-4bit")
 MAX_SEQ = int(os.environ.get("PX_MAX_SEQ", "8192"))
-EPOCHS = float(os.environ.get("PX_EPOCHS", "1"))
-# Base is Qwen3 but the harness serves via Ollama's Qwen3 template. If the distilled model
-# behaves oddly, try PX_CHAT_TEMPLATE=qwen3 (template/serve mismatch is the first suspect).
-CHAT_TEMPLATE = os.environ.get("PX_CHAT_TEMPLATE", "qwen-2.5")
+EPOCHS = float(os.environ.get("PX_EPOCHS", "2"))
+# Base is Qwen3, served via Ollama's Qwen3 template — train with the matching template.
+# (Turn 1 used qwen-2.5 here; combined with full-sequence loss it produced a model that
+# reasoned but never emitted the action format or stopped. See PLAN_11_10.md.)
+CHAT_TEMPLATE = os.environ.get("PX_CHAT_TEMPLATE", "qwen3")
 LR = float(os.environ.get("PX_LR", "2e-4"))
 
 
@@ -48,7 +49,7 @@ def main():
         from unsloth import FastLanguageModel, is_bfloat16_supported
         from unsloth.chat_templates import get_chat_template
         from datasets import load_dataset
-        from trl import SFTTrainer
+        from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
         from transformers import TrainingArguments
     except ImportError as e:
         sys.exit(
@@ -87,12 +88,26 @@ def main():
 
     ds = ds.map(fmt)
 
+    # Assistant-only loss: compute loss ONLY on the assistant turns (incl. their <|im_end|> stop),
+    # masking system/user/observation tokens to -100. Turn 1 trained on the full sequence, which
+    # diluted the signal to produce the action format + EOS — the model reasoned but never stopped.
+    # (TRL 0.9.6 has no assistant_only_loss flag; this collator is the equivalent. Pre-flighted: it
+    # unmasks exactly the Thought:/Action: spans and the <|im_end|> token.) packing must be off.
+    collator = DataCollatorForCompletionOnlyLM(
+        instruction_template="<|im_start|>user\n",
+        response_template="<|im_start|>assistant\n",
+        tokenizer=tokenizer,
+        mlm=False,
+    )
+
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
         train_dataset=ds,
         dataset_text_field="text",
         max_seq_length=MAX_SEQ,
+        packing=False,
+        data_collator=collator,
         args=TrainingArguments(
             per_device_train_batch_size=1,
             gradient_accumulation_steps=8,
