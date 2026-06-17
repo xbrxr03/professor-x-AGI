@@ -15,6 +15,16 @@ echo "=================================================================="
 echo "  Professor X — distillation flywheel (turnkey)   $(date)"
 echo "=================================================================="
 
+# Single-instance lock. A stray PARALLEL run is catastrophic here: its teacher-collection step
+# loads the 10GB 14b mid-training and OOMs the GPU (this cost several cycles). flock -n refuses to
+# start a second run; the lock is auto-released when this process exits.
+exec 9>/tmp/px_flywheel.lock
+if ! flock -n 9; then
+  echo "STOP: another flywheel run is active (holds /tmp/px_flywheel.lock). Refusing to start a"
+  echo "      second — concurrent runs fight for GPU. Wait for it, or kill the stray run first."
+  exit 1
+fi
+
 # 0. Sanity: the reboot must have fixed the driver, or PyTorch/CUDA can't run.
 if ! nvidia-smi >/dev/null 2>&1; then
   echo "STOP: nvidia-smi still fails (driver/library mismatch). Reboot first, then re-run."
