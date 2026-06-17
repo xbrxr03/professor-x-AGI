@@ -12,3 +12,4 @@ distill/data/
 distill/__pycache__/
 distill/Modelfile
 unsloth_compiled_cache/
+scripts/benchmarks/repo_fix/**/__pycache__/
