@@ -98,6 +98,16 @@ echo "== [4/6] QLoRA fine-tune =="
 if [ -n "${SKIP_TRAIN:-}" ] && [ -f distill/out/gguf/config.json ]; then
   echo "  SKIP_TRAIN set — reusing merged model in distill/out/gguf"
 else
+  # Free GPU VRAM first: the teacher-collection and serve steps (or a prior run) leave an Ollama
+  # model resident on the 12GB card, which makes the QLoRA 4-bit load spill to CPU and raises
+  # "Some modules are dispatched on the CPU or the disk". Unload, then wait for the VRAM to drop.
+  for m in $(ollama ps 2>/dev/null | awk 'NR>1{print $1}'); do ollama stop "$m" >/dev/null 2>&1; done
+  for _ in $(seq 1 30); do
+    used=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -1)
+    [ "${used:-9999}" -lt 2000 ] && break
+    sleep 2
+  done
+  echo "  GPU free before train: ${used:-?} MiB used"
   python3 distill/train_qlora.py || { echo "STOP: training failed (see above)"; exit 1; }
 fi
 
