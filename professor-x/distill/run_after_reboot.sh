@@ -140,10 +140,31 @@ else
 fi
 cd ..
 
+# 5b. STOP-SANITY: before spending hours on the gate, confirm the distilled model actually halts.
+# A template/training mismatch can yield a degenerate model that never emits EOS — each bench task
+# then runs to max iterations and a single gate pass takes ~12h. Catch it in seconds: one short
+# generation must finish with done_reason="stop", not "length".
+echo "== [5b] stop-sanity: does professor-x-distilled emit EOS? =="
+SANITY=$(curl -s http://localhost:11434/api/generate -d \
+  '{"model":"professor-x-distilled","prompt":"Reply with just: ready","stream":false,"think":false,"options":{"num_predict":64}}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin).get('done_reason',''))" 2>/dev/null)
+echo "  done_reason=$SANITY (want: stop)"
+if [ "$SANITY" != "stop" ]; then
+  echo "STOP: distilled model is degenerate (done_reason=$SANITY, never halts). Skipping the gate to"
+  echo "      avoid a multi-hour hang. Likely the chat-template mismatch — retrain with"
+  echo "      PX_CHAT_TEMPLATE=qwen3. (See POST_REBOOT.md.)"
+  exit 1
+fi
+
 # 6. ICS-GATE: keep the distilled model ONLY if its MEAN repo-fix pass@1 (over K passes) beats
 #    baseline by > MDE. Multi-pass averaging guards against the single-measurement noise tail that
 #    produced an earlier false "rise" (the retracted M4 mirage). Writes a durable before/after
 #    artifact and cross-checks the post-reboot baseline against the pinned pre-reboot baseline.
+if [ -n "${SKIP_GATE:-}" ]; then
+  echo "== [6/6] SKIP_GATE set — model built + stop-sane; gate deferred. =="
+  echo "== flywheel (build only) complete. Full log: $LOG =="
+  exit 0
+fi
 echo "== [6/6] ICS-GATE: distilled vs baseline on repo-fix (K-pass mean) =="
 GATE_PASSES="${GATE_PASSES:-3}"
 get() { PROFESSOR_X_DATA_DIR="$HOME/.professor-x" ./target/release/professor-x \
