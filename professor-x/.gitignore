@@ -2,3 +2,13 @@
 artifacts/events/
 professor-x/artifacts/
 .fastembed_cache/
+
+# Distillation flywheel: generated/bootstrapped artifacts (never commit — large or machine-local)
+distill/.venv/
+distill/.pydev/
+distill/llama.cpp/
+distill/out/
+distill/data/
+distill/__pycache__/
+distill/Modelfile
+unsloth_compiled_cache/

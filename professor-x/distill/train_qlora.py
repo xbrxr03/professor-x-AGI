@@ -45,7 +45,7 @@ def main():
         sys.exit(f"No curated data at {DATA}. Run: python3 distill/curate.py")
 
     try:
-        from unsloth import FastLanguageModel
+        from unsloth import FastLanguageModel, is_bfloat16_supported
         from unsloth.chat_templates import get_chat_template
         from datasets import load_dataset
         from trl import SFTTrainer
@@ -99,7 +99,10 @@ def main():
             warmup_steps=10,
             num_train_epochs=EPOCHS,
             learning_rate=LR,
-            fp16=True,
+            # Match the model's loaded precision: Ampere+ (e.g. the 3060) loads bf16, and Unsloth
+            # rejects fp16 on a bf16 model. Pick automatically so this works across GPUs.
+            fp16=not is_bfloat16_supported(),
+            bf16=is_bfloat16_supported(),
             logging_steps=5,
             optim="adamw_8bit",
             output_dir=os.path.join(OUT, "checkpoints"),
