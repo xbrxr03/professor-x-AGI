@@ -166,10 +166,14 @@ Then reality showed up. The model wouldn't *stop talking*. It'd lock onto one se
 
 And the punchline? After a full day of debugging the *AI*… the actual bug was one line of config. Not the model. Not the training. The model was fine the entire time — I just never told the serving software it was allowed to stop. One missing setting.
 
-That's the real lesson, and it's the whole thesis of this project: **the hard part of AI isn't the AI. It's the system around it.** The brain was smart. The wiring was broken. Everybody obsesses over the brain. The wins are in the wiring.
+First lesson, and it's the whole thesis of this project: **the hard part of AI isn't the AI. It's the system around it.** The brain was smart. The wiring was broken. Everybody obsesses over the brain — the wins are in the wiring.
 
-**CTA (70-90s):**
-So — no clean trophy today. The model works on its own now; wiring it into the test rig is the next fight. That's the honest build. No hype, no fake wins, no skipping the ugly parts. Follow along — this is what real research actually looks like.
+Then I finally got the whole machine running end to end. Trained, packaged, plugged into the test. The result? A tie — the new model scored the same as the old one. But here's the twist: it's because *my test was too easy.* The baseline already scored nearly perfect, so there was no room left to show an improvement at all. I couldn't tell if it got smarter — because I couldn't measure it.
+
+Second lesson, the bigger one: **you can't prove something improved if your ruler can't measure it.** Building the honest, *hard* test is half the whole job — and the half nobody posts about.
+
+**CTA (75-95s):**
+So no trophy today — the machine works, but my ruler was broken, and that's the next fix. No hype, no fake wins, no skipping the ugly parts. That's the honest build. This is what real research actually looks like.
 
 ---
 
