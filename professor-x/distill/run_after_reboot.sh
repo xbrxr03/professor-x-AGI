@@ -119,6 +119,10 @@ else
   done
   echo "  GPU free before train: ${used:-?} MiB used"
   python3 distill/train_qlora.py || { echo "STOP: training failed (see above)"; exit 1; }
+  # Merge the adapter into the fp16 base OFFLINE (cached base; avoids the HF re-download hang).
+  # train_qlora.py only saves the adapter now — the merge happens here.
+  echo "  merging adapter -> fp16 (offline)…"
+  python3 distill/merge_fp16.py || { echo "STOP: offline merge failed (fp16 base cached? huggingface-cli download Qwen/Qwen3-8B)"; exit 1; }
 fi
 
 # 5. Serve the distilled model — auto-detect the produced artifact, no manual Modelfile edit.
@@ -169,19 +173,22 @@ else
 fi
 cd ..
 
-# 5b. STOP-SANITY: before spending hours on the gate, confirm the distilled model actually halts.
-# A template/training mismatch can yield a degenerate model that never emits EOS — each bench task
-# then runs to max iterations and a single gate pass takes ~12h. Catch it in seconds: one short
-# generation must finish with done_reason="stop", not "length".
-echo "== [5b] stop-sanity: does professor-x-distilled emit EOS? =="
-SANITY=$(curl -s http://localhost:11434/api/generate -d \
-  '{"model":"professor-x-distilled","prompt":"Reply with just: ready","stream":false,"think":false,"options":{"num_predict":64}}' \
-  | python3 -c "import sys,json; print(json.load(sys.stdin).get('done_reason',''))" 2>/dev/null)
-echo "  done_reason=$SANITY (want: stop)"
-if [ "$SANITY" != "stop" ]; then
-  echo "STOP: distilled model is degenerate (done_reason=$SANITY, never halts). Skipping the gate to"
-  echo "      avoid a multi-hour hang. Likely the chat-template mismatch — retrain with"
-  echo "      PX_CHAT_TEMPLATE=qwen3. (See POST_REBOOT.md.)"
+# 5b. PRE-GATE CHECK: confirm the model halts IN THE FORMAT THE BENCH USES — raw /api/generate,
+# a ReAct prompt ending in "Thought:", stop=["Observation:"], think=false. (Testing /api/chat here
+# is misleading: the bench drives the model raw, and a chat-only-trained model loops there — that
+# stalled a gate pass for 12h. This check catches it in seconds.) Must finish done_reason=stop AND
+# emit an Action line.
+echo "== [5b] pre-gate check: does professor-x-distilled produce ReAct + halt in raw mode? =="
+PG=$(curl -s http://localhost:11434/api/generate -d '{
+  "model":"professor-x-distilled",
+  "prompt":"You are an agent. Respond in strict ReAct format.\n<task>\nList the files in the current directory.\n</task>\n\nThought:",
+  "stream":false,"think":false,"options":{"num_predict":512,"stop":["Observation:"]}}' \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); r=d.get('response',''); print(d.get('done_reason',''), ('Action:' in r))" 2>/dev/null)
+echo "  done_reason + has-Action: $PG (want: stop True)"
+if [ "$PG" != "stop True" ]; then
+  echo "STOP: model does not behave in the bench's raw ReAct format ($PG). Skipping the gate to"
+  echo "      avoid a multi-hour stall. The train/serve format must match — train_qlora.py now"
+  echo "      renders RAW ReAct (not a chat template). See PLAN_11_10.md."
   exit 1
 fi
 

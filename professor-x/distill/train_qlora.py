@@ -75,30 +75,36 @@ def main():
 
     ds = load_dataset("json", data_files=DATA, split="train")
 
+    # RAW ReAct format — train the model in the SAME text format the harness serves it in.
+    # The benchmark drives the model via raw /api/generate (NOT a chat template): SYSTEM_PROMPT,
+    # then <task>, then "Thought:/Action:/Action Input:" turns with "Observation:" between them,
+    # stop=["Observation:"]. A chat-template-trained model is out-of-distribution there and loops.
+    # So render the curated messages as that raw text (system content is already SYSTEM_PROMPT).
+    # End each assistant turn with EOS so the model also learns a hard stop. See PLAN_11_10.md.
+    EOS = tokenizer.eos_token or "<|im_end|>"
+
     def fmt(ex):
-        # tool-role turns fold into the conversation as observations
-        msgs = []
+        parts = []
         for m in ex["messages"]:
-            role = m["role"]
-            if role == "tool":
-                msgs.append({"role": "user", "content": f"Observation: {m['content']}"})
-            else:
-                msgs.append(m)
-        return {"text": tokenizer.apply_chat_template(msgs, tokenize=False)}
+            role, content = m["role"], m["content"]
+            if role == "system":
+                parts.append(content)
+            elif role == "user":
+                parts.append(f"<task>\n{content}\n</task>")
+            elif role == "assistant":
+                parts.append(content + EOS)   # "Thought:..\nAction:..\nAction Input:..<eos>"
+            elif role == "tool":
+                parts.append(f"Observation: {content}")
+        return {"text": "\n\n".join(parts)}
 
     ds = ds.map(fmt)
 
-    # Assistant-only loss: compute loss ONLY on the assistant turns (incl. their <|im_end|> stop),
-    # masking system/user/observation tokens to -100. Turn 1 trained on the full sequence, which
-    # diluted the signal to produce the action format + EOS — the model reasoned but never stopped.
-    # (TRL 0.9.6 has no assistant_only_loss flag; this collator is the equivalent. Pre-flighted: it
-    # unmasks exactly the Thought:/Action: spans and the <|im_end|> token.) packing must be off.
-    collator = DataCollatorForCompletionOnlyLM(
-        instruction_template="<|im_start|>user\n",
-        response_template="<|im_start|>assistant\n",
-        tokenizer=tokenizer,
-        mlm=False,
-    )
+    if os.environ.get("PX_PREFLIGHT"):
+        sample = ds[0]["text"]
+        print("=== PREFLIGHT raw-format sample (first 1600 chars) ===")
+        print(sample[:1600])
+        print(f"\n[ends with EOS: {sample.rstrip().endswith(EOS)} | examples: {len(ds)}]")
+        return
 
     trainer = SFTTrainer(
         model=model,
@@ -107,7 +113,6 @@ def main():
         dataset_text_field="text",
         max_seq_length=MAX_SEQ,
         packing=False,
-        data_collator=collator,
         args=TrainingArguments(
             per_device_train_batch_size=1,
             gradient_accumulation_steps=8,
@@ -129,18 +134,11 @@ def main():
     os.makedirs(OUT, exist_ok=True)
     model.save_pretrained(os.path.join(OUT, "adapter"))
     tokenizer.save_pretrained(os.path.join(OUT, "adapter"))
-    # GGUF export for Ollama
-    try:
-        model.save_pretrained_gguf(os.path.join(OUT, "gguf"), tokenizer,
-                                   quantization_method="q4_k_m")
-        print(f"\nGGUF written to {OUT}/gguf — point distill/Modelfile at it.")
-    except Exception as e:
-        print(f"\nLoRA adapter saved to {OUT}/adapter (GGUF export skipped: {e})")
-
-    print("\nNEXT: serve it, then ICS-gate it:")
-    print("  ollama create professor-x-distilled -f distill/Modelfile")
-    print("  # set DEFAULT_MODEL to professor-x-distilled, run --consciousness-report")
-    print("  # ACCEPT only if pass@3 beats baseline by >0.033 AND ICS stays >=0.70")
+    # NOTE: do NOT call save_pretrained_gguf / save_pretrained_merged here — it re-downloads the
+    # fp16 base from HF and HANGS on a dropped connection (CLOSE-WAIT). Merge offline instead with
+    # the cached fp16 base: `python distill/merge_fp16.py` → out/gguf → convert → quantize → serve.
+    print(f"\nLoRA adapter saved to {OUT}/adapter.")
+    print("NEXT: python distill/merge_fp16.py  (offline merge) -> convert -> quantize -> serve -> gate")
 
 
 if __name__ == "__main__":
