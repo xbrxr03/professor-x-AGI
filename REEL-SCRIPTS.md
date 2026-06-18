@@ -150,28 +150,26 @@ If you can't measure it, you can't claim it. We're measuring it.
 
 ---
 
-## Day 7: "The Experiment"
+## Day 7: "The Experiment — What Actually Happened"
 
-*[OPEN: You, confident, looking at camera directly]*
+*[OPEN: You, tired but smiling, terminal + GPU visible behind you]*
 
 **HOOK (0-5s):**
-Week 1. Here's the full picture. One student, one GPU, one question.
+I said I'd run the experiment — can a small AI on a $400 GPU teach itself to code better? Here's what actually happened. It's not what I scripted.
 
-**CORE (5-65s):**
-Can a self-evolving AI harness make a small model act like a big one?
+**CORE (5-70s):**
+The plan was clean: take examples from a smarter AI, train the small one on them, then test if it got better. Textbook.
 
-Here's what we're running. Professor X starts with a basic harness around a small model running locally. Every round, it runs tasks, diagnoses failures at five layers, proposes targeted fixes, and evolves.
+And the training? Worked first try. The model learned — clean curve, no drama. I thought I was an hour from a result.
 
-Four baselines to compare against. A static harness that never changes — that's the floor. A human-expert harness designed by hand. The same harness on a frontier model. And a random-evolution harness that just guesses.
+Then reality showed up. The model wouldn't *stop talking*. It'd lock onto one sentence and repeat it forever. One test ran for twelve hours before I caught it. I rebuilt the thing five different ways. A download stalled. The GPU ran out of memory. Every layer I fixed exposed another one underneath.
 
-Thirty rounds. The same 60 tasks each time. After every round, we measure: did the harness actually get better? And did the agent stay the same agent — not drift into something unrecognizable?
+And the punchline? After a full day of debugging the *AI*… the actual bug was one line of config. Not the model. Not the training. The model was fine the entire time — I just never told the serving software it was allowed to stop. One missing setting.
 
-The three inventions make this possible. The diagnostic tells you *why* something failed. The fingerprint tracks *what* you're good at over time. And adaptive context allocation fixes the biggest silent killer — shoving too much information at a small model and hoping it sorts it out.
+That's the real lesson, and it's the whole thesis of this project: **the hard part of AI isn't the AI. It's the system around it.** The brain was smart. The wiring was broken. Everybody obsesses over the brain. The wins are in the wiring.
 
-If the harness is the dominant lever — and all the evidence says it is — then a $400 GPU should be able to produce measurable, reproducible improvement. That's the bet.
-
-**CTA (65-90s):**
-Thirty rounds. One GPU. We'll see if the harness is the thing everyone's been ignoring. Follow the build. It's all open source.
+**CTA (70-90s):**
+So — no clean trophy today. The model works on its own now; wiring it into the test rig is the next fight. That's the honest build. No hype, no fake wins, no skipping the ugly parts. Follow along — this is what real research actually looks like.
 
 ---
 
