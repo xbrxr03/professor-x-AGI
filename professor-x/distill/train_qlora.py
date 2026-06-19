@@ -49,8 +49,7 @@ def main():
         from unsloth import FastLanguageModel, is_bfloat16_supported
         from unsloth.chat_templates import get_chat_template
         from datasets import load_dataset
-        from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
-        from transformers import TrainingArguments
+        from transformers import TrainingArguments, Trainer, DataCollatorForSeq2Seq
     except ImportError as e:
         sys.exit(
             f"Missing deps ({e}).\n"
@@ -65,7 +64,7 @@ def main():
     model = FastLanguageModel.get_peft_model(
         model,
         r=16,
-        lora_alpha=16,
+        lora_alpha=32,            # alpha = 2r (Unsloth: more aggressive learning; last run underfit)
         lora_dropout=0.0,
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
                         "gate_proj", "up_proj", "down_proj"],
@@ -74,53 +73,56 @@ def main():
     tokenizer = get_chat_template(tokenizer, chat_template=CHAT_TEMPLATE)
 
     ds = load_dataset("json", data_files=DATA, split="train")
+    EOS_ID = tokenizer.eos_token_id
 
-    # RAW ReAct format — train the model in the SAME text format the harness serves it in.
-    # The benchmark drives the model via raw /api/generate (NOT a chat template): SYSTEM_PROMPT,
-    # then <task>, then "Thought:/Action:/Action Input:" turns with "Observation:" between them,
-    # stop=["Observation:"]. A chat-template-trained model is out-of-distribution there and loops.
-    # So render the curated messages as that raw text (system content is already SYSTEM_PROMPT).
-    # End each assistant turn with EOS so the model also learns a hard stop. See PLAN_11_10.md.
-    EOS = tokenizer.eos_token or "<|im_end|>"
-
-    def fmt(ex):
-        parts = []
+    # RAW ReAct format + ASSISTANT-ONLY masking. The bench drives the model via raw /api/generate
+    # (SYSTEM_PROMPT, <task>, Thought/Action/Action Input turns, Observation between, stop=Observation:),
+    # so we train in that exact raw text. CRITICAL FIX (last run regressed): compute loss ONLY on the
+    # model's own assistant spans (Thought/Action/Action Input + their EOS). System, <task>, and
+    # Observation (tool output) tokens are masked to -100 — the previous run trained on the whole
+    # sequence incl. observations, teaching it to hallucinate tool output and diluting the action
+    # signal (loss stalled at 1.64). Build token-level labels manually (TRL 0.9.6 has no qwen3
+    # assistant_only_loss). See docs/research + DECISIONS D-010.
+    def build(ex):
+        ids, labels = [], []
+        def add(text, train):
+            t = tokenizer(text, add_special_tokens=False)["input_ids"]
+            ids.extend(t); labels.extend(t if train else [-100] * len(t))
         for m in ex["messages"]:
-            role, content = m["role"], m["content"]
-            if role == "system":
-                parts.append(content)
-            elif role == "user":
-                parts.append(f"<task>\n{content}\n</task>")
-            elif role == "assistant":
-                parts.append(content + EOS)   # "Thought:..\nAction:..\nAction Input:..<eos>"
-            elif role == "tool":
-                parts.append(f"Observation: {content}")
-        return {"text": "\n\n".join(parts)}
+            r, c = m["role"], m["content"]
+            if r == "system":
+                add(c + "\n\n", False)
+            elif r == "user":
+                add(f"<task>\n{c}\n</task>\n\n", False)
+            elif r == "assistant":
+                add(c, True); ids.append(EOS_ID); labels.append(EOS_ID); add("\n\n", False)
+            elif r == "tool":
+                add(f"Observation: {c}\n\n", False)
+        return {"input_ids": ids[:MAX_SEQ], "labels": labels[:MAX_SEQ],
+                "attention_mask": [1] * len(ids[:MAX_SEQ])}
 
-    ds = ds.map(fmt)
+    ds = ds.map(build, remove_columns=ds.column_names)
+    ds = ds.filter(lambda e: any(l != -100 for l in e["labels"]))  # drop all-masked (TRL #3927)
 
     if os.environ.get("PX_PREFLIGHT"):
-        sample = ds[0]["text"]
-        print("=== PREFLIGHT raw-format sample (first 1600 chars) ===")
-        print(sample[:1600])
-        print(f"\n[ends with EOS: {sample.rstrip().endswith(EOS)} | examples: {len(ds)}]")
+        e = ds[0]; um = [i for i, l in enumerate(e["labels"]) if l != -100]
+        print(f"PREFLIGHT: {len(ds)} examples | ex0 unmasked(loss) tokens: {len(um)}/{len(e['input_ids'])}")
+        print("decoded unmasked (must be ONLY Thought/Action spans + EOS):")
+        print(repr(tokenizer.decode([e["input_ids"][i] for i in um]))[:500])
         return
 
-    trainer = SFTTrainer(
+    collator = DataCollatorForSeq2Seq(tokenizer, label_pad_token_id=-100, padding=True)
+    trainer = Trainer(
         model=model,
-        tokenizer=tokenizer,
         train_dataset=ds,
-        dataset_text_field="text",
-        max_seq_length=MAX_SEQ,
-        packing=False,
+        data_collator=collator,
         args=TrainingArguments(
             per_device_train_batch_size=1,
             gradient_accumulation_steps=8,
             warmup_steps=10,
             num_train_epochs=EPOCHS,
             learning_rate=LR,
-            # Match the model's loaded precision: Ampere+ (e.g. the 3060) loads bf16, and Unsloth
-            # rejects fp16 on a bf16 model. Pick automatically so this works across GPUs.
+            weight_decay=0.01,        # regularize the tiny corpus (Unsloth: 0.01-0.1)
             fp16=not is_bfloat16_supported(),
             bf16=is_bfloat16_supported(),
             logging_steps=5,
