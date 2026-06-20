@@ -1430,7 +1430,8 @@ impl ReactLoop {
             // text path. Both yield (answer_text, Option<ParsedStep>) so all downstream gates,
             // execution, and recording are identical.
             let (answer, parsed_opt) = if native_tools {
-                self.native_step(task, step_opts).await?
+                self.native_step(task, ice_examples, cognition_context, step_opts)
+                    .await?
             } else {
                 let prompt = self.build_step_prompt(task, ice_examples, cognition_context);
                 let system_prompt = self.prompt_override.as_deref().unwrap_or(SYSTEM_PROMPT);
@@ -2162,12 +2163,16 @@ impl ReactLoop {
         }
     }
 
-    fn build_step_prompt(
+    /// Shared context block — memd identity/working memory, workspace grounding, affect/body,
+    /// scratchpad, ICE examples, cognition, learned strategies, the task, and reflections —
+    /// i.e. everything EXCEPT history, the tool list, and the ReAct suffix. Used by BOTH the text
+    /// prompt and the native chat path so native tool-calling gets the same scaffolding (Stage 1).
+    fn build_context_parts(
         &self,
         task: &TaskNode,
         ice_examples: &[String],
         cognition_context: &[String],
-    ) -> String {
+    ) -> Vec<String> {
         let mut parts = Vec::new();
 
         // Pinned identity + working memory from memd
@@ -2247,6 +2252,17 @@ impl ReactLoop {
             parts.push(format!("<reflections>\n{refs}\n</reflections>"));
         }
 
+        parts
+    }
+
+    fn build_step_prompt(
+        &self,
+        task: &TaskNode,
+        ice_examples: &[String],
+        cognition_context: &[String],
+    ) -> String {
+        let mut parts = self.build_context_parts(task, ice_examples, cognition_context);
+
         // Prior steps this attempt. Recent steps keep their observation output
         // so the agent acts on tool results instead of re-running them blindly.
         // Older steps are compacted into a bounded ledger + Mermaid overview,
@@ -2285,15 +2301,25 @@ impl ReactLoop {
     /// NOT include the ReAct text tool list or `Thought:/Action:` formatting — measured: that text
     /// primes the model to emit prose instead of tool_calls (stock 8b: 44 prose vs 3 tool_calls). On
     /// a clean prompt the same model emits tool_calls reliably.
-    fn build_native_messages(&self, task: &TaskNode) -> Vec<ChatMessage> {
+    fn build_native_messages(
+        &self,
+        task: &TaskNode,
+        ice_examples: &[String],
+        cognition_context: &[String],
+    ) -> Vec<ChatMessage> {
         let system = self
             .prompt_override
             .as_deref()
             .unwrap_or(NATIVE_SYSTEM_PROMPT);
-        let mut msgs = vec![
-            ChatMessage::system(system),
-            ChatMessage::user(format!("Task: {}", task.description)),
-        ];
+        // Stage 1 parity: native gets the SAME context scaffolding as the text path (memd identity,
+        // workspace grounding, ICE examples, cognition, learned strategies, task, reflections) — but
+        // NOT the ReAct tool-text or suffix (tools arrive via tool_specs; history as structured
+        // messages). This closes the capability gap that made native score lower while keeping its
+        // robustness (no parse-fails / hangs).
+        let ctx = self
+            .build_context_parts(task, ice_examples, cognition_context)
+            .join("\n\n");
+        let mut msgs = vec![ChatMessage::system(system), ChatMessage::user(ctx)];
         for step in &task.steps {
             msgs.push(ChatMessage {
                 role: "assistant".to_string(),
@@ -2315,9 +2341,11 @@ impl ReactLoop {
     async fn native_step(
         &self,
         task: &TaskNode,
+        ice_examples: &[String],
+        cognition_context: &[String],
         opts: ModelOptions,
     ) -> Result<(String, Option<ParsedStep>)> {
-        let messages = self.build_native_messages(task);
+        let messages = self.build_native_messages(task, ice_examples, cognition_context);
         let resp = self
             .ollama
             .chat_with_tools(messages, tool_specs(), Some(opts))
