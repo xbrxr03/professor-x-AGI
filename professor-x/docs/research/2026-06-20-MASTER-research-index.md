@@ -101,6 +101,17 @@ Priority tags: 🔴 do-now · 🟠 soon · 🟢 later/context.
 - [Memento: fine-tune agents without fine-tuning (arXiv 2508.16153)](https://arxiv.org/pdf/2508.16153) — memory-based
   improvement, no weight updates. → **STEAL:** the harness/fast lever.
 - [Group-Evolving Agents (arXiv 2602.04837)](https://arxiv.org/pdf/2602.04837) — experience sharing. → **STEAL:** later (breadth).
+- 🔴 [**SkillOpt: Executive Strategy for Self-Evolving Agent Skills** (arXiv 2605.23904, MSR, May 2026)](https://arxiv.org/abs/2605.23904)
+  ([site](https://microsoft.github.io/SkillOpt/)) — treats a compact NL **skill document as the trainable STATE of a
+  FROZEN agent** and optimizes it like a DL optimizer: scored rollouts → a *separate optimizer model* makes **bounded
+  add/delete/replace edits** to ONE skill doc → an edit is accepted **only if a held-out validation score strictly
+  improves**. Adds a textual "learning-rate" budget, rejected-edit buffer, epoch-wise slow/meta update; **zero extra
+  inference cost** at deploy. +23.5 (GPT-5.5 chat) / +24.8 (Codex) / +19.1 (Claude Code); skills **transfer** across
+  models & environments. → **STEAL (big):** this is the *disciplined* version of our harness/skill lever (we have
+  skills + `evolve-skill-on-repofix`, but it's the "loosely controlled self-revision" SkillOpt beats). Use 14b as the
+  optimizer model, our repo-fix held-out tasks as the validation gate, bounded edits to `px-fix-bug.md` et al. It's
+  **local-friendly, reversible/auditable (text not weights), and the SAFEST first self-improvement lever to ship** —
+  the perfect complement to OPD (weights). See synthesis NP8.
 
 ## 7. Reward hacking / honesty / gate hardening 🔴 (urgent — our gate is hackable today)
 - [Anthropic — Natural Emergent Misalignment from Reward Hacking in Production RL](https://www.anthropic.com/research/emergent-misalignment-reward-hacking)

@@ -73,6 +73,19 @@ and (b) the OPD corpus. CLS gives principled answers to *what/when to consolidat
 prior turns). A single RL'd "consolidation policy" (Memory-R1 style) decides keep/prune/promote — the
 "memory engine" our product thesis promises, currently heuristic.
 
+### NP8 — SkillOpt: the disciplined harness lever (safest first self-improvement to ship) 🔴
+[SkillOpt (MSR, arXiv 2605.23904)](https://arxiv.org/abs/2605.23904) reframes our whole harness lever: a compact
+skill document is the **trainable state of a frozen agent**, optimized with deep-learning *discipline* — scored
+rollouts → bounded add/delete/replace edits by a separate optimizer model → **accept only if a held-out validation
+score strictly improves** (+ textual learning-rate budget, rejected-edit buffer). We already have skills
+(`px-fix-bug.md`) + `evolve-skill-on-repofix` + a held-out repo-fix set + a proposer model — but ours is exactly the
+"loosely controlled self-revision" SkillOpt shows underperforms. **Do:** rebuild skill-evolution as a SkillOpt-style
+text-space optimizer (14b = optimizer, repo-fix held-out = gate, bounded edits, accept-on-strict-improvement). **Why
+it's first:** text edits are reversible + auditable (no weight risk), it's local + zero-deploy-cost, and it directly
+satisfies our "no risky autonomous changes / gate everything" rule. It's the **harness half of the dual-lever done
+right** — ship it before/with OPD (the weights half), under the same gate. Connects to NP6 (CLS fast lever) and NP3
+(the held-out gate must be reward-hack-hardened first).
+
 ### NP7 — Cheap capability wins from the status quo (low effort, measurable)
 - **Repo-graph localization** (RepoGraph +32.8% on SWE-bench): upgrade `repo.map` → a tree-sitter
   control/data-dependence graph for multi-hop localization — directly attacks our hard-tier multi-file
