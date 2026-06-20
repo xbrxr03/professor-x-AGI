@@ -139,6 +139,13 @@ Priority tags: 🔴 do-now · 🟠 soon · 🟢 later/context.
   bottleneck. → **STEAL:** design/选 for bandwidth; informs base-model + quant choices.
 - [CoDA: diffusion code LM 1.7B (arXiv 2510.03270)](https://arxiv.org/html/2510.03270v1) — ≈7B quality, fast on light
   HW. → **STEAL:** watch as a future fast local base (park).
+- **Tensor vs pipeline parallelism** ([jarvislabs](https://jarvislabs.ai/blog/scaling-llm-inference-dp-pp-tp),
+  [TPI-LLM arXiv 2410.00531](https://arxiv.org/pdf/2410.00531)) — TP = intra-layer split, low latency but needs fast
+  interconnect (NVLink); PP = inter-layer split, lower bandwidth need, better for limited HW. **Not relevant
+  single-GPU** (we are). Only matters in the mesh-teacher scenario (§GitHub mesh-llm): over consumer ethernet (no
+  NVLink) **pipeline/stage-split wins** — which is exactly what mesh-llm's "Skippy" does. TPI-LLM shows TP *can* serve
+  70B on edge clusters with heavy optimization. → **STEAL:** if we pool boxes for a bigger OPD teacher, use pipeline/
+  stage-splitting, not TP; revisit TP only with NVLink-class interconnect. *Park until multi-node.*
 
 ## 10. Models, benchmarks & tool-calling FT — status quo 🟢/🟠
 - Best small open coding models 2026 ([kilo.ai](https://kilo.ai/open-source-models),
