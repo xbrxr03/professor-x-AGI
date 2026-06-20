@@ -2696,8 +2696,11 @@ fn parse_react_step(text: &str) -> Option<ParsedStep> {
     //   A) Model re-emits label: "Thought: ...\nAction: ...\nAction Input: ..."
     //   B) Prompt ended with "Thought:" so model continues without label:
     //      "<thought text>\nAction: ...\nAction Input: ..."
-    let tool_name =
-        extract_field(text, "Action").map(|s| s.trim().to_lowercase().replace(' ', "_"))?;
+    let raw_action = extract_field(text, "Action")?;
+    let (tool_name, inline_params) = normalize_action(&raw_action);
+    if tool_name.is_empty() {
+        return None;
+    }
 
     let thought = extract_field(text, "Thought").unwrap_or_else(|| {
         // Layout B: everything before the first "Action:" line is the thought
@@ -2715,7 +2718,11 @@ fn parse_react_step(text: &str) -> Option<ParsedStep> {
         }
     });
 
-    let params_raw = extract_field(text, "Action Input").unwrap_or_else(|| "{}".to_string());
+    // Prefer an explicit "Action Input:" line; otherwise fall back to params inlined in the
+    // call syntax (e.g. `Action: fs.read({"path":"x"})`), then to an empty object.
+    let params_raw = extract_field(text, "Action Input")
+        .or(inline_params)
+        .unwrap_or_else(|| "{}".to_string());
 
     let params = serde_json::from_str(&params_raw)
         .unwrap_or_else(|_| serde_json::json!({ "input": params_raw }));
@@ -2725,6 +2732,42 @@ fn parse_react_step(text: &str) -> Option<ParsedStep> {
         tool_name,
         params,
     })
+}
+
+/// Normalize a raw `Action:` field into a clean tool name plus any inline call params.
+///
+/// Local models frequently wrap the action in markdown (`` `fs.read` ``, `**fs.read**`),
+/// prefix a list ordinal ("1. fs.read"), and/or inline the params as a call
+/// (`fs.read({"path":"x"})`) instead of a separate `Action Input:` line. The strict parser then
+/// reads a tool name like `` **`fs.read({...})`** `` which matches no registered tool and is denied
+/// (observed: distilled-model run forfeited tasks to `policy.denied` on markdown-wrapped actions).
+/// This strips that noise so the underlying tool name resolves. Returns the cleaned, lowercased
+/// tool name and, when present, the inline params JSON string.
+fn normalize_action(raw: &str) -> (String, Option<String>) {
+    let s = raw.trim();
+    // Split off inline call params: from the first '(' to the matching last ')'.
+    let (name_part, inline_params) = match s.find('(') {
+        Some(open) => {
+            let after = &s[open + 1..];
+            let inner = match after.rfind(')') {
+                Some(close) => &after[..close],
+                None => after,
+            };
+            (&s[..open], Some(inner.trim().to_string()))
+        }
+        None => (s, None),
+    };
+    // Clean the tool-name token: keep the last whitespace-separated token (drops a leading
+    // ordinal like "1." or a stray "Action" prefix), then trim to tool-name characters
+    // (alphanumerics, '.', '_') — this removes surrounding backticks, asterisks, and quotes.
+    let tool_name = name_part
+        .split_whitespace()
+        .next_back()
+        .unwrap_or("")
+        .trim_matches(|c: char| !(c.is_alphanumeric() || c == '.' || c == '_'))
+        .to_lowercase();
+    let inline_params = inline_params.filter(|p| !p.is_empty());
+    (tool_name, inline_params)
 }
 
 fn finish_answer_from_params(params: &Value) -> Option<String> {
@@ -3364,7 +3407,8 @@ mod tests {
     use super::{
         augment_with_repair_hint, auto_repair_enabled_value, compact_history,
         edit_required_synthesis_guidance, effective_memory_ceiling, finish_answer_from_params,
-        has_successful_file_mutation, predict_success_from_ice, run_verifier_command,
+        has_successful_file_mutation, normalize_action, parse_react_step, predict_success_from_ice,
+        run_verifier_command,
         should_force_synthesis, should_forfeit_after_synthesis, successful_observation_summary,
         task_requires_file_edit, traceback_file_line, try_python_verifier_repair,
         verifier_failed_observation, verifier_failed_since_latest_file_mutation,
@@ -3425,6 +3469,54 @@ mod tests {
             ),
             Some("Task passed after running cargo check.".to_string())
         );
+    }
+
+    #[test]
+    fn normalize_action_strips_markdown_and_inlines_params() {
+        // markdown-wrapped inline call (the distilled-model failure mode)
+        let (tool, params) = normalize_action("**`fs.hash_edit({\"line\":12})`**");
+        assert_eq!(tool, "fs.hash_edit");
+        assert_eq!(params.as_deref(), Some("{\"line\":12}"));
+    }
+
+    #[test]
+    fn normalize_action_plain_name_no_params() {
+        let (tool, params) = normalize_action("fs.window_open");
+        assert_eq!(tool, "fs.window_open");
+        assert_eq!(params, None);
+    }
+
+    #[test]
+    fn normalize_action_strips_leading_ordinal_and_backticks() {
+        let (tool, params) = normalize_action("1. `finish`");
+        assert_eq!(tool, "finish");
+        assert_eq!(params, None);
+    }
+
+    #[test]
+    fn normalize_action_empty_call_falls_back_to_no_params() {
+        let (tool, params) = normalize_action("fs.list()");
+        assert_eq!(tool, "fs.list");
+        assert_eq!(params, None);
+    }
+
+    #[test]
+    fn parse_react_step_recovers_markdown_inline_action() {
+        // Layout B (thought continues, no label) with a markdown-wrapped inline call —
+        // previously unparseable -> policy.denied; must now resolve cleanly.
+        let text = "I will read the file.\nAction: **`fs.read({\"path\":\"lru.py\"})`**";
+        let parsed = parse_react_step(text).expect("should parse");
+        assert_eq!(parsed.tool_name, "fs.read");
+        assert_eq!(parsed.params, json!({"path": "lru.py"}));
+    }
+
+    #[test]
+    fn parse_react_step_explicit_action_input_still_wins() {
+        // The classic separate-line layout must be unchanged by the normalization.
+        let text = "Thought: do it\nAction: fs.read\nAction Input: {\"path\":\"a.py\"}";
+        let parsed = parse_react_step(text).expect("should parse");
+        assert_eq!(parsed.tool_name, "fs.read");
+        assert_eq!(parsed.params, json!({"path": "a.py"}));
     }
 
     #[test]
