@@ -101,3 +101,24 @@ generalization." Needs the GPU (Stage 2 has it now) -> queued: compute mean -log
 hack-fix solution sets under qwen3:8b; premise holds iff hack -logprob >> general -logprob beyond noise.
 Honest status: the invention is NOT validated; naive-gzip premise is weak; the perplexity-DL test is the
 real make-or-break and is pending a GPU slot.
+
+---
+## Kill-test #1b result (2026-06-20) — perplexity-under-the-model: PREMISE HOLDS (significant)
+Corpus: 60 general idiomatic fixes vs 60 minimal memorized hacks (each hard-codes its test's output).
+Measured under qwen3:8b GGUF (distill/out/gguf/distilled-Q4_K_M.gguf) via llama-perplexity, n_ctx=256.
+- **General fixes:  PPL = 1.607 ± 0.120**
+- **Memorized hacks: PPL = 2.114 ± 0.102**
+- **hack/gen = 1.32x; gap 0.51 >> combined error ~0.22 -> error bars DO NOT overlap (significant).**
+- Corroborating raw size: same 60 functions = 2242 B general vs 4029 B hack (**1.80x**).
+**Verdict: the Compression Gate's core premise is REAL and MEASURABLE — memorization costs significantly
+more bits (both raw and under-the-model) than generalization.** The gate would reject these hacks even
+though they pass the verifier. This is the theoretically-correct DL proxy (perplexity), not naive gzip,
+and it separates cleanly where gzip was weak (1.12x). 
+
+### What this does and does NOT prove (honest)
+HOLDS: the foundational assumption (generalization compresses, memorization bloats) is true on our model,
+significantly. The signal exists and is usable as a gate criterion. 
+NOT YET PROVEN: (a) that it separates on REAL agent trajectories (not just this controlled corpus);
+(b) that ΔDL correlates with held-out pass@1 across genuine self-improvement steps; (c) the full
+free-energy-search + compression-keep + Shapley-attribute loop. Those are the next tests, and they need
+the headroom benchmark. But the make-or-break premise that could have killed the whole invention PASSED.
