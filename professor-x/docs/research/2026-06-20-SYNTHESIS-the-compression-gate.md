@@ -169,3 +169,40 @@ operationalization agent is finding the local path.)
 Prior art (cite up front): DreamCoder 2006.08381 · LILO 2310.19791 · PowerPlay (Frontiers 2013) ·
 Schmidhuber compression-progress · 2502.02534 · Blier&Ollivier 1802.07044 · Kolmogorov structure function
 · Vitányi cs/0111053 · two-part-code MDL 2505.14635.
+
+---
+## THEORY SHARPENING (2026-06-20) — from residual gate -> EDL gate with a generalization certificate
+A theory agent mapped the residual idea onto formal MDL/learning theory. Three corrections that make it
+rigorous AND more novel:
+1. **Accept rule = total two-part code, not residual alone.** Gate on Δ(model-bits) + Σ(residual-bits)
+   over the corpus. A self-mod that SPENDS model-bits to ABSORB residual and nets a shorter total code is
+   the real win (Kolmogorov structure function / Vereshchagin–Vitányi: minimizing two-part code at a
+   complexity level provably yields the best-fit model / minimal randomness deficiency — holds for the
+   individual object, with certainty). Pure residual-shrink is the wrong target.
+2. **Residual on SEEN data certifies nothing — use PREQUENTIAL held-out codelength = a real certificate.**
+   A two-part code on the training/seen corpus is gameable by memorizing the eval set (our M0 risk). The
+   quantity that PROVABLY bounds generalization is the prequential (online) codelength on the UNSEEN suffix
+   of newly-verified solutions: Blier–Ollivier (1802.07044) "compress well ⇔ generalize well"; online-to-PAC
+   (2305.19674) converts that excess codelength (regret) into a held-out error bound. The named construct is
+   **Excess Description Length (EDL, arXiv 2601.04728, Jan 2026)** — and the EDL authors explicitly DO NOT
+   apply it to LLM self-modification / agent learning. THAT is the opening.
+   HONEST trap (EDL §6.3): low excess codelength does not reveal HOW the gain happened — so compute it on
+   held-out/future verified solutions, never on the seen set.
+3. **Routing correction (Feldman, 1906.05271):** high residual is NOT always discardable memorization —
+   rare-but-real RECURRING facts MUST be memorized for optimal generalization, and are statistically
+   indistinguishable from noise without influence estimation. So routing needs a 2nd axis:
+   residual × recurrence/influence — high-residual+recurring -> WEIGHTS (necessary memorization), not memory.
+Bridges: free-energy/predictive-coding (Friston) — residual = precision-weighted prediction error =
+variational free energy = expected codelength (one number feeds both our intrinsic instrument AND the gate;
+precision-weight each solution's residual by verification confidence to handle verifier noise). IB (Tishby)
+gives the routing threshold its name (β) but no proof.
+
+### The defensible novelty claim (precise, narrow, uncrowded)
+**"Excess Description Length (prequential, held-out, under a frozen local model) as the acceptance GATE for
+autonomous agent self-modification, combined with influence-based RESIDUAL routing across weights/skill/
+memory."** EDL/two-part-code/structure-function are fully formalized and (Jan 2026) measured on SFT, but
+NO ONE has used EDL as a self-modification gate or combined it with influence routing on a local agent.
+That unification — residual → route + gate(certificate) + measure — is real and unclaimed. Trap to avoid
+(EDL authors' own warning): residual-on-seen-data certifies nothing.
+Key refs: Vereshchagin–Vitányi structure.pdf; Blier–Ollivier 1802.07044; EDL 2601.04728; online-to-PAC
+2305.19674; Feldman 1906.05271 + Feldman–Zhang 2008.03703; Friston predictive-coding; Tishby IB.
