@@ -84,3 +84,20 @@ Sources: see the four agent reports (active-inference, neuro/bio, open-problems,
 URLs preserved there; key: Schmidhuber compression/creativity, Gödel Machine (cs/0309048), ReuseRL
 (2605.31509), MDL-Skills (r4XxtrIo1m9), reward-hacking-in-RSI (OpenReview ikrQWGgxYg), D-MEM (2603.14597),
 HiMem (2601.06377), SuRe (2511.22367), Yu&Dayan ACh/NE, STC-in-RNNs (Nature Comms 2021), SIA (2605.27276).
+
+---
+## Kill-test #1a result (2026-06-20) — premise check with NAIVE gzip: WEAK/ambiguous
+Built a controlled corpus: 10 idiomatic general fixes vs 10 minimal memorized hacks (each hard-codes its
+test's expected output). gzip(-9) compressed sizes:
+- full corpus: general=236B, hack=301B -> **hack/gen = 1.28x** (hacks bigger, direction correct)
+- steady-state marginal (items 6-10): general 21 B/item vs hack 24 B/item -> **1.12x** (within noise)
+**Verdict: directionally correct but too weak to gate on.** gzip measures generic byte-redundancy, not
+"new information relative to what the agent knows." 
+**Fix = the theoretically-correct DL proxy: description length UNDER THE AGENT'S OWN MODEL (token-level
+perplexity / -logprob of the solution under qwen3:8b).** A memorized literal is high-perplexity (surprising
+-> many bits); a general idiom is low-perplexity (already known -> few bits). This should separate
+general vs memorized far better than gzip — and it's the correct operationalization of "compression =
+generalization." Needs the GPU (Stage 2 has it now) -> queued: compute mean -logprob of general-fix vs
+hack-fix solution sets under qwen3:8b; premise holds iff hack -logprob >> general -logprob beyond noise.
+Honest status: the invention is NOT validated; naive-gzip premise is weak; the perplexity-DL test is the
+real make-or-break and is pending a GPU slot.
