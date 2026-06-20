@@ -95,7 +95,16 @@ def main():
             elif r == "user":
                 add(f"<task>\n{c}\n</task>\n\n", False)
             elif r == "assistant":
-                add(c, True); ids.append(EOS_ID); labels.append(EOS_ID); add("\n\n", False)
+                # FORMAT UNIFICATION (Phase 1): the bench prompt ends with the cue "Thought:"
+                # (REACT_SUFFIX), so at inference the label is PROVIDED and the model must CONTINUE
+                # with "<thought>\nAction:..\nAction Input:..". Mirror that here: emit "Thought:" as
+                # MASKED context, train only on the continuation. Prevents the model re-emitting the
+                # label ("Thought:Thought:") which made the parser fail -> 0/22. See format-unification plan.
+                body = c[len("Thought:"):] if c.startswith("Thought:") else c
+                add("Thought:", False)                 # cue provided at inference — masked
+                add(body, True)                        # model learns ONLY the continuation
+                ids.append(EOS_ID); labels.append(EOS_ID)
+                add("\n\n", False)
             elif r == "tool":
                 add(f"Observation: {c}\n\n", False)
         return {"input_ids": ids[:MAX_SEQ], "labels": labels[:MAX_SEQ],
