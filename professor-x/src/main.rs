@@ -9144,6 +9144,37 @@ async fn propose_repofix_prompt(
 }
 
 /// M4 item 1: point the empirical fitness gate at a SKILL (durable knowledge), not the
+/// Split a repo-fix manifest into deterministic, disjoint train/held-out subsets (SkillOpt gate).
+/// Interleaved (even idx -> train, odd -> held-out) so both splits span the difficulty range.
+/// Returns (train_path, holdout_path) as temp manifests.
+fn write_split_manifests(src_manifest: &str) -> Result<(String, String)> {
+    let json = std::fs::read_to_string(src_manifest)
+        .map_err(|e| anyhow::anyhow!("cannot read {src_manifest}: {e}"))?;
+    let v: serde_json::Value = serde_json::from_str(&json)?;
+    let tasks = v
+        .get("tasks")
+        .and_then(|t| t.as_array())
+        .ok_or_else(|| anyhow::anyhow!("manifest {src_manifest} has no 'tasks' array"))?;
+    let mut train = Vec::new();
+    let mut holdout = Vec::new();
+    for (i, t) in tasks.iter().enumerate() {
+        if i % 2 == 0 {
+            train.push(t.clone());
+        } else {
+            holdout.push(t.clone());
+        }
+    }
+    let dir = std::env::temp_dir();
+    let tp = dir.join("skillopt_train.json");
+    let hp = dir.join("skillopt_holdout.json");
+    std::fs::write(&tp, serde_json::to_string(&serde_json::json!({ "tasks": train }))?)?;
+    std::fs::write(&hp, serde_json::to_string(&serde_json::json!({ "tasks": holdout }))?)?;
+    Ok((
+        tp.to_string_lossy().to_string(),
+        hp.to_string_lossy().to_string(),
+    ))
+}
+
 /// ephemeral system prompt. Evolves `skills/conductor/px-fix-bug.md`: inject it over the
 /// default prompt, propose a failure-targeted improvement, measure pass@1, and PERSIST the
 /// skill file only if it measurably helps. Self-improvement of knowledge, empirically gated.
@@ -9159,10 +9190,18 @@ async fn run_evolve_skill_on_repofix(
     proposer: Arc<ollama::OllamaClient>,
 ) -> Result<()> {
     const K: usize = 2;
-    const MDE: f64 = 0.10;
+    const HOLDOUT_MDE: f64 = 0.05; // accept only on a strict HELD-OUT improvement
+    const MAX_LEN_RATIO: f64 = 1.6; // textual "learning rate": reject oversized rewrites
     let skill_path = std::path::PathBuf::from("skills/conductor/px-fix-bug.md");
     let original_skill = std::fs::read_to_string(&skill_path)
         .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", skill_path.display()))?;
+
+    // SkillOpt held-out gate (arXiv 2605.23904 + NP3): split the bench into a TRAIN split (observe
+    // failures + a cheap regression filter) and a DISJOINT HELD-OUT split that ALONE decides
+    // acceptance — so a skill edit can't be accepted by overfitting the tasks it was tuned on.
+    let src_manifest = std::env::var("REPO_FIX_TASKS")
+        .unwrap_or_else(|_| "scripts/benchmarks/repo_fix/tasks_hard_full.json".to_string());
+    let (train_manifest, holdout_manifest) = write_split_manifests(&src_manifest)?;
 
     let with_skill = |skill: &str| {
         format!(
@@ -9172,7 +9211,8 @@ async fn run_evolve_skill_on_repofix(
         )
     };
 
-    let measure = |prompt: Option<String>| {
+    // Measure pass@1 (K passes) on a SPECIFIC manifest (train or held-out).
+    let measure = |manifest: String, prompt: Option<String>| {
         let (o, r, p, m, e, c) = (
             Arc::clone(&ollama),
             Arc::clone(&registry),
@@ -9182,6 +9222,7 @@ async fn run_evolve_skill_on_repofix(
             cancel.clone(),
         );
         async move {
+            std::env::set_var("REPO_FIX_TASKS", &manifest);
             let mut tp = 0usize;
             let mut tr = 0usize;
             let mut fails: std::collections::HashMap<String, (String, bool)> =
@@ -9200,13 +9241,18 @@ async fn run_evolve_skill_on_repofix(
         }
     };
 
-    println!("=== M4: evolve-SKILL-on-repofix (px-fix-bug, empirical gate, K={K}, MDE={MDE}) ===");
-    let (baseline, baseline_fails) = measure(Some(with_skill(&original_skill))).await?;
-    println!("round 0 (current px-fix-bug skill): pass@1 = {baseline:.3}");
-    let failure_report = if baseline_fails.is_empty() {
-        "No failures at baseline.".to_string()
+    println!(
+        "=== Stage 2: SkillOpt (px-fix-bug) — held-out gate, bounded edits, K={K}, holdout-MDE={HOLDOUT_MDE} ==="
+    );
+    let (base_train, train_fails) =
+        measure(train_manifest.clone(), Some(with_skill(&original_skill))).await?;
+    let (base_holdout, _) =
+        measure(holdout_manifest.clone(), Some(with_skill(&original_skill))).await?;
+    println!("round 0: train={base_train:.3} holdout={base_holdout:.3}");
+    let failure_report = if train_fails.is_empty() {
+        "No failures on the train split.".to_string()
     } else {
-        let mut l: Vec<String> = baseline_fails
+        let mut l: Vec<String> = train_fails
             .iter()
             .map(|(id, (d, me))| {
                 let mode = if *me {
@@ -9223,48 +9269,76 @@ async fn run_evolve_skill_on_repofix(
         l.sort();
         l.join("\n")
     };
-    println!("baseline failure report:\n{failure_report}\n");
+    println!("train failure report:\n{failure_report}\n");
 
-    let mut best = baseline;
+    let mut best_train = base_train;
+    let mut best_holdout = base_holdout;
     let mut best_skill = original_skill.clone();
+    let mut rejected: Vec<String> = Vec::new();
     let mut accepted = 0u32;
     for round in 1..=rounds {
         if cancel.is_cancelled() {
             break;
         }
-        let candidate = match propose_repofix_skill(&proposer, &best_skill, &failure_report).await {
-            Ok(c) => c,
-            Err(e) => {
-                warn!("M4 skill round {round}: proposal failed: {e}");
-                continue;
-            }
-        };
-        let (score, _) = measure(Some(with_skill(&candidate))).await?;
-        let accept = score >= best + MDE;
+        let candidate =
+            match propose_repofix_skill(&proposer, &best_skill, &failure_report, &rejected).await {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!("Stage2 skill round {round}: proposal failed: {e}");
+                    continue;
+                }
+            };
+        // textual learning-rate budget: a bounded edit must stay close in size to the current skill
+        if (candidate.len() as f64) > (best_skill.len() as f64) * MAX_LEN_RATIO {
+            println!(
+                "round {round}: candidate too large ({} vs {} chars) -> reject (over budget)",
+                candidate.len(),
+                best_skill.len()
+            );
+            rejected.push(format!("oversized rewrite ({} chars)", candidate.len()));
+            continue;
+        }
+        // cheap TRAIN filter first; only pay for the held-out measurement if train didn't regress
+        let (cand_train, _) =
+            measure(train_manifest.clone(), Some(with_skill(&candidate))).await?;
+        if cand_train < best_train {
+            println!("round {round}: train {cand_train:.3} < best {best_train:.3} -> reject (train regressed)");
+            rejected.push(format!("train regressed to {cand_train:.3}"));
+            continue;
+        }
+        // SkillOpt acceptance: a STRICT held-out improvement (the overfitting-proof gate)
+        let (cand_holdout, _) =
+            measure(holdout_manifest.clone(), Some(with_skill(&candidate))).await?;
+        let accept = cand_holdout >= best_holdout + HOLDOUT_MDE;
         println!(
-            "round {round}: candidate skill pass@1 = {score:.3} (best {best:.3}) -> {}",
+            "round {round}: train={cand_train:.3} holdout={cand_holdout:.3} (best holdout {best_holdout:.3}) -> {}",
             if accept { "ACCEPT" } else { "reject" }
         );
         if accept {
-            best = score;
+            best_train = cand_train;
+            best_holdout = cand_holdout;
             best_skill = candidate;
             accepted += 1;
+        } else {
+            rejected.push(format!(
+                "holdout {cand_holdout:.3} did not beat {best_holdout:.3}+MDE"
+            ));
         }
     }
 
     if best_skill != original_skill {
         std::fs::write(&skill_path, &best_skill)?;
         println!(
-            "PERSISTED improved px-fix-bug skill to {}",
+            "PERSISTED improved px-fix-bug skill (held-out {base_holdout:.3} -> {best_holdout:.3}) to {}",
             skill_path.display()
         );
     } else {
-        println!("No skill change beat baseline — px-fix-bug left unchanged (gate working).");
+        println!("No edit beat the held-out gate — px-fix-bug left unchanged (gate working).");
     }
     println!(
-        "\n=== M4 SKILL CURVE === baseline {baseline:.3} -> best {best:.3} | {accepted}/{rounds} accepted"
+        "\n=== Stage 2 SKILL CURVE === held-out {base_holdout:.3} -> {best_holdout:.3} | {accepted}/{rounds} accepted"
     );
-    info!("M4 skill done: baseline={baseline:.3} best={best:.3} accepted={accepted}/{rounds}");
+    info!("Stage2 skill done: holdout {base_holdout:.3}->{best_holdout:.3} accepted={accepted}/{rounds}");
     Ok(())
 }
 
@@ -9583,14 +9657,32 @@ async fn propose_repofix_skill(
     ollama: &Arc<ollama::OllamaClient>,
     base_skill: &str,
     failure_report: &str,
+    rejected: &[String],
 ) -> Result<String> {
-    let system = "You improve a SKILL (a markdown guide) used by a weak local coding agent that \
-        fixes bugs. You are shown its ACTUAL recent failures. Output ONLY the improved skill \
-        markdown — keep the '# px-fix-bug' heading and concise Purpose/Workflow/Anti-patterns/\
-        Output Contract sections. Directly target the observed failures.";
+    // SkillOpt (arXiv 2605.23904): treat the skill doc as trainable state; make BOUNDED edits (a
+    // "textual learning rate"), not wholesale rewrites — small, targeted changes are more stable and
+    // auditable, and gate better on held-out tasks.
+    let system = "You are a text-space optimizer improving a SKILL (a markdown guide) used by a weak \
+        local coding agent that fixes bugs. Make a SMALL, BOUNDED edit to the skill — add, delete, or \
+        replace at most a few lines that DIRECTLY target the observed failures. Do NOT rewrite it \
+        wholesale; keep it close to the current version and roughly the same length. Keep the \
+        '# px-fix-bug' heading and the concise Purpose/Workflow/Anti-patterns/Output Contract \
+        sections. Output ONLY the full revised skill markdown.";
+    let rejected_block = if rejected.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\nEDITS ALREADY TRIED THAT DID NOT HELP (do something different):\n{}",
+            rejected
+                .iter()
+                .map(|r| format!("- {}", r.chars().take(160).collect::<String>()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    };
     let prompt = format!(
-        "CURRENT SKILL:\n{base_skill}\n\nACTUAL RECENT FAILURES:\n{failure_report}\n\n\
-         Output the improved skill markdown only:"
+        "CURRENT SKILL:\n{base_skill}\n\nACTUAL RECENT FAILURES (on the TRAIN split):\n{failure_report}{rejected_block}\n\n\
+         Make ONE small bounded edit. Output the full revised skill markdown only:"
     );
     let resp = ollama
         .generate(
@@ -14538,6 +14630,33 @@ fn seed_cognition_base() -> Vec<CognitionItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn write_split_manifests_splits_disjoint_interleaved() {
+        let dir = std::env::temp_dir().join(format!("px-split-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("src.json");
+        let tasks: Vec<_> = (0..6).map(|i| serde_json::json!({"id": format!("t{i}")})).collect();
+        std::fs::write(&src, serde_json::to_string(&serde_json::json!({"tasks": tasks})).unwrap())
+            .unwrap();
+        let (tp, hp) = write_split_manifests(src.to_str().unwrap()).unwrap();
+        let read = |p: &str| -> Vec<String> {
+            let v: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap();
+            v["tasks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| t["id"].as_str().unwrap().to_string())
+                .collect()
+        };
+        let train = read(&tp);
+        let hold = read(&hp);
+        assert_eq!(train, vec!["t0", "t2", "t4"]); // even idx
+        assert_eq!(hold, vec!["t1", "t3", "t5"]); // odd idx
+        assert!(train.iter().all(|t| !hold.contains(t)), "splits must be disjoint");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn repo_fix_pass_violation_catches_hacks_and_allows_legit() {
