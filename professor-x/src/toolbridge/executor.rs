@@ -144,7 +144,37 @@ impl ToolExecutor {
                 return Observation::err(&format!("schema validation failed: {e}"));
             }
         }
-        let result = self.dispatch(action).await;
+        // HARD per-tool timeout backstop: no single tool call may freeze the agent loop.
+        // Most tools already bound themselves (shell 30s, web 8-12s), but sub-agent tools
+        // (agent.delegate/tot.search), ollama.complete, and any future tool can run unbounded —
+        // a no-timeout tool froze a full bench run for 25min (see IMPLEMENTATION-PLAN stage 0a).
+        // Tools yield at their .await points, so this fires for network/process/sub-agent hangs.
+        let timeout = std::time::Duration::from_secs(tool_timeout_secs());
+        let result = match tokio::time::timeout(timeout, self.dispatch(action)).await {
+            Ok(r) => r,
+            Err(_) => {
+                let elapsed = start.elapsed().as_millis() as u64;
+                warn!(
+                    "tool '{}' exceeded {}s hard timeout — returning failure (loop continues)",
+                    action.tool_name,
+                    timeout.as_secs()
+                );
+                self.record_skill_outcome_if_skill(&action.tool_name, false);
+                return Observation {
+                    success: false,
+                    output: String::new(),
+                    error: Some(format!(
+                        "tool '{}' timed out after {}s (hard limit); it may have hung on I/O, a \
+                         sub-agent, or an external call. Try a different, more direct approach.",
+                        action.tool_name,
+                        timeout.as_secs()
+                    )),
+                    tokens_used: 0,
+                    execution_ms: elapsed,
+                    artifacts: Vec::new(),
+                };
+            }
+        };
         let elapsed = start.elapsed().as_millis() as u64;
         let observation = match result {
             Ok(result) => Observation {
@@ -707,7 +737,10 @@ impl ToolExecutor {
                     answer
                 } else if let Some(url) = action.params["url"].as_str() {
                     // Fetch remote image, write to temp file, then analyze
-                    let bytes = reqwest::get(url).await?.bytes().await?;
+                    let img_client = reqwest::Client::builder()
+                        .timeout(std::time::Duration::from_secs(15))
+                        .build()?;
+                    let bytes = img_client.get(url).send().await?.bytes().await?;
                     let tmp = std::env::temp_dir()
                         .join(format!("px-vision-{}.bin", uuid::Uuid::new_v4()));
                     std::fs::write(&tmp, &bytes)?;
@@ -1186,6 +1219,16 @@ fn req_str<'a>(p: &'a serde_json::Value, key: &str) -> Result<&'a str> {
         .ok_or_else(|| anyhow::anyhow!("missing param '{key}'"))
 }
 
+/// Hard per-tool timeout (seconds) backstop. Generous enough for legit sub-agents/LLM tool
+/// calls, but bounds any hang. Override with PROFESSOR_X_TOOL_TIMEOUT_SECS.
+fn tool_timeout_secs() -> u64 {
+    std::env::var("PROFESSOR_X_TOOL_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(300)
+}
+
 fn req_string_array(p: &serde_json::Value, key: &str) -> Result<Vec<String>> {
     let values = p[key]
         .as_array()
@@ -1649,6 +1692,30 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn execute_enforces_hard_tool_timeout() {
+        // Stage 0a: no single tool call may freeze the loop. A tool that runs longer than the
+        // hard timeout must return a failure observation, not hang. (A no-timeout tool froze a
+        // full bench run for 25min.)
+        std::env::set_var("PROFESSOR_X_TOOL_TIMEOUT_SECS", "1");
+        let root = temp_workspace();
+        let registry = Arc::new(std::sync::RwLock::new(ToolRegistry::new()));
+        let executor = ToolExecutor::new(registry).with_workspace_root(root);
+        let obs = executor.execute(&shell_action("sleep 5")).await;
+        std::env::remove_var("PROFESSOR_X_TOOL_TIMEOUT_SECS");
+        assert!(!obs.success, "expected timeout failure, got success");
+        assert!(
+            obs.error.as_deref().unwrap_or("").contains("timed out"),
+            "error should mention timeout: {:?}",
+            obs.error
+        );
+        assert!(
+            obs.execution_ms < 3500,
+            "should have aborted near 1s, took {}ms",
+            obs.execution_ms
+        );
     }
 
     #[tokio::test]
