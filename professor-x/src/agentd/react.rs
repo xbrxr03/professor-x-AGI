@@ -45,7 +45,9 @@ use crate::memd::task_runs::TaskRunStore;
 use crate::memd::transcripts::TranscriptStore;
 use crate::memd::working::MermaidCanvas;
 use crate::memd::MemoryManager;
-use crate::ollama::{ModelOptions, OllamaClient};
+use crate::ollama::{
+    ChatMessage, ModelOptions, OllamaClient, ToolCall, ToolCallFunction, ToolSpec,
+};
 use crate::policyd::{AuditStore, Decision, PermissionScope, PolicyEngine};
 use crate::toolbridge::executor::{Action, Observation};
 use crate::toolbridge::{ToolExecutor, ToolRegistry};
@@ -1292,6 +1294,12 @@ impl ReactLoop {
         let mut react_opts = ModelOptions::for_react();
         react_opts.num_ctx = Some(num_ctx);
 
+        // Phase 2: native tool-calling path (structured tool_calls, no free-form text parsing).
+        // Default OFF — the ReAct text path stays the proven default until this is gated green.
+        let native_tools = std::env::var("PROFESSOR_X_NATIVE_TOOLS")
+            .map(|v| matches!(v.as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false);
+
         for step_idx in 0..MAX_STEPS {
             if self.cancel.is_cancelled() {
                 return Ok(false);
@@ -1404,8 +1412,6 @@ impl ReactLoop {
             }
 
             // Build the full prompt for this step
-            let prompt = self.build_step_prompt(task, ice_examples, cognition_context);
-
             // M2: a duplicate-blocked action means the model is stuck regenerating the same
             // step at low temperature (greedy loop) — the real repo-fix failure mode (it
             // re-runs fs.list forever and never reaches read→edit). Escalate temperature on
@@ -1419,17 +1425,24 @@ impl ReactLoop {
                 step_opts.top_p = Some(0.98);
             }
 
-            // Ask the model for the next Thought + Action
-            let resp = self
-                .ollama
-                .generate(
-                    &prompt,
-                    Some(self.prompt_override.as_deref().unwrap_or(SYSTEM_PROMPT)),
-                    Some(step_opts),
-                )
-                .await?;
+            // Ask the model for the next step. Native tool-calling (PROFESSOR_X_NATIVE_TOOLS=1) gets
+            // back structured tool_calls — no free-form text parsing; otherwise the classic ReAct
+            // text path. Both yield (answer_text, Option<ParsedStep>) so all downstream gates,
+            // execution, and recording are identical.
+            let (answer, parsed_opt) = if native_tools {
+                self.native_step(task, step_opts).await?
+            } else {
+                let prompt = self.build_step_prompt(task, ice_examples, cognition_context);
+                let system_prompt = self.prompt_override.as_deref().unwrap_or(SYSTEM_PROMPT);
+                let resp = self
+                    .ollama
+                    .generate(&prompt, Some(system_prompt), Some(step_opts))
+                    .await?;
+                let (_, answer) = resp.split_thinking();
+                let parsed = parse_react_step(&answer);
+                (answer, parsed)
+            };
 
-            let (_, answer) = resp.split_thinking();
             self.emit_event(
                 Some(session_id),
                 Some(task.id),
@@ -1449,7 +1462,7 @@ impl ReactLoop {
             );
 
             // Parse Thought / Action / Action Input
-            match parse_react_step(&answer) {
+            match parsed_opt {
                 None => {
                     // Model output didn't match expected format — check for FINISH signal
                     if answer.to_lowercase().contains("task complete")
@@ -2264,6 +2277,76 @@ impl ReactLoop {
         parts.join("\n\n")
     }
 
+    /// Phase 2 native tool-calling step: offer the tool specs via /api/chat and read back a
+    /// structured tool_call. Returns (answer_text_for_logging, Option<ParsedStep>) to mirror the
+    /// text path so all downstream gates/execution are unchanged.
+    /// Build a CLEAN native chat history: system + task as a user message + each prior step as a
+    /// real assistant `tool_calls` message followed by its `tool`-role result. Critically this does
+    /// NOT include the ReAct text tool list or `Thought:/Action:` formatting — measured: that text
+    /// primes the model to emit prose instead of tool_calls (stock 8b: 44 prose vs 3 tool_calls). On
+    /// a clean prompt the same model emits tool_calls reliably.
+    fn build_native_messages(&self, task: &TaskNode) -> Vec<ChatMessage> {
+        let system = self
+            .prompt_override
+            .as_deref()
+            .unwrap_or(NATIVE_SYSTEM_PROMPT);
+        let mut msgs = vec![
+            ChatMessage::system(system),
+            ChatMessage::user(format!("Task: {}", task.description)),
+        ];
+        for step in &task.steps {
+            msgs.push(ChatMessage {
+                role: "assistant".to_string(),
+                content: String::new(),
+                tool_calls: Some(vec![ToolCall {
+                    function: ToolCallFunction {
+                        name: step.action.tool_name.clone(),
+                        arguments: step.action.params.clone(),
+                    },
+                }]),
+                tool_name: None,
+            });
+            let result = truncate(&step.observation.output, 1500);
+            msgs.push(ChatMessage::tool(step.action.tool_name.clone(), result));
+        }
+        msgs
+    }
+
+    async fn native_step(
+        &self,
+        task: &TaskNode,
+        opts: ModelOptions,
+    ) -> Result<(String, Option<ParsedStep>)> {
+        let messages = self.build_native_messages(task);
+        let resp = self
+            .ollama
+            .chat_with_tools(messages, tool_specs(), Some(opts))
+            .await?;
+        let (thinking, content) = resp.split_thinking();
+        let thought = thinking.unwrap_or_else(|| content.clone());
+        let parsed = resp.tool_calls().first().map(|call| {
+            let tool_name = call.function.name.trim().to_lowercase();
+            // Arguments are usually a JSON object; some models emit a JSON string — normalize.
+            let params = match &call.function.arguments {
+                Value::String(s) => {
+                    serde_json::from_str::<Value>(s).unwrap_or_else(|_| json!({ "input": s }))
+                }
+                other => other.clone(),
+            };
+            ParsedStep {
+                thought: thought.clone(),
+                tool_name,
+                params,
+            }
+        });
+        let answer = if content.trim().is_empty() {
+            format!("[native: {} tool_call(s)]", resp.tool_calls().len())
+        } else {
+            content
+        };
+        Ok((answer, parsed))
+    }
+
     /// List tools from connected MCP servers so the LLM knows it can call them.
     /// Without this, registered MCP tools dispatch fine but the model never
     /// tries them — it only sees the hardcoded built-in list.
@@ -2690,6 +2773,90 @@ impl ReactLoop {
 }
 
 // ── Parsing ───────────────────────────────────────────────────────────────────
+
+/// The repo-fix tool catalog as native function specs (Phase 2). Mirrors the tools described in
+/// SYSTEM_PROMPT/TOOLS_DESCRIPTION; scoped to the set repo-fix needs for the S2 proof. Internal
+/// control verbs (finish/fail) are exposed as tools so the model selects them structurally instead
+/// of via prose.
+fn tool_specs() -> Vec<ToolSpec> {
+    let obj = |props: Value, required: Value| {
+        json!({"type": "object", "properties": props, "required": required})
+    };
+    let path = || json!({"type": "string", "description": "file path"});
+    vec![
+        ToolSpec::function(
+            "fs.read",
+            "Read a file's full contents.",
+            obj(json!({"path": path()}), json!(["path"])),
+        ),
+        ToolSpec::function(
+            "fs.list",
+            "List the entries of a directory.",
+            obj(json!({"path": path()}), json!(["path"])),
+        ),
+        ToolSpec::function(
+            "fs.window_open",
+            "Read a bounded line window from the start of a file.",
+            obj(
+                json!({"path": path(), "lines": {"type": "integer"}}),
+                json!(["path"]),
+            ),
+        ),
+        ToolSpec::function(
+            "fs.hash_read",
+            "Read a file with per-line hashes, required before fs.hash_edit.",
+            obj(json!({"path": path()}), json!(["path"])),
+        ),
+        ToolSpec::function(
+            "fs.write",
+            "Overwrite a file with new content.",
+            obj(
+                json!({"path": path(), "content": {"type": "string"}}),
+                json!(["path", "content"]),
+            ),
+        ),
+        ToolSpec::function(
+            "fs.hash_edit",
+            "Replace exactly one line, only if its current hash matches (get it from fs.hash_read).",
+            obj(
+                json!({
+                    "path": path(),
+                    "line": {"type": "integer"},
+                    "hash": {"type": "string"},
+                    "new_text": {"type": "string", "description": "full replacement line"},
+                    "mode": {"type": "string", "enum": ["check", "apply"]}
+                }),
+                json!(["path", "line", "hash", "new_text", "mode"]),
+            ),
+        ),
+        ToolSpec::function(
+            "patch.apply",
+            "Check or apply a unified git-style diff.",
+            obj(
+                json!({
+                    "mode": {"type": "string", "enum": ["check", "apply"]},
+                    "patch": {"type": "string"}
+                }),
+                json!(["mode", "patch"]),
+            ),
+        ),
+        ToolSpec::function(
+            "shell.restricted",
+            "Run a sandboxed shell command.",
+            obj(json!({"command": {"type": "string"}}), json!(["command"])),
+        ),
+        ToolSpec::function(
+            "finish",
+            "Signal the task is complete, with a concise final answer/result.",
+            obj(json!({"answer": {"type": "string"}}), json!(["answer"])),
+        ),
+        ToolSpec::function(
+            "fail",
+            "Signal the task cannot be completed, with a specific reason.",
+            obj(json!({"reason": {"type": "string"}}), json!(["reason"])),
+        ),
+    ]
+}
 
 fn parse_react_step(text: &str) -> Option<ParsedStep> {
     // Two valid layouts:
@@ -3301,6 +3468,16 @@ const TOOLS_DESCRIPTION: &str = "Available tools:
 - fail             {\"reason\": \"<why>\"} — signal task failed (all options exhausted)";
 
 const REACT_SUFFIX: &str = "Now complete the task. Follow the ReAct format.\n\nThought:";
+
+/// Concise system prompt for native tool-calling mode (Phase 2). The full ReAct SYSTEM_PROMPT
+/// mandates a text Thought/Action format and suppresses structured tool_calls, so native mode uses
+/// this instead: always call a tool, one per step.
+const NATIVE_SYSTEM_PROMPT: &str = "You are a precise autonomous coding agent. Solve the task by \
+calling the provided tools — exactly ONE tool call per step, never answer in prose. After each tool \
+result, choose the next tool. To fix a bug: read the file (fs.read or fs.window_open); for a one-line \
+fix call fs.hash_read to get the line's hash, then fs.hash_edit; use fs.write or patch.apply for larger \
+edits. When the fix is complete and the check passes, call finish with a short answer. If you are truly \
+stuck, call fail with a specific reason. Never repeat an identical tool call.";
 
 /// Predict task success probability from ICE example outcomes.
 /// Laplace-smoothed so no ICE → 0.5 uninformative prior; all-success → ~0.9.
