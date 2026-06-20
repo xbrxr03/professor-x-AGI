@@ -1,0 +1,10 @@
+# Native tool-calling baseline (STRIPPED prompt, pre-Stage-1) — pinned 2026-06-20
+# Model: qwen3:8b-q4_K_M | bench: tasks_hard_full.json (30 hard tasks) | PROFESSOR_X_NATIVE_TOOLS=1
+# Verifier pass@1 (check.py), reward-hack-guarded (Stage 0c). Binary built BEFORE Stage 1 scaffolding.
+passes (K=4 clean): [0.4, 0.467, 0.4, 0.4]   # pass 5 timed out at the 30min script cap (intermittent stall, excluded)
+mean   = 0.4168
+stdev  = 0.0290
+min    = 0.4000
+max    = 0.4670
+MDE    = 0.067   # Stage-1 (scaffolded native) must reach >= 0.484 (~15/30) to claim a real gain
+gate   = native pass@1 > baseline_mean + MDE, beyond the 1/30=0.033 resolution
