@@ -150,6 +150,13 @@ impl GenerateResponse {
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
+    /// Native tool calls the assistant requested (Ollama qwen3 tool-calling). Present only on
+    /// assistant messages; echoed back verbatim when continuing the conversation.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub tool_calls: Option<Vec<ToolCall>>,
+    /// For a `tool`-role message: the tool whose result `content` carries (Ollama expects this).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub tool_name: Option<String>,
 }
 
 impl ChatMessage {
@@ -157,18 +164,79 @@ impl ChatMessage {
         Self {
             role: "system".to_string(),
             content: content.into(),
+            tool_calls: None,
+            tool_name: None,
         }
     }
     pub fn user(content: impl Into<String>) -> Self {
         Self {
             role: "user".to_string(),
             content: content.into(),
+            tool_calls: None,
+            tool_name: None,
         }
     }
     pub fn assistant(content: impl Into<String>) -> Self {
         Self {
             role: "assistant".to_string(),
             content: content.into(),
+            tool_calls: None,
+            tool_name: None,
+        }
+    }
+    /// A `tool`-role message carrying the result of a tool the assistant called.
+    pub fn tool(tool_name: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            role: "tool".to_string(),
+            content: content.into(),
+            tool_calls: None,
+            tool_name: Some(tool_name.into()),
+        }
+    }
+}
+
+/// One native tool call from the model: `{"function": {"name": ..., "arguments": {...}}}`.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ToolCall {
+    pub function: ToolCallFunction,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ToolCallFunction {
+    pub name: String,
+    /// Ollama returns arguments as a JSON object; some models emit a JSON string — callers normalize.
+    pub arguments: serde_json::Value,
+}
+
+/// A tool offered to the model, OpenAI-style: `{"type":"function","function":{name,description,parameters}}`.
+#[derive(Debug, Serialize, Clone)]
+pub struct ToolSpec {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub function: FunctionSpec,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct FunctionSpec {
+    pub name: String,
+    pub description: String,
+    /// JSON-schema object describing the tool's parameters.
+    pub parameters: serde_json::Value,
+}
+
+impl ToolSpec {
+    pub fn function(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        parameters: serde_json::Value,
+    ) -> Self {
+        Self {
+            kind: "function".to_string(),
+            function: FunctionSpec {
+                name: name.into(),
+                description: description.into(),
+                parameters,
+            },
         }
     }
 }
@@ -183,6 +251,9 @@ pub struct ChatRequest {
     /// Top-level thinking-mode field (see GenerateRequest::think).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub think: Option<bool>,
+    /// Native tool specs offered to the model (Phase 2 native tool-calling). Omitted when None.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<ToolSpec>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -197,6 +268,11 @@ pub struct ChatResponse {
 impl ChatResponse {
     pub fn tokens_used(&self) -> u32 {
         self.prompt_eval_count.unwrap_or(0) + self.eval_count.unwrap_or(0)
+    }
+
+    /// Native tool calls the model requested this turn (empty if it answered in prose).
+    pub fn tool_calls(&self) -> &[ToolCall] {
+        self.message.tool_calls.as_deref().unwrap_or(&[])
     }
 
     pub fn split_thinking(&self) -> (Option<String>, String) {
@@ -398,6 +474,27 @@ impl OllamaClient {
             stream: false,
             options,
             think,
+            tools: None,
+        };
+        self.chat_with_retry(&req).await
+    }
+
+    /// Chat with native tool-calling: offers `tools` to the model and returns any `tool_calls`
+    /// on the response message (Phase 2 — see docs/research/2026-06-20-phase2-native-toolcalling-plan.md).
+    pub async fn chat_with_tools(
+        &self,
+        messages: Vec<ChatMessage>,
+        tools: Vec<ToolSpec>,
+        options: Option<ModelOptions>,
+    ) -> Result<ChatResponse> {
+        let think = options.as_ref().and_then(|o| o.think);
+        let req = ChatRequest {
+            model: self.model.clone(),
+            messages,
+            stream: false,
+            options,
+            think,
+            tools: Some(tools),
         };
         self.chat_with_retry(&req).await
     }
@@ -633,7 +730,8 @@ fn base64_encode(data: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::ModelOptions;
+    use super::{ChatMessage, ChatResponse, ModelOptions, ToolSpec};
+    use serde_json::json;
 
     #[test]
     fn evolution_options_disable_thinking_for_coder_compatibility() {
@@ -641,5 +739,63 @@ mod tests {
 
         assert_eq!(opts.think, Some(false));
         assert_eq!(opts.num_ctx, Some(32768));
+    }
+
+    #[test]
+    fn chat_response_parses_native_tool_calls() {
+        // Shape Ollama returns for qwen3 tool-calling.
+        let raw = json!({
+            "model": "qwen3:8b",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"function": {"name": "fs.read", "arguments": {"path": "lru.py"}}}
+                ]
+            },
+            "done": true
+        });
+        let resp: ChatResponse = serde_json::from_value(raw).expect("deserialize");
+        let calls = resp.tool_calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].function.name, "fs.read");
+        assert_eq!(calls[0].function.arguments, json!({"path": "lru.py"}));
+    }
+
+    #[test]
+    fn chat_response_no_tool_calls_is_empty_not_error() {
+        let raw = json!({
+            "model": "qwen3:8b",
+            "message": {"role": "assistant", "content": "done"},
+            "done": true
+        });
+        let resp: ChatResponse = serde_json::from_value(raw).expect("deserialize");
+        assert!(resp.tool_calls().is_empty());
+    }
+
+    #[test]
+    fn tool_spec_serializes_openai_function_shape() {
+        let spec = ToolSpec::function(
+            "fs.read",
+            "read a file",
+            json!({"type": "object", "properties": {"path": {"type": "string"}}}),
+        );
+        let v = serde_json::to_value(&spec).expect("serialize");
+        assert_eq!(v["type"], "function");
+        assert_eq!(v["function"]["name"], "fs.read");
+        assert_eq!(v["function"]["parameters"]["properties"]["path"]["type"], "string");
+    }
+
+    #[test]
+    fn tool_role_message_carries_tool_name() {
+        let m = ChatMessage::tool("fs.read", "file contents");
+        let v = serde_json::to_value(&m).expect("serialize");
+        assert_eq!(v["role"], "tool");
+        assert_eq!(v["tool_name"], "fs.read");
+        assert_eq!(v["content"], "file contents");
+        // plain messages must not emit null tool fields
+        let u = serde_json::to_value(ChatMessage::user("hi")).expect("serialize");
+        assert!(u.get("tool_calls").is_none());
+        assert!(u.get("tool_name").is_none());
     }
 }
