@@ -122,3 +122,50 @@ NOT YET PROVEN: (a) that it separates on REAL agent trajectories (not just this 
 (b) that ΔDL correlates with held-out pass@1 across genuine self-improvement steps; (c) the full
 free-energy-search + compression-keep + Shapley-attribute loop. Those are the next tests, and they need
 the headroom benchmark. But the make-or-break premise that could have killed the whole invention PASSED.
+
+---
+## ADVERSARIAL REVIEW (2026-06-20) — honest novelty correction + a SHARPER mechanism
+A critic agent stress-tested the Compression Gate. Result: **the grand framing is NOT novel — retract it.**
+- "self-improvement = compression progress on experience" = **Schmidhuber 2008** (Formal Theory of Creativity) — almost verbatim. DROP this framing.
+- "accept a skill-library change iff it compresses the solved-task corpus" = **DreamCoder (2021) / LILO (2023)** — published.
+- "self-modify iff keep all old tasks solved AND compress the solver" = **PowerPlay (Schmidhuber 2013)**.
+- "MDL to pick the shorter verified solution in a self-improving coding agent" = **arXiv 2502.02534 (2025)**.
+**Surviving (narrow) delta of the plain gate:** cross-lever (weights+skill+memory) acceptance in ONE
+bit-currency, measured as perplexity-under-the-agent's-own-frozen-model, on a deterministic external
+verifier, local. Real but narrow — and it has a FATAL flaw:
+
+**Fatal failure mode (i):** a plain total-DL gate REJECTS the first solution to any genuinely NEW problem
+(new capability adds irreducible bits) — the opposite of self-improvement. Memorization also adds bits;
+raw ΔDL can't tell "good new bits" from "memorized bits." Plain gate also rewards brittle terseness (iii)
+and can be gamed by collapsing to boilerplate (ii).
+
+### The pivot — the RESIDUAL gate (two-part code) — sharper AND genuinely more novel
+Split each verified solution's description length into **model-part** (predictable/idiomatic tokens the
+agent already "knows" — generalizable) vs **residual** (surprising, task-idiosyncratic literals the model
+can't predict — i.e. MEMORIZATION). **Gate on the RESIDUAL, not total DL:** accept a self-modification iff
+it does not increase the corpus's aggregate *residual* length.
+- A memorized hack is almost ALL residual (a hard-coded expected output is maximally surprising) → rejected.
+- A general fix is almost all model-part, low residual → accepted, even if it's NEW (fixes failure mode i!).
+- Boilerplate-collapse lowers total DL but not residual → neutral, not rewarded (fixes ii).
+This is the **Kolmogorov structure function / algorithmic sufficient statistic** ("separate meaning from
+noise") operationalized as an LLM-agent accept/reject gate — which the critic found **unclaimed**. It is
+both the fix for the plain gate's fatal flaw AND the strongest genuine-novelty candidate.
+Alt/companion: **prequential corpus-DL** (does adding this solution lower bits to predict FUTURE corpus
+items — rewards generalization, penalizes memorization; tied to generalization by Blier–Ollivier 1802.07044).
+
+### Methodology fixes (mandatory)
+Score DL with a FROZEN, higher-precision (Q8/fp16) judge — NOT the Q4 model being improved (else gaming
+your own ruler). Bootstrap CIs on every gate decision (M0 discipline). The 1b significance was on an
+*exaggerated controlled* corpus; the residual test on REAL trajectories is the one that can still kill it.
+
+### Next free kill-test (decisive, cheapest)
+On the existing 60-general/60-hack corpus, compute per-token -logprob; residual = sum of -logprob of the
+top-k *surprising* tokens, model-part = the rest. PREDICT: residual separates hack vs general MUCH more
+cleanly than total perplexity (the 1.32x total gap should WIDEN substantially on residual). If residual
+does not beat total DL at separating hacks → fall back; if neither beats a plain length penalty on real
+trajectories → report the gate as "just a length penalty" and move on. (Needs per-token logprobs — the
+operationalization agent is finding the local path.)
+
+Prior art (cite up front): DreamCoder 2006.08381 · LILO 2310.19791 · PowerPlay (Frontiers 2013) ·
+Schmidhuber compression-progress · 2502.02534 · Blier&Ollivier 1802.07044 · Kolmogorov structure function
+· Vitányi cs/0111053 · two-part-code MDL 2505.14635.
