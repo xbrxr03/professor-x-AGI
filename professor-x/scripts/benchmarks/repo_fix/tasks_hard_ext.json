@@ -15,6 +15,22 @@
       "description": "check.py fails due to a bug spread across multiple source files. Trace the root cause across the files and fix it so check.py passes. Do not edit check.py.",
       "verify_cmd": "python3 check.py",
       "expect_exit": 0
+    },
+    {
+      "id": "hard_033",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_033",
+      "description": "check.py fails due to a bug spread across multiple source files. Trace the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_034",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_034",
+      "description": "check.py fails due to a bug spread across multiple source files. Trace the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
     }
   ]
 }
