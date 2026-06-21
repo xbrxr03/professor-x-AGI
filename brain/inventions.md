@@ -549,6 +549,23 @@ better — this is how we prove it.
 
 ---
 
+## Lever 4 — Representational / Verifier-Driven Quantization (CANDIDATE, 2026-06-21)
+
+**One sentence:** A fourth self-improvement lever orthogonal to parametric/contextual/structural — Professor X
+re-quantizes its own weights to maximize *measured verifier pass@1* under its fixed VRAM budget (bit
+allocation driven by an executable functional verifier, not a proxy like Hessian/KL/activation sensitivity).
+
+**Why novel:** mixed-precision quant (HAQ, TAQ arXiv:2511.06516, NVIDIA AutoQuantize) all rank tensors by
+PROXIES, never by an executable verifier on a generative agentic task. Not in MHE/DFA/IPE. Most
+consumer-HW-native lever (directly trades scarce VRAM for verified capability). Integration-novel.
+
+**Status:** CANDIDATE — running the decisive pre-check (attn→Q2 vs ffn→Q2 vs uniform Q4_K_M; is verifier-measured
+tensor sensitivity real?). If pass@1 is flat across group demotions → KILL; if it varies → proceed to greedy
+per-tensor budget search. The one moonshot candidate that is genuinely new, benchmark-unblocked, and buildable
+today (our `llama-quantize` already has `--tensor-type`/`--prune-layers`). See
+docs/research/2026-06-21-INVENTION-fourth-lever-verifier-driven-quant.md. NOTE: free-energy/active-inference
+routing was investigated but is ALREADY this portfolio's IPE — not re-claimed.
+
 *Last updated: 2026-05-24*
 *Status: IPE framing added — implementation specified in IMPLEMENTATION_SPEC.md*
 *New additions: IPE (Strange Loop, Free Energy, ICS), Functional Affect System, GAIA L2, AI Idea Bench*
