@@ -1,0 +1,56 @@
+{
+  "family": "money",
+  "shared_api": [
+    "tax.add_tax",
+    "discount.apply_discount",
+    "pricing.price",
+    "cart.total"
+  ],
+  "tasks": [
+    {
+      "id": "fam_money_01",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_money_01",
+      "description": "check.py fails due to a bug in the shared pricing library (tax/discount/pricing/cart). Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "tax.py"
+    },
+    {
+      "id": "fam_money_02",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_money_02",
+      "description": "check.py fails due to a bug in the shared pricing library (tax/discount/pricing/cart). Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "discount.py"
+    },
+    {
+      "id": "fam_money_03",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_money_03",
+      "description": "check.py fails due to a bug in the shared pricing library (tax/discount/pricing/cart). Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "pricing.py"
+    },
+    {
+      "id": "fam_money_04",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_money_04",
+      "description": "check.py fails due to a bug in the shared pricing library (tax/discount/pricing/cart). Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "tax.py"
+    },
+    {
+      "id": "fam_money_06",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_money_06",
+      "description": "check.py fails due to a bug in the shared pricing library (tax/discount/pricing/cart). Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "cart.py"
+    }
+  ]
+}
