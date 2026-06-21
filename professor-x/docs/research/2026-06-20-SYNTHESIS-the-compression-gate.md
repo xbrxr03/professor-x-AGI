@@ -206,3 +206,34 @@ That unification — residual → route + gate(certificate) + measure — is rea
 (EDL authors' own warning): residual-on-seen-data certifies nothing.
 Key refs: Vereshchagin–Vitányi structure.pdf; Blier–Ollivier 1802.07044; EDL 2601.04728; online-to-PAC
 2305.19674; Feldman 1906.05271 + Feldman–Zhang 2008.03703; Friston predictive-coding; Tishby IB.
+
+---
+## DECISIVE PER-SNIPPET TEST (2026-06-21) — PREMISE FAILS / NOT ROBUST (honest negative)
+Per-token description length under qwen3:8b, per-snippet (the measure the GATE would actually use),
+two independent scorer implementations agreeing:
+- TOTAL bits/tok: general=4.24 vs hack=3.51 (Cohen d=-2.16) -> **hacks LOWER (less surprising)**.
+- RESIDUAL bits/tok (top-20% tokens): general=12.78 vs hack=9.28 (d=-3.11) -> hacks LOWER, larger gap
+  but SAME wrong direction.
+=> **Memorized (templated) hacks have LOWER per-snippet description length than general code — the
+OPPOSITE of the "memorization bloats" premise.** And this CONTRADICTS the earlier corpus-level
+llama-perplexity result (hacks higher, 2.11>1.61) on the SAME data. Two valid measurements disagreeing
+on direction = the signal is NOT robust.
+Root cause: the synthetic hacks are TEMPLATED (`return X if (a,b)==(Y,Z) else None`) -> highly predictable
+per token; diverse general fixes are MORE surprising. Exactly the failure the critic agent (template-collapse
+gaming) and theory agent (synthetic exaggerated corpora unreliable; residual-on-seen-data certifies nothing)
+warned about. The earlier "1b PASS" was an artifact of the corpus-level tool + an exaggerated corpus.
+
+### Verdict on the invention
+**The Compression / Residual Gate is NOT empirically supported by the cheap tests.** Per-snippet DL — the
+quantity the gate needs — does not separate memorization in the required direction, and the signal flips with
+method. We should NOT build the gate on this basis.
+The ONLY version the theory left standing is **prequential Excess Description Length on REAL held-out
+trajectories under a frozen judge** (not per-snippet synthetic) — but that needs (a) a headroom benchmark and
+(b) real reward-hack vs general trajectory data we don't have. So the invention is **shelved as an
+honestly-falsified-on-cheap-tests candidate**, revisitable only with real-trajectory data + the benchmark.
+
+### Honest meta-lesson
+Synthetic probes were inconsistent throughout (gzip weak 1.12x; corpus-PPL said hacks-higher; per-snippet
+says hacks-lower). The cheap tests cannot settle this; only real trajectories can. Per "trust the scoreboard,"
+we do not claim an invention. **Recommendation: fall back to the concrete engineering plan (re-run Stage 2
+SkillOpt, Stage 3 OPD) which delivers reliable, measurable value; keep this doc as the honest record.**
