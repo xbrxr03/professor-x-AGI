@@ -1,0 +1,32 @@
+{
+  "family": "sm",
+  "split": "anchor_renamed",
+  "derived_from": "sm",
+  "shared_api": [
+    "step",
+    "execute",
+    "tally_open"
+  ],
+  "tasks": [
+    {
+      "id": "fam_sm_anchor_1",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_sm_anchor_1",
+      "description": "check.py fails due to a bug in the shared library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "transitions.py",
+      "anchor_of": "fam_sm_01"
+    },
+    {
+      "id": "fam_sm_anchor_2",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_sm_anchor_2",
+      "description": "check.py fails due to a bug in the shared library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "fsm.py",
+      "anchor_of": "fam_sm_03"
+    }
+  ]
+}
