@@ -1,0 +1,65 @@
+{
+  "family": "stack",
+  "shared_api": [
+    "Stack.push",
+    "Stack.pop",
+    "Stack.peek",
+    "parens.balanced"
+  ],
+  "tasks": [
+    {
+      "id": "fam_stack_01",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_stack_01",
+      "description": "check.py fails due to a bug in the shared stack library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "stack.py"
+    },
+    {
+      "id": "fam_stack_02",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_stack_02",
+      "description": "check.py fails due to a bug in the shared stack library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "stack.py"
+    },
+    {
+      "id": "fam_stack_03",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_stack_03",
+      "description": "check.py fails due to a bug in the shared stack library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "stack.py"
+    },
+    {
+      "id": "fam_stack_04",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_stack_04",
+      "description": "check.py fails due to a bug in the shared stack library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "parens.py"
+    },
+    {
+      "id": "fam_stack_05",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_stack_05",
+      "description": "check.py fails due to a bug in the shared stack library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "parens.py"
+    },
+    {
+      "id": "fam_stack_06",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_stack_06",
+      "description": "check.py fails due to a bug in the shared stack library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "stack.py"
+    }
+  ]
+}
