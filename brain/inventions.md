@@ -559,12 +559,17 @@ allocation driven by an executable functional verifier, not a proxy like Hessian
 PROXIES, never by an executable verifier on a generative agentic task. Not in MHE/DFA/IPE. Most
 consumer-HW-native lever (directly trades scarce VRAM for verified capability). Integration-novel.
 
-**Status:** CANDIDATE — running the decisive pre-check (attn→Q2 vs ffn→Q2 vs uniform Q4_K_M; is verifier-measured
-tensor sensitivity real?). If pass@1 is flat across group demotions → KILL; if it varies → proceed to greedy
-per-tensor budget search. The one moonshot candidate that is genuinely new, benchmark-unblocked, and buildable
-today (our `llama-quantize` already has `--tensor-type`/`--prune-layers`). See
-docs/research/2026-06-21-INVENTION-fourth-lever-verifier-driven-quant.md. NOTE: free-energy/active-inference
-routing was investigated but is ALREADY this portfolio's IPE — not re-claimed.
+**Status:** SHELVED — NOT SUPPORTED by the cheap pre-check (2026-06-21). Ran attn→Q2 vs ffn→Q2 vs uniform
+Q4_K_M on a 10-task subset (native-tools repo-fix): base=0.200 (2/10, clean); BOTH Q2 demotions collapse
+identically (unparseable output → Ollama runner crash, reproduced on isolated fresh-server runs). The
+pre-registered rule needed "one craters while another holds" (asymmetry = lever real) or "both flat" (kill);
+instead we got **symmetric catastrophic collapse** — precision clearly matters (Q2 fatal, not flat) but there
+is NO exploitable asymmetry at this granularity, which is what the lever requires. Not a clean kill either: Q2
+is the bluntest setting (asymmetry could exist at Q3_K/per-layer), and the requant→serve path reproducibly
+crashes the Ollama runner (operational cost). Revisit ONLY if a Q3/per-layer asymmetry probe AND a serving-crash
+fix both become cheap. Pivoted to the 7-family reuse benchmark instead. See
+docs/research/2026-06-21-VERDICT-fourth-lever-quant-precheck.md (and -INVENTION-...md for the original design).
+NOTE: free-energy/active-inference routing was investigated but is ALREADY this portfolio's IPE — not re-claimed.
 
 *Last updated: 2026-05-24*
 *Status: IPE framing added — implementation specified in IMPLEMENTATION_SPEC.md*
