@@ -102,3 +102,29 @@ weak-model bottleneck is real; (2) two of our novelty bets narrowed by new paper
 gate signal that could break the coarse-MDE wall** — with its credit-use honestly pre-killed and a
 $0 CPU pre-check that decides it. Next action = run that pre-check (CPU, no GPU contention with
 Codex). No invention is claimed until the syndrome shows sub-pass@1 signal on data we already have.
+
+---
+## PRE-CHECK RESULT (2026-06-22, CPU, $0) — WEAK-POSITIVE, not decisive
+Ran `scratchpad/syndrome_precheck.py`: reconstructed every FAILED bench attempt with a recorded
+`diff_summary` (15 attempts; 13 multi-assert so gradient is possible), replayed the decomposed
+`check.py` as a per-assert syndrome (`sig_runner.py`), compared to the buggy-fixture syndrome.
+
+Result (of 13 multi-assert fails): **2 PARTIAL-progress** (fam_money_02, fam_unit_02: 3→1 failing
+checks — fixed some, not all = the hypothesized sub-pass@1 gradient) · **4 regressed** (agent broke
+an extra check — also sub-pass@1 info) · **7 no-change** (edit moved no check; syndrome ≡ pass@1).
+Severity among multi-assert fails spans **1–5 failing checks** (distinct levels {1,2,3,4,5}).
+
+**Honest verdict (verify-the-ruler):** the signal is **not NULL** (unlike VCA: syndromes DO vary
+sub-pass@1; partial progress and regression are detectable where pass@1 can't distinguish) — but it
+is **SPARSE** (54% no-change: most wrong edits are in the wrong place entirely and move no check) and
+**n is tiny**. Two hard limits I will not paper over: (1) the on-disk diffs are 14b-teacher + 8b-on-
+easy-set, which **share no tasks**, so I could NOT run the model-separation / MDE-shrink test that the
+GATE use actually needs; (2) the F1-relevant `profx-distilled-clean` vs `qwen3:8b` diffs are not on
+disk. So the candidate is **neither killed nor confirmed** — it earns a *cheap follow-up*, not a build:
+  - decompose the hard-set `check.py` into more sub-asserts (raise syndrome length L>2 so gradient is
+    even possible there — today most fix_0xx are L=2);
+  - capture per-attempt diffs for `profx-distilled-clean` AND `qwen3:8b` on the SAME family+hard tasks,
+    then test whether mean syndrome-severity separates the two models with a smaller MDE than pass@1.
+The biggest *finding from the data itself*: the dominant wrong-edit class is **syndrome-invisible
+(no-change)** — the agent edits the wrong location entirely. That is a LOCALIZATION failure, which
+re-points at SBFL/fault-localization (the verifier-as-code thread) as the higher-value attack.
