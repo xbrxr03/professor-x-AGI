@@ -16,18 +16,13 @@ start. Check your box and append a log line when you finish a unit of work.** Ph
   (honest before/after, no fabricated wins).
 
 ## Task checklist
-### Stream A — behavior-keyed retrieval (Claude)
-- [ ] A1 new `src/agentd/fault_signature.rs` — per-assert pass/fail bit-vector (port `sig_runner.py`)
-- [ ] A2 index solved trajectories by failure-signature
-- [ ] A3 wire behavioral retrieval into `retrieve_ice` (flag `PROFESSOR_X_BEHAVIOR_RETRIEVAL`, default OFF)
-- [ ] A4 `cargo build --bins` + full `cargo test --bins` green
-- [ ] A5 measure native repo-fix pass@1 (K-pass) on families: ON vs OFF vs text-retrieval; honest delta
-### Stream B — failure taxonomy (Codex) — see CODEX_TASK.md
-- [x] B1 `failure_taxonomy.py` runs native bench on `qwen3:8b-q4_K_M` + `profx-distilled-clean` over hard set + families
-- [x] B2 bucket failures (duplicate_action / finish_rejected / edit-apply-error / wrong-edit-verified-fail / loop-forfeit / other)
-- [x] B3 write `docs/research/2026-06-21-failure-taxonomy.md` (per-model, per-task-set table)
-### Stream C — apply-retry-with-feedback (Claude, AFTER A; ONLY if B shows edit-apply is a top bucket)
-- [ ] C1 (conditional) one bounded retry feeding the editverify rejection reason back to the model
+### Stream A — behavior-keyed retrieval (Claude) — MERGED 2026-06-22
+- [x] A1 fault_signature.rs · [x] A2 signature_index.json · [x] A3 wired (flag default OFF) ·
+      [x] A4 suite green · [x] A5 measured: mechanism VALIDATED (14/14 origin matches) but pass@1 lift
+      marginal/within-noise -> retrieval-use SHELVED, representation KEPT (doc: 2026-06-22-RESULT-A5-*).
+### Stream B — failure taxonomy (Codex) — MERGED
+- [x] B1/B2/B3 done. FINDING: wrong-edit-verified-fail dominates (61-81%); bottleneck = edit CAPABILITY.
+### Stream C — verifier-feedback retry — ALREADY BUILT (RLEF loop in react.rs) -> SKIPPED.
 
 ## PHASE 3 — distillation flywheel vs the wrong-edit ceiling (see docs/PLAN_PHASE3_2026-06-22.md)
 Disjoint: Claude owns `src/` (Rust gate); Codex owns `distill/` (Python training). No shared files.
@@ -49,3 +44,4 @@ GPU: Codex owns it during collect+train; Claude's gate MEASUREMENT runs after �
 - [2026-06-21] (Claude) created AGENTS.md + CODEX_TASK.md on prereboot-flywheel-prep; starting Stream A (A1).
 - [2026-06-22] (Claude) PHASE 1 CONCLUDED (on branch claude/behavior-keyed-retrieval): Stream A built+measured (behavior retrieval validated as mechanism, pass@1 lift marginal/within-noise), Stream C found already-built. Bottleneck = edit-production CAPABILITY. Scoped PHASE 3 here (Stream D Claude / Stream E Codex) — distillation flywheel + TGC trust-gate. Codex: see CODEX_TASK_P3.md.
 - [2026-06-22] (Claude) committed Codex's Stream B (commit 4302a20, pushed). Started Stream D on branch claude/p3-tgc-gate: TGC gate tgc_gate.py built + --self-test PASS (decision logic rejects the train-overfit/Goodhart case). D2 precondition guard in gate, D3 collection already exists. Full GPU gate run = integration after Codex Stream E. GPU left FREE for Codex training.
+- [2026-06-22] (Claude) MERGED completed work into prereboot-flywheel-prep: Stream A (claude/behavior-keyed-retrieval), Stream B (codex/failure-taxonomy), Stream D (claude/p3-tgc-gate). Build clean + full suite 370/370 green. Switching to parallel-code (v1.10.0) for worktree orchestration. LEFT codex/p3-distill UNTOUCHED — Codex is actively mid-Stream-E (uncommitted work: build_frontier_manifest.py, check_stop_sanity.py, check_weights_finite.py, curate.py). Codex must COMMIT Stream E before any worktree restart, or finish it in place.
