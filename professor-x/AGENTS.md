@@ -23,9 +23,9 @@ start. Check your box and append a log line when you finish a unit of work.** Ph
 - [ ] A4 `cargo build --bins` + full `cargo test --bins` green
 - [ ] A5 measure native repo-fix pass@1 (K-pass) on families: ON vs OFF vs text-retrieval; honest delta
 ### Stream B — failure taxonomy (Codex) — see CODEX_TASK.md
-- [ ] B1 `failure_taxonomy.py` runs native bench on `qwen3:8b-q4_K_M` + `profx-distilled-clean` over hard set + families
-- [ ] B2 bucket failures (duplicate_action / finish_rejected / edit-apply-error / wrong-edit-verified-fail / loop-forfeit / other)
-- [ ] B3 write `docs/research/2026-06-21-failure-taxonomy.md` (per-model, per-task-set table)
+- [x] B1 `failure_taxonomy.py` runs native bench on `qwen3:8b-q4_K_M` + `profx-distilled-clean` over hard set + families
+- [x] B2 bucket failures (duplicate_action / finish_rejected / edit-apply-error / wrong-edit-verified-fail / loop-forfeit / other)
+- [x] B3 write `docs/research/2026-06-21-failure-taxonomy.md` (per-model, per-task-set table)
 ### Stream C — apply-retry-with-feedback (Claude, AFTER A; ONLY if B shows edit-apply is a top bucket)
 - [ ] C1 (conditional) one bounded retry feeding the editverify rejection reason back to the model
 

@@ -1,0 +1,1098 @@
+[
+  {
+    "model": "profx-distilled-clean",
+    "task_set": "hard",
+    "manifest_path": "scripts/benchmarks/repo_fix/tasks_hard_full.json",
+    "task_count": 30,
+    "passed": 4,
+    "ran": 30,
+    "pass_at_1": 0.13333333333333333,
+    "artifact_path": "/home/abrar/professor-x-main-integrate/px-codex-measure/professor-x/artifacts/repo-fix/2026-06-22/repo-fix-073442-726899bb.json",
+    "duration_s": 2944.4410535969655,
+    "bucket_counts": {
+      "duplicate_action": 1,
+      "finish_rejected": 2,
+      "edit-apply-error": 3,
+      "wrong-edit-verified-fail": 20,
+      "loop/forfeit": 0,
+      "other": 0
+    },
+    "failures": [
+      {
+        "task_id": "hard_001",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/dd2d8e5a-b3f3-4a7d-9baa-5494e83a7f46.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_002",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/17470ddd-531c-47d5-8942-0189bd3281f3.json",
+        "post_exit": 0,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_003",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/e7e964d4-8b42-44f7-bd82-d3377d462aa9.json",
+        "post_exit": 0,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_004",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/f24bb673-bf4e-4f3c-b7ac-8b7fdd5023af.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_005",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/e5bc6d86-06e9-49ea-8721-cb5c46331bcd.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_006",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/37c7c718-d6c8-4a85-a51c-259ef760742b.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_007",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/44e304a6-c155-4d3c-acb9-0dec9ca54f34.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_008",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/35f04d14-46b3-467e-8625-27bc8334b8ad.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_010",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/2ea81bf8-5160-4439-9d43-3b8221cc3bcb.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_011",
+        "bucket": "finish_rejected",
+        "made_edit": false,
+        "transcript_path": "artifacts/transcripts/2026-06-22/94958ceb-fc79-4f15-9a76-eafa290e36ee.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_012",
+        "bucket": "edit-apply-error",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/4a4fb7c2-09e2-4dee-86b6-6822a72f723c.json",
+        "post_exit": 0,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_013",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/557f7ed0-723f-4662-9c1b-178588f0038b.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_014",
+        "bucket": "finish_rejected",
+        "made_edit": false,
+        "transcript_path": "artifacts/transcripts/2026-06-22/165215ed-b6c2-4ef0-a9b5-a4cd4cc39500.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_015",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/4aef0a24-fea7-46e5-bfdb-ac2f5b4c4171.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_016",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/529a55e2-8360-4231-883d-dbded223eb6c.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_017",
+        "bucket": "duplicate_action",
+        "made_edit": false,
+        "transcript_path": "artifacts/transcripts/2026-06-22/6e5cf65c-0f5a-4106-ad3e-f6eb41043d5e.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_019",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/0b5bbcac-214f-481a-b099-1cb405c2b383.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_020",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/023edaf7-8442-498f-926b-24e43934482e.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_023",
+        "bucket": "edit-apply-error",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/f995569b-73d1-4cfe-9a8c-3b4e2d2825f2.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_024",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/58f28d33-2b8f-4b4b-9099-4ffea22b16bc.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_025",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/a6bb27cd-40d9-4552-a4a9-3e38384fdb25.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_026",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/3e37c449-de20-4319-974b-12b250fdfb6a.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_027",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/25162910-6f8e-4bfc-be33-b391343a1273.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_028",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/8c096c05-61a4-45f5-a2f8-96df88424e97.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_029",
+        "bucket": "edit-apply-error",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/72ddc6f6-63d0-42af-9ed4-f5080ae666fe.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_030",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/9abc412c-ac1a-4149-b0c8-235a9ea3245e.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      }
+    ]
+  },
+  {
+    "model": "profx-distilled-clean",
+    "task_set": "family:csv",
+    "manifest_path": "scripts/benchmarks/repo_fix/tasks_family_csv.json",
+    "task_count": 5,
+    "passed": 2,
+    "ran": 5,
+    "pass_at_1": 0.4,
+    "artifact_path": "/home/abrar/professor-x-main-integrate/px-codex-measure/professor-x/artifacts/repo-fix/2026-06-22/repo-fix-074533-e227e5e0.json",
+    "duration_s": 650.1992305400199,
+    "bucket_counts": {
+      "duplicate_action": 0,
+      "finish_rejected": 0,
+      "edit-apply-error": 1,
+      "wrong-edit-verified-fail": 2,
+      "loop/forfeit": 0,
+      "other": 0
+    },
+    "failures": [
+      {
+        "task_id": "fam_csv_03",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/078168a0-86eb-4828-941f-9b033a6041b4.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_csv_04",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/f86974a5-1832-4307-aa2f-b8ba79f3ff57.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_csv_05",
+        "bucket": "edit-apply-error",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/307898ed-c91f-44e3-a6fa-de3ade1706d2.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      }
+    ]
+  },
+  {
+    "model": "profx-distilled-clean",
+    "task_set": "family:graph",
+    "manifest_path": "scripts/benchmarks/repo_fix/tasks_family_graph.json",
+    "task_count": 4,
+    "passed": 2,
+    "ran": 4,
+    "pass_at_1": 0.5,
+    "artifact_path": "/home/abrar/professor-x-main-integrate/px-codex-measure/professor-x/artifacts/repo-fix/2026-06-22/repo-fix-074810-53123c95.json",
+    "duration_s": 157.79083589301445,
+    "bucket_counts": {
+      "duplicate_action": 0,
+      "finish_rejected": 1,
+      "edit-apply-error": 0,
+      "wrong-edit-verified-fail": 1,
+      "loop/forfeit": 0,
+      "other": 0
+    },
+    "failures": [
+      {
+        "task_id": "fam_graph_01",
+        "bucket": "finish_rejected",
+        "made_edit": false,
+        "transcript_path": "artifacts/transcripts/2026-06-22/239b6053-dc8d-4a01-80df-f917e558da95.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_graph_05",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/b5426bdf-e689-406c-87bd-f802a8634add.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      }
+    ]
+  },
+  {
+    "model": "profx-distilled-clean",
+    "task_set": "family:interval",
+    "manifest_path": "scripts/benchmarks/repo_fix/tasks_family_interval.json",
+    "task_count": 5,
+    "passed": 0,
+    "ran": 5,
+    "pass_at_1": 0.0,
+    "artifact_path": "/home/abrar/professor-x-main-integrate/px-codex-measure/professor-x/artifacts/repo-fix/2026-06-22/repo-fix-075100-72af3732.json",
+    "duration_s": 169.23484110302525,
+    "bucket_counts": {
+      "duplicate_action": 1,
+      "finish_rejected": 4,
+      "edit-apply-error": 0,
+      "wrong-edit-verified-fail": 0,
+      "loop/forfeit": 0,
+      "other": 0
+    },
+    "failures": [
+      {
+        "task_id": "fam_interval_01",
+        "bucket": "duplicate_action",
+        "made_edit": false,
+        "transcript_path": "artifacts/transcripts/2026-06-22/5979448a-d672-48e1-ace5-ee28ba265af0.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_interval_02",
+        "bucket": "finish_rejected",
+        "made_edit": false,
+        "transcript_path": "artifacts/transcripts/2026-06-22/0e5ac904-e946-4f8a-bebd-d72e5761a60f.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_interval_03",
+        "bucket": "finish_rejected",
+        "made_edit": false,
+        "transcript_path": "artifacts/transcripts/2026-06-22/3837cf45-5205-47f4-9a83-26ca2aab96cd.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_interval_04",
+        "bucket": "finish_rejected",
+        "made_edit": false,
+        "transcript_path": "artifacts/transcripts/2026-06-22/d0541c2c-36c8-49fb-8dae-a19d50f22fc8.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_interval_05",
+        "bucket": "finish_rejected",
+        "made_edit": false,
+        "transcript_path": "artifacts/transcripts/2026-06-22/4c3e8fa0-3848-488d-b4ec-8a1f3a5b2edb.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      }
+    ]
+  },
+  {
+    "model": "profx-distilled-clean",
+    "task_set": "family:money",
+    "manifest_path": "scripts/benchmarks/repo_fix/tasks_family_money.json",
+    "task_count": 5,
+    "passed": 1,
+    "ran": 5,
+    "pass_at_1": 0.2,
+    "artifact_path": "/home/abrar/professor-x-main-integrate/px-codex-measure/professor-x/artifacts/repo-fix/2026-06-22/repo-fix-075756-f216f510.json",
+    "duration_s": 416.3625434319838,
+    "bucket_counts": {
+      "duplicate_action": 0,
+      "finish_rejected": 1,
+      "edit-apply-error": 0,
+      "wrong-edit-verified-fail": 3,
+      "loop/forfeit": 0,
+      "other": 0
+    },
+    "failures": [
+      {
+        "task_id": "fam_money_01",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/ec45d96d-11ab-4485-aa0e-87295ff7dc17.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_money_02",
+        "bucket": "finish_rejected",
+        "made_edit": false,
+        "transcript_path": "artifacts/transcripts/2026-06-22/971f6973-01f2-4534-ae37-1f8d093a2d00.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_money_03",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/18c80c14-1f6d-417d-bb39-e9335e461dd4.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_money_04",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/494b83bb-afbf-447d-abe2-5deb57db557c.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      }
+    ]
+  },
+  {
+    "model": "profx-distilled-clean",
+    "task_set": "family:sm",
+    "manifest_path": "scripts/benchmarks/repo_fix/tasks_family_sm.json",
+    "task_count": 4,
+    "passed": 0,
+    "ran": 4,
+    "pass_at_1": 0.0,
+    "artifact_path": "/home/abrar/professor-x-main-integrate/px-codex-measure/professor-x/artifacts/repo-fix/2026-06-22/repo-fix-081617-c38c18aa.json",
+    "duration_s": 1101.240372876986,
+    "bucket_counts": {
+      "duplicate_action": 0,
+      "finish_rejected": 1,
+      "edit-apply-error": 1,
+      "wrong-edit-verified-fail": 2,
+      "loop/forfeit": 0,
+      "other": 0
+    },
+    "failures": [
+      {
+        "task_id": "fam_sm_01",
+        "bucket": "edit-apply-error",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/20599f4f-b58f-40ec-99ad-5b234c871eb8.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_sm_02",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/02494048-3a72-4b0a-b9b5-9411e06edd39.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_sm_03",
+        "bucket": "finish_rejected",
+        "made_edit": false,
+        "transcript_path": "artifacts/transcripts/2026-06-22/c3e9fe3c-94b5-4d3a-810b-c50e3bb34e36.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_sm_04",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/7f302484-dce2-45e1-8014-c0c359c21da0.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      }
+    ]
+  },
+  {
+    "model": "profx-distilled-clean",
+    "task_set": "family:stack",
+    "manifest_path": "scripts/benchmarks/repo_fix/tasks_family_stack.json",
+    "task_count": 6,
+    "passed": 2,
+    "ran": 6,
+    "pass_at_1": 0.3333333333333333,
+    "artifact_path": "/home/abrar/professor-x-main-integrate/px-codex-measure/professor-x/artifacts/repo-fix/2026-06-22/repo-fix-082836-1c11a091.json",
+    "duration_s": 738.602966876002,
+    "bucket_counts": {
+      "duplicate_action": 0,
+      "finish_rejected": 0,
+      "edit-apply-error": 2,
+      "wrong-edit-verified-fail": 2,
+      "loop/forfeit": 0,
+      "other": 0
+    },
+    "failures": [
+      {
+        "task_id": "fam_stack_02",
+        "bucket": "edit-apply-error",
+        "made_edit": false,
+        "transcript_path": "artifacts/transcripts/2026-06-22/91f3917c-bb17-40b4-87dc-592897f98623.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_stack_04",
+        "bucket": "edit-apply-error",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/2b7eb8d0-ff15-4f4b-bdc7-0b1c5d94d619.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_stack_05",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/9ce45734-b5bc-4243-9718-ce6f45943fc3.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_stack_06",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/649d6222-fb03-4258-91fb-42f5086b6330.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      }
+    ]
+  },
+  {
+    "model": "profx-distilled-clean",
+    "task_set": "family:unit",
+    "manifest_path": "scripts/benchmarks/repo_fix/tasks_family_unit.json",
+    "task_count": 5,
+    "passed": 1,
+    "ran": 5,
+    "pass_at_1": 0.2,
+    "artifact_path": "/home/abrar/professor-x-main-integrate/px-codex-measure/professor-x/artifacts/repo-fix/2026-06-22/repo-fix-083500-ddb05292.json",
+    "duration_s": 384.3491184169543,
+    "bucket_counts": {
+      "duplicate_action": 1,
+      "finish_rejected": 0,
+      "edit-apply-error": 1,
+      "wrong-edit-verified-fail": 2,
+      "loop/forfeit": 0,
+      "other": 0
+    },
+    "failures": [
+      {
+        "task_id": "fam_unit_02",
+        "bucket": "edit-apply-error",
+        "made_edit": false,
+        "transcript_path": "artifacts/transcripts/2026-06-22/bff117ab-4448-43f7-8c9c-b338886b1c2c.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_unit_03",
+        "bucket": "duplicate_action",
+        "made_edit": false,
+        "transcript_path": "artifacts/transcripts/2026-06-22/957de9c0-693e-4759-a23d-eeb5d0a44132.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_unit_04",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/b0520f52-21a3-4d60-ac83-a4a646981e75.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_unit_05",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/921fb688-e4d6-47cb-9bc6-38e05287743a.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      }
+    ]
+  },
+  {
+    "model": "qwen3:8b-q4_K_M",
+    "task_set": "hard",
+    "manifest_path": "scripts/benchmarks/repo_fix/tasks_hard_full.json",
+    "task_count": 30,
+    "passed": 12,
+    "ran": 30,
+    "pass_at_1": 0.4,
+    "artifact_path": "/home/abrar/professor-x-main-integrate/px-codex-measure/professor-x/artifacts/repo-fix/2026-06-22/repo-fix-085618-ada0e949.json",
+    "duration_s": 1199.9678150929976,
+    "bucket_counts": {
+      "duplicate_action": 3,
+      "finish_rejected": 0,
+      "edit-apply-error": 1,
+      "wrong-edit-verified-fail": 14,
+      "loop/forfeit": 0,
+      "other": 0
+    },
+    "failures": [
+      {
+        "task_id": "hard_001",
+        "bucket": "edit-apply-error",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/fefdce6f-9d84-416a-ba2d-855deb58f452.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_003",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/0352aebc-e084-4c6d-9e5e-5d80110a595c.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_004",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/5c7ea154-8b50-4dea-b395-02a6188aa81c.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_006",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/d8a1a00a-363c-4d12-a4fd-a9de5dd2dc07.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_008",
+        "bucket": "duplicate_action",
+        "made_edit": false,
+        "transcript_path": "artifacts/transcripts/2026-06-22/db941066-771f-42f3-94b2-45a22dc6c2a5.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_009",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/38bfc56a-bc17-4c70-b989-66bf6b764378.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_011",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/9ad32ee3-5123-40ba-8edd-6e07f2a702d8.json",
+        "post_exit": 0,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_012",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/b442153a-743f-40c9-9bc7-a3cae97fe409.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_014",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/35d98158-2e1d-476f-9a92-9f6944b28498.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_016",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/31a56c80-3b01-4bdd-80fd-9a6b7df17ad1.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_018",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/dc638a8c-be62-4fb9-8159-b86e6107e18e.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_019",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/33290f77-5200-439e-b913-eddc723217c5.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_020",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/53c14724-d403-49c5-a374-ba0b88c5976c.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_025",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/b339051a-205e-455b-a68f-679f32e3958d.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_026",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/880ce40e-5551-4d62-8e9a-a8a672e06086.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_027",
+        "bucket": "duplicate_action",
+        "made_edit": false,
+        "transcript_path": "artifacts/transcripts/2026-06-22/e5c8d729-6939-4769-b76c-926ed9a2b32d.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_028",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/a62f92dc-0f04-4943-8b71-25bd45f7f6db.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "hard_029",
+        "bucket": "duplicate_action",
+        "made_edit": false,
+        "transcript_path": "artifacts/transcripts/2026-06-22/9c640938-42a6-4a71-91d5-663cfa2e717f.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      }
+    ]
+  },
+  {
+    "model": "qwen3:8b-q4_K_M",
+    "task_set": "family:csv",
+    "manifest_path": "scripts/benchmarks/repo_fix/tasks_family_csv.json",
+    "task_count": 5,
+    "passed": 0,
+    "ran": 5,
+    "pass_at_1": 0.0,
+    "artifact_path": "/home/abrar/professor-x-main-integrate/professor-x/artifacts/repo-fix/2026-06-22/repo-fix-002736-326691d8.json",
+    "duration_s": 0.0,
+    "bucket_counts": {
+      "duplicate_action": 0,
+      "finish_rejected": 0,
+      "edit-apply-error": 0,
+      "wrong-edit-verified-fail": 5,
+      "loop/forfeit": 0,
+      "other": 0
+    },
+    "failures": [
+      {
+        "task_id": "fam_csv_01",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/dff5e2c8-94ee-400a-8efb-125737f8e617.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_csv_02",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/afdf398e-1516-4581-a220-a1c0c770c0a7.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_csv_03",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/223f9749-943b-413e-b2a1-ffe0c3701e29.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_csv_04",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/10a30ece-38fb-4c5d-bca1-2407b3cf201f.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_csv_05",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/aed0a375-23bf-478e-80fa-14617ebf5703.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      }
+    ]
+  },
+  {
+    "model": "qwen3:8b-q4_K_M",
+    "task_set": "family:graph",
+    "manifest_path": "scripts/benchmarks/repo_fix/tasks_family_graph.json",
+    "task_count": 4,
+    "passed": 2,
+    "ran": 4,
+    "pass_at_1": 0.5,
+    "artifact_path": "/home/abrar/professor-x-main-integrate/professor-x/artifacts/repo-fix/2026-06-22/repo-fix-011505-5ac993e3.json",
+    "duration_s": 0.0,
+    "bucket_counts": {
+      "duplicate_action": 0,
+      "finish_rejected": 0,
+      "edit-apply-error": 1,
+      "wrong-edit-verified-fail": 1,
+      "loop/forfeit": 0,
+      "other": 0
+    },
+    "failures": [
+      {
+        "task_id": "fam_graph_01",
+        "bucket": "edit-apply-error",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/3395f09c-9e3d-4c89-9c5c-37ceff6593d1.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_graph_05",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/859b86cd-76e6-497b-af5d-d6500523cef1.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      }
+    ]
+  },
+  {
+    "model": "qwen3:8b-q4_K_M",
+    "task_set": "family:interval",
+    "manifest_path": "scripts/benchmarks/repo_fix/tasks_family_interval.json",
+    "task_count": 5,
+    "passed": 2,
+    "ran": 5,
+    "pass_at_1": 0.4,
+    "artifact_path": "/home/abrar/professor-x-main-integrate/professor-x/artifacts/repo-fix/2026-06-21/repo-fix-235413-47a0925f.json",
+    "duration_s": 0.0,
+    "bucket_counts": {
+      "duplicate_action": 0,
+      "finish_rejected": 0,
+      "edit-apply-error": 0,
+      "wrong-edit-verified-fail": 3,
+      "loop/forfeit": 0,
+      "other": 0
+    },
+    "failures": [
+      {
+        "task_id": "fam_interval_03",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-21/8c0cf323-14d1-4a6c-84e1-71fece25325c.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_interval_04",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-21/23e7aa22-98d1-43c4-829a-8e4589b9945d.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_interval_05",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-21/8a89515e-b58a-4a79-9790-cfa27093a0bd.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      }
+    ]
+  },
+  {
+    "model": "qwen3:8b-q4_K_M",
+    "task_set": "family:money",
+    "manifest_path": "scripts/benchmarks/repo_fix/tasks_family_money.json",
+    "task_count": 5,
+    "passed": 1,
+    "ran": 5,
+    "pass_at_1": 0.2,
+    "artifact_path": "/home/abrar/professor-x-main-integrate/professor-x/artifacts/repo-fix/2026-06-21/repo-fix-234656-d8b9b85d.json",
+    "duration_s": 0.0,
+    "bucket_counts": {
+      "duplicate_action": 0,
+      "finish_rejected": 1,
+      "edit-apply-error": 0,
+      "wrong-edit-verified-fail": 3,
+      "loop/forfeit": 0,
+      "other": 0
+    },
+    "failures": [
+      {
+        "task_id": "fam_money_01",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-21/6b7549ab-a6bc-47b4-b7b9-b557e2cfd2f5.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_money_02",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-21/5818e09d-befb-4d00-8d60-4ecb8627e5da.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_money_03",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-21/812761b4-4b8d-4e06-bac6-774413ab1e0c.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_money_04",
+        "bucket": "finish_rejected",
+        "made_edit": false,
+        "transcript_path": "artifacts/transcripts/2026-06-21/8c660eb8-e7d3-4b32-b874-aa12b21a9a8f.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      }
+    ]
+  },
+  {
+    "model": "qwen3:8b-q4_K_M",
+    "task_set": "family:sm",
+    "manifest_path": "scripts/benchmarks/repo_fix/tasks_family_sm.json",
+    "task_count": 4,
+    "passed": 2,
+    "ran": 4,
+    "pass_at_1": 0.5,
+    "artifact_path": "/home/abrar/professor-x-main-integrate/professor-x/artifacts/repo-fix/2026-06-22/repo-fix-005449-8a26884b.json",
+    "duration_s": 0.0,
+    "bucket_counts": {
+      "duplicate_action": 0,
+      "finish_rejected": 0,
+      "edit-apply-error": 2,
+      "wrong-edit-verified-fail": 0,
+      "loop/forfeit": 0,
+      "other": 0
+    },
+    "failures": [
+      {
+        "task_id": "fam_sm_02",
+        "bucket": "edit-apply-error",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/de943eb2-5ac4-442b-b582-69454dc9f44e.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_sm_03",
+        "bucket": "edit-apply-error",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/f4e7dbb0-ae6c-41cf-b94f-d90d3b0b1742.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      }
+    ]
+  },
+  {
+    "model": "qwen3:8b-q4_K_M",
+    "task_set": "family:stack",
+    "manifest_path": "scripts/benchmarks/repo_fix/tasks_family_stack.json",
+    "task_count": 6,
+    "passed": 2,
+    "ran": 6,
+    "pass_at_1": 0.3333333333333333,
+    "artifact_path": "/home/abrar/professor-x-main-integrate/professor-x/artifacts/repo-fix/2026-06-22/repo-fix-001115-130ddb6b.json",
+    "duration_s": 0.0,
+    "bucket_counts": {
+      "duplicate_action": 0,
+      "finish_rejected": 0,
+      "edit-apply-error": 0,
+      "wrong-edit-verified-fail": 4,
+      "loop/forfeit": 0,
+      "other": 0
+    },
+    "failures": [
+      {
+        "task_id": "fam_stack_02",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/70d0ede5-bb94-4f42-9f26-24888821007f.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_stack_03",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/3eb13e6b-3114-4889-b1bb-8682285da990.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_stack_04",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/27f6bd90-1768-4629-a733-2c482856b292.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_stack_05",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/9916ffc9-2415-4d9c-b3fd-da56dc1416eb.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      }
+    ]
+  },
+  {
+    "model": "qwen3:8b-q4_K_M",
+    "task_set": "family:unit",
+    "manifest_path": "scripts/benchmarks/repo_fix/tasks_family_unit.json",
+    "task_count": 5,
+    "passed": 0,
+    "ran": 5,
+    "pass_at_1": 0.0,
+    "artifact_path": "/home/abrar/professor-x-main-integrate/professor-x/artifacts/repo-fix/2026-06-22/repo-fix-003928-409d3ed6.json",
+    "duration_s": 0.0,
+    "bucket_counts": {
+      "duplicate_action": 0,
+      "finish_rejected": 0,
+      "edit-apply-error": 0,
+      "wrong-edit-verified-fail": 5,
+      "loop/forfeit": 0,
+      "other": 0
+    },
+    "failures": [
+      {
+        "task_id": "fam_unit_01",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/afdf4245-cd33-474e-a584-e46dcf5b6a35.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_unit_02",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/d08192ff-7ce2-4e85-9002-8e8d78fed03a.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_unit_03",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/9385e501-34ff-4dd7-ae15-d29395b99d17.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_unit_04",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/14dc5a2d-7ec7-4955-af0c-74ee51b8aeb4.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      },
+      {
+        "task_id": "fam_unit_05",
+        "bucket": "wrong-edit-verified-fail",
+        "made_edit": true,
+        "transcript_path": "artifacts/transcripts/2026-06-22/1f0cec5a-ed43-4e9c-ad5e-8fd15c5efaa4.json",
+        "post_exit": 1,
+        "expect_exit": 0
+      }
+    ]
+  }
+]
