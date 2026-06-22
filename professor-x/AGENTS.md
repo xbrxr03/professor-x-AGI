@@ -29,5 +29,18 @@ start. Check your box and append a log line when you finish a unit of work.** Ph
 ### Stream C — apply-retry-with-feedback (Claude, AFTER A; ONLY if B shows edit-apply is a top bucket)
 - [ ] C1 (conditional) one bounded retry feeding the editverify rejection reason back to the model
 
+## PHASE 3 — distillation flywheel vs the wrong-edit ceiling (see docs/PLAN_PHASE3_2026-06-22.md)
+Disjoint: Claude owns `src/` (Rust gate); Codex owns `distill/` (Python training). No shared files.
+GPU: Codex owns it during collect+train; Claude's gate MEASUREMENT runs after — never concurrently.
+### Stream D — Claude (Rust: TGC trust-gate + collection quality)
+- [ ] D1 TGC gate: accept distilled iff held-out renamed-anchor pass@1 +≥MDE (K-pass); log Goodhart gap
+- [ ] D2 NaN/stop-sanity guard rejects a bad gguf before gating (test)
+- [ ] D3 collection captures teacher verified-correct EDIT trajectories (native format) for the frontier
+### Stream E — Codex (Python: run the pipeline on the failure frontier) — see CODEX_TASK_P3.md
+- [ ] E1 collect teacher qwen3:14b verified-correct trajectories on the wrong-edit frontier
+- [ ] E2 QLoRA train (assistant-only mask + 2 epochs) -> clean GGUF (NaN-checked, stop-sane) -> serve profx-distilled-p3
+- [ ] E3 hand profx-distilled-p3 to Claude's TGC gate (do not self-declare success)
+
 ## Log (append-only; newest at bottom)
 - [2026-06-21] (Claude) created AGENTS.md + CODEX_TASK.md on prereboot-flywheel-prep; starting Stream A (A1).
+- [2026-06-22] (Claude) PHASE 1 CONCLUDED (on branch claude/behavior-keyed-retrieval): Stream A built+measured (behavior retrieval validated as mechanism, pass@1 lift marginal/within-noise), Stream C found already-built. Bottleneck = edit-production CAPABILITY. Scoped PHASE 3 here (Stream D Claude / Stream E Codex) — distillation flywheel + TGC trust-gate. Codex: see CODEX_TASK_P3.md.
