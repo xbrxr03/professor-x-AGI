@@ -80,3 +80,20 @@ it fails, we fall back to the validated failure-signature embedding and say so.
 VERDICT: the first two claims of the Living Verifier hold on real data (it IS a discriminating code;
 decoding is sparse). Not yet tested: open-set OOD separation across novel fault classes, and the full
 channel-code co-evolution loop (GPU). Honest: beachhead supports the kernel; the program is unproven.
+
+## OPEN-SET STEP RESULT (CPU, 2026-06-21) — HONEST: pillar NOT validated
+`scripts/benchmarks/repo_fix/open_set_beachhead.py`. (Ignore the script's hardcoded optimistic
+final line — it prints unconditionally; the real numbers below govern.)
+- **Known-recurring (renamed anchors) in-distribution = 14/14 (100%)** ✓ — rename-invariance reconfirmed.
+- **Synthetic novel faults: 35% detected OOD, 65% collide** with a known syndrome.
+- **CONFOUND:** some synthetic "novel" bugs are behaviorally IDENTICAL to a known fault (e.g.
+  money 10000→1000 ≈ the original //10000→//1000), so a syndrome collision there is CORRECT matching,
+  not a detection miss. The test cannot separate "true aliasing failure" from "behavioral duplicate
+  correctly matched."
+**VERDICT (honest): open-world novelty-growth pillar is NOT validated** — clean OOD cases exist but the
+current coarse check batteries (6–9 asserts) alias too many faults, and the test is confounded. So:
+- VALIDATED kernel: rename-invariant behavioral code + unique syndromes for KNOWN faults (6/7) +
+  rateless decoding (44% redundant) + anchors 14/14 in-dist.
+- UNPROVEN: detecting GENUINELY novel faults to trigger codebook growth (the speculative pillar).
+**Recommendation:** bank the validated kernel (failure-signature embeddings / diagnostic verifier code
+for known faults); treat open-world growth + channel-code co-design as a research program, not a claim.
