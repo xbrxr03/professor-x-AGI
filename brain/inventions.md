@@ -1,5 +1,13 @@
 ﻿# Inventions
 
+> ⚠️ **STALENESS BANNER (2026-06-22).** This file describes the **pre-pivot paper framing**
+> (MHE / DFA / IPE + consciousness), which was sequenced *behind* the north star by the 2026-06-10
+> pivot (`professor-x/MILESTONE.md`). The **current, live invention portfolio** is in
+> `professor-x/docs/PROJECT_ATLAS.md` §2 + `docs/research/` (failure-signature embeddings VALIDATED,
+> Diagnostic Verifier Codes, TGC, AACE; compression-gate + Lever-4 quant SHELVED/FALSIFIED with
+> evidence). Treat MHE/DFA/IPE below as PARKED long-arc directions, not active claims. Content kept
+> (per "no direction is abandoned"). See `docs/audits/2026-06-22-reference-cross-check.md` F2.
+
 ## MHE — Metacognitive Harness Evolution (the overarching claim)
 
 **One sentence:** Professor X is the first implementation of Metacognitive Harness Evolution — a self-improving agent system that operates three orthogonal self-improvement levers (parametric, contextual, structural) directed by a metacognitive self-model, running entirely on consumer hardware.

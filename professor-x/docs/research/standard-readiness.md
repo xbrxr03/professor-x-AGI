@@ -12,8 +12,10 @@ on six components. Here is where Professor X genuinely *leads*, and where it is 
 2. **Trustworthy-eval discipline.** Mechanism-check the ruler before believing a number; two
    "mirages" caught this session. Most harnesses report numbers they never validated the
    instrument for (the survey's "evaluation validity crisis").
-3. **The thesis demonstrated on a local 8B:** 0.50 → 0.85 on the trustworthy benchmark, purely
-   from trajectory-diagnosed harness fixes — "the harness is the intelligence," on a real number.
+3. **The thesis demonstrated on a local 8B:** 0.50 → **~0.77 mean (peak 0.90)** on the trustworthy
+   benchmark, purely from trajectory-diagnosed harness fixes — "the harness is the intelligence," on
+   a real number. (Confirmed 3-run mean per `eval-trust.md`; the often-quoted "0.85" was a single
+   baseline draw, not the confirmed figure. See `docs/audits/2026-06-22-reference-cross-check.md` F4.)
 4. **Weight-level self-distillation + identity-safe (ICS-gated) evolution** — unique to this repo.
 
 ## H = (E, T, C, S, L, V) coverage
@@ -28,8 +30,11 @@ on six components. Here is where Professor X genuinely *leads*, and where it is 
 | **V** Evaluation | ✅ strongest | deterministic repo-fix bench + **empirical fitness gate** + automated diagnosis + HIRO + DHE/BF/LCAP + self-authored tests + consciousness instruments. The standard-setting layer. |
 
 ## The honest roadmap to "standard-complete"
-1. **M4 rising curve** (in progress) — a stronger proposer (`--proposer-model qwen3:14b`) behind
-   the gate; the live demo of self-improvement. *Pending a model pull + run.*
+1. **M4 rising curve** (NOT YET DEMONSTRATED) — a stronger proposer (`--proposer-model qwen3:14b`)
+   behind the gate; the live demo of self-improvement. **Note (2026-06-22):** the 14B prompt-proposer
+   rising curve was tried and **RETRACTED** as a noise-tail event (confirmation run 0/2; see
+   `eval-trust.md` "M4 RISING CURVE — RETRACTED"). The real lever is code-level trajectory-diagnosed
+   fixes (m4-code-proposer-scoping.md), and Phase 3's distillation is the current attempt. Audit F4.
 2. **L: harden sandbox enforcement** — make host sandbox availability visible in readiness checks and extend isolation to all autonomous code/proposal test paths.
 3. **S: crash-recovery replay** — resume interrupted tasks from persisted task transcripts and command artifacts.
 4. **Adoption surface** — the one-command install (done) + a screencast + a third-party run.

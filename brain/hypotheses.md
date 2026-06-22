@@ -1,5 +1,16 @@
 ﻿# Hypotheses
 
+> ⚠️ **STALENESS BANNER (2026-06-22).** This file (last substantive update 2026-05-24, "all
+> hypotheses untested — pre-experiment phase") describes the **pre-pivot paper framing**
+> (HIRO / DHE / BF / LCAP / consciousness). It was **superseded by the 2026-06-10 pivot**:
+> `professor-x/MILESTONE.md` froze consciousness, demoted HIRO to a non-gating diagnostic, and made
+> **repo-fix the trusted ruler**. For current direction read `professor-x/docs/PROJECT_ATLAS.md`
+> (living register) + `professor-x/docs/PLAN_PHASE3_2026-06-22.md`. The current invention portfolio
+> (failure-signature embeddings, Diagnostic Verifier Codes, TGC, AACE) lives in `docs/research/`, not
+> here. Content kept (per "no direction is abandoned"); H1–H18 are PARKED, not live. See
+> `docs/audits/2026-06-22-reference-cross-check.md` F2. (DE-1 reminder: never flip a status field here
+> without a backing artifact.)
+
 Active hypotheses under investigation. Every entry is a falsifiable prediction with a proposed test.
 Confidence scores are priors — they update as experiments run. If I don't know something, I say so here rather than in the paper.
 

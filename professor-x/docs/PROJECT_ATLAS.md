@@ -17,6 +17,12 @@ Status legend: ACTIVE · NEXT · BUILT · VALIDATED · PARKED · SHELVED(evidenc
 ## 1. SELF-IMPROVEMENT LEVERS (the MHE portfolio — all stay alive)
 - **Lever 1 Parametric / weights** — distillation flywheel. ACTIVE (un-paused 2026-06-21 after the
   corrupt-GGUF find; clean distilled 0.40 > stock 0.30). Resume: re-quant from f16 + K-pass gate.
+  ⚠️ **PROVENANCE FLAG (2026-06-22, see docs/audits/2026-06-22-reference-cross-check.md F1):** the
+  "0.40 > 0.30" un-pause claim has no cited ruler and is *contradicted* by the latest measured
+  taxonomy (`docs/research/2026-06-21-failure-taxonomy.md`, run 06-22): `profx-distilled-clean`
+  hard=0.133 vs `qwen3:8b` hard=0.400 (distilled LOSES). Note `profx-distilled-clean` ≠ the
+  `profx-distilled-p3` candidate the TGC gate will judge — treat "distilled beats stock" as
+  UNPROVEN until D-integration measures p3 on held-out renamed anchors.
 - **Lever 2 Contextual / memory** — ICE / memory-driven recall. PARTIAL. Resume: behavior-keyed
   retrieval (see Inventions §2 failure-signature).
 - **Lever 3 Structural / harness** — harness self-evolution, SkillOpt-style skill optimizer. ACTIVE.

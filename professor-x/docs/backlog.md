@@ -39,10 +39,11 @@ analysis. Status: ☐ open · ◐ in progress · ✓ done.
   mostly FAIL the judge (success ~0.2), so judge-gated collection barely grows
   (stuck ~35 unique). Options: easier/graded curriculum, more volume, or accept a
   smaller corpus. The real ceiling is the agent's task success rate.
-- ☐ **QLoRA fine-tune** — BLOCKED on (1) GPU driver mismatch (needs a reboot;
-  Ollama tolerates it, PyTorch/CUDA won't) and (2) deps install
-  (unsloth/peft/bitsandbytes/trl). After both: run `distill/train_qlora.py`,
-  serve, ICS-gate (accept only if pass@3 beats baseline by >MDE AND ICS ≥ 0.70).
+- ◐ **QLoRA fine-tune** — UNBLOCKED (2026-06-22): the GPU-driver-mismatch reboot happened and the
+  post-reboot env gauntlet cleared (see `PLAN_11_10.md`); deps installed; distillation turns have run
+  (turn-1 REJECT banked, Phase-3 recipe fix + p3 candidate in progress). Pipeline: `distill/train_qlora.py`
+  → quantize-from-f16 (NaN-checked) → serve → TGC gate (accept only if held-out renamed-anchor pass@1
+  beats baseline by >MDE). The old ICS≥0.70 acceptance criterion is from the pre-pivot framing. Audit F7.
 
 ## Consciousness measurement program (2026-06-05/06 docs)
 - ☐ **meta-d′ resolution** — the one MEASURED deficit (AUROC ~0.48). Calibration

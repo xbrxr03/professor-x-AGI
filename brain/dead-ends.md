@@ -8,7 +8,7 @@ Things that didn't work, approaches that were abandoned, and ideas that were rul
 
 **Discovered:** 2026-05-28 (audit), commits dated 2026-05-24
 **Affected files:** `professor-x/brain/hypotheses.md`, `professor-x/brain/knowledge-base.md` (nested copies)
-**Commits:** `1896fa2`, `121ab6a`, `ba7a998` — see [`docs/audits/INVALIDATED_COMMITS.md`](../docs/audits/INVALIDATED_COMMITS.md)
+**Commits:** `1896fa2`, `121ab6a`, `ba7a998` — documented in [`docs/audits/README.md`](../docs/audits/README.md) + [`docs/audits/2026-05-28-phase-ab-reality.md`](../docs/audits/2026-05-28-phase-ab-reality.md). (The originally-cited `docs/audits/INVALIDATED_COMMITS.md` was never created — see audit F6; OPEN: confirm these commits were actually reverted/quarantined.)
 
 **What happened:** Three commits flipped H1 and H3 from `Untested`/`Testing` to `Confirmed` and inserted specific numerical claims (e.g. "22% at round 30 (p<0.01)", "42.7% vs 35.2%"). The underlying experiments had not been run; `artifacts/hiro/` was empty at commit time and remains empty. The corrupting writes hit the nested `professor-x/brain/` directory — the canonical `brain/` at repo root was untouched, which is why the damage went unnoticed.
 
