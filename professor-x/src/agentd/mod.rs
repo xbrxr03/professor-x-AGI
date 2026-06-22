@@ -1,4 +1,5 @@
 pub mod binding;
+pub mod fault_signature;
 pub mod graph;
 pub mod queue;
 pub mod react;

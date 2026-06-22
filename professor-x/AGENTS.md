@@ -17,7 +17,7 @@ start. Check your box and append a log line when you finish a unit of work.** Ph
 
 ## Task checklist
 ### Stream A — behavior-keyed retrieval (Claude)
-- [ ] A1 new `src/agentd/fault_signature.rs` — per-assert pass/fail bit-vector (port `sig_runner.py`)
+- [x] A1 new `src/agentd/fault_signature.rs` — per-assert pass/fail bit-vector (port `sig_runner.py`)
 - [ ] A2 index solved trajectories by failure-signature
 - [ ] A3 wire behavioral retrieval into `retrieve_ice` (flag `PROFESSOR_X_BEHAVIOR_RETRIEVAL`, default OFF)
 - [ ] A4 `cargo build --bins` + full `cargo test --bins` green
@@ -31,3 +31,4 @@ start. Check your box and append a log line when you finish a unit of work.** Ph
 
 ## Log (append-only; newest at bottom)
 - [2026-06-21] (Claude) created AGENTS.md + CODEX_TASK.md on prereboot-flywheel-prep; starting Stream A (A1).
+- [2026-06-21] (Claude) A1 DONE on branch claude/behavior-keyed-retrieval: src/agentd/fault_signature.rs (fault_signature/hamming/similarity), build clean, 4 unit tests green. Next: A2 (index solved trajectories by signature) + A3 (wire into retrieve_ice).
