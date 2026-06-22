@@ -128,3 +128,43 @@ disk. So the candidate is **neither killed nor confirmed** — it earns a *cheap
 The biggest *finding from the data itself*: the dominant wrong-edit class is **syndrome-invisible
 (no-change)** — the agent edits the wrong location entirely. That is a LOCALIZATION failure, which
 re-points at SBFL/fault-localization (the verifier-as-code thread) as the higher-value attack.
+
+---
+## ITERATION 2 (rinse & repeat) — frontier sweep narrows the candidate, redirects to DVC
+Sweep 3 (fault-localization + dense-reward + harness-adaptation):
+- **2601.03525 VeRPO** — verifiable DENSE per-unit-test partial-credit reward (no reward model) with
+  online per-test difficulty weighting to resist trivial-test hacking. → **substantially takes** the
+  "denser-than-pass@1 test signal" core of the syndrome-fitness candidate. Surviving delta = only
+  *rename-invariance* + *use as a transfer GATE* (VeRPO is an RL reward, same-distribution). Thin.
+- **OpenAI SWE-bench-Verified audit (Feb 2026): 59.4% of hardest tasks pass even with the bug
+  UNFIXED.** → strongest external motivation yet for **verifier-as-discriminating-code**: real-world
+  verifiers don't discriminate the fault; engineering diagnosability (locating arrays / DDU, +34% FL)
+  is the high-value, unoccupied move for LLM agents.
+- **2605.22166 Life-Harness** (the corpus's "harness portability" cite): adapt the interface not the
+  model; +88.5% avg, harness from a 4B transfers to 17 backbones. Confirms harness-adaptation space is
+  crowded/taken.
+- **2604.05481 / SemLoc 2603.29109 / Agentless** — "even when the correct fix location is identified,
+  agents frequently drift and produce incorrect edits." Corroborates our data (no-change = wrong
+  location) AND A5 (right info, wrong edit) → localization alone ≠ capability.
+
+### Honest redirect (verify-the-ruler + adversarial-self-review)
+Three of this hunt's candidates are now narrowed by published work: dense-reward (VeRPO), gate-structure
+(Two-Gate), harness-distill (OPHSD), harness-adaptation (Life-Harness). The **one thread that the
+external scan keeps REINFORCING rather than taking** is **the verifier as a discriminating diagnostic
+code** (Diagnostic Verifier Codes / Living Verifier): 2602.07900 (tests used as observation, not codes)
++ the OpenAI 59.4%-non-discriminating-tests finding + DDU diagnosability literature all converge on
+"the field's verifiers don't discriminate the fault." Our beachhead already showed our verifier IS a
+locating code for 6/7 families (interval the lone collision) and 44% of checks are redundant. The
+data's own lesson (most wrong edits are syndrome-INVISIBLE = localization failures on coarse checks)
+points the same way: make the verifier MORE discriminating, don't just read severity off coarse checks.
+
+### Next concrete experiment (CPU, $0, decisive) — DVC diagnosability, not syndrome-fitness
+1. Take the lone failing family (`interval`, two faults collide to one syndrome). Author the minimal
+   extra metamorphic sub-check(s) that SEPARATE the colliding pair → does the family become a 7/7
+   locating code? (engineering diagnosability, à la DDU). KILL if no small check separates them.
+2. Re-run the beachhead: confirm rename-invariance preserved (anchors 14/14) AND localization
+   (predict buggy_module from syndrome) now beats text (was 0.35 vs 0.47) once the suite is a code.
+3. Only if 1+2 pass does the GPU payoff (behavior-keyed RAG / syndrome-credit) become worth it.
+This is the project's most defensible, externally-motivated, still-open ground — and it has a cheap
+CPU kill-test. The syndrome-as-fitness idea is parked as weak-positive/narrowed (see prior section),
+not pursued.
