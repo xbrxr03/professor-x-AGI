@@ -2543,6 +2543,13 @@ impl ReactLoop {
                     "behavior-keyed retrieval matched a past fix",
                     json!({"signature": sig, "match_id": e.id, "similarity": sim}),
                 );
+                // Experiment instrumentation: emit_event only writes to the DB event store, so also
+                // surface a hit on stderr (only under this default-OFF flag) so A/B measurement can
+                // count firings from captured output.
+                eprintln!(
+                    "[behavior_retrieval] HIT sig={sig} match={} sim={sim:.2}",
+                    e.id
+                );
                 vec![format!(
                     "Behavior-keyed retrieval (signature match {:.0}%): {}",
                     sim * 100.0,
