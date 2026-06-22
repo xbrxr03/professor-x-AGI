@@ -21,3 +21,6 @@ Two kinds of log:
 - [2026-06-17 — The distillation gauntlet](2026-06-17-distillation-gauntlet.md): got the
   distillation flywheel working end-to-end on the RTX 3060; the bug was never the ML, it was the
   plumbing (serving template + train/serve format). First real gate verdict: REJECT-by-ceiling.
+- [2026-06-18 — Building a ruler that can measure self-improvement](2026-06-18-headroom-benchmark.md):
+  built a graded headroom benchmark (baseline 0.58, was saturated at 0.95); found multi-file
+  localization is a harness gap (first experiment) and that the headroom ruler is noisy (need K≥5).

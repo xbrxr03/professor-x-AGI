@@ -5,6 +5,16 @@ they've earned it. Newest first.
 
 ---
 
+### D-009 · A headroom benchmark is noisy by construction — measure deltas with enough passes
+Edge-of-ability tasks flip pass/fail run-to-run (the graded ruler swung 0.205 across two passes).
+**Rule:** size the gate to the observed run-to-run variance — K≥5 passes and/or ~80 tasks, MDE ≥ the
+noise band (~0.10 here). Large gains show through; small ones drown. *(2026-06-18)*
+
+### D-008 · You can't demonstrate self-improvement on a saturated benchmark
+The headline feature (self-improvement) needs a test with real headroom; a baseline near 100% makes
+any curve flat by construction. **Rule:** establish a headroom benchmark (baseline well below ceiling)
+*before* trying to show improvement. *(2026-06-18)*
+
 ### D-007 · Train the model in the exact format you serve it in
 A model fine-tuned in Qwen3's chat template looped forever in the benchmark, which drives it via
 raw `/api/generate` ReAct text. Same model, different prompt shape → out-of-distribution → garbage.
