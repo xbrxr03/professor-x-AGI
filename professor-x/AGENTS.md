@@ -3,6 +3,8 @@
 Two agents work this repo in PARALLEL (Claude = Professor-X dev; Codex). **Read this file before you
 start. Check your box and append a log line when you finish a unit of work.** Phase 1 plan:
 `.claude/plans/sparkling-sauteeing-marshmallow.md`; full map: `docs/PROJECT_ATLAS.md`.
+**PICKUP BRIEFS (read yours after this file): Claude → `CLAUDE_TASK.md` · Codex → `CODEX_TASK_P3.md`.**
+Current phase: `docs/PLAN_PHASE3_2026-06-22.md`.
 
 ## Rules
 - **Disjoint file ownership — never edit a file another agent owns:**
@@ -48,3 +50,4 @@ GPU: Codex owns it during collect+train; Claude's gate MEASUREMENT runs after �
 - [2026-06-22T05:46:00-04:00] (Codex) starting Stream E on branch `codex/p3-distill`; claimed GPU for qwen3:14b frontier collection + QLoRA train on the 35-task wrong-edit manifest.
 - [2026-06-22T16:33:40-04:00] (Codex) paused Stream E on `codex/p3-distill` after prep + initial teacher collection: committed distill frontier/safety helpers, collected 7 verified trajectories so far (`hard_004`, `fam_csv_01`, `fam_csv_02`, `fam_money_03`, `fam_stack_02`, `fam_stack_04`, `fam_unit_04`), latest non-CSV frontier sweep (`repo-fix-202836-47664c90.json`) went 4/16 with `qwen3:14b-q4_K_M`; no active GPU jobs.
 - [2026-06-22] (Claude) resolved AGENTS.md merge conflict (unioned the log) + merged PR #23 (Codex Stream E prep) into prereboot-flywheel-prep. Stream E E1 partial (7 verified teacher trajectories so far); E2 training + E3 gate handoff still ahead.
+- [2026-06-22] (Claude) HANDOFF for parallel-code: wrote `CLAUDE_TASK.md` (self-contained pickup brief — a fresh Claude task off prereboot-flywheel-prep reads it + AGENTS.md and resumes). CLAUDE PICKUP = D-INTEGRATION: when Codex serves `profx-distilled-p3` and the GPU is free, run `scripts/benchmarks/repo_fix/tgc_gate.py` (baseline qwen3:8b vs candidate profx-distilled-p3, train=tasks_families.json, heldout=anchors) → report accept/reject + Goodhart gap honestly. Do NOT gate while Codex trains.
