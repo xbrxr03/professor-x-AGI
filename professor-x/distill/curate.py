@@ -13,7 +13,7 @@ Curation (per the self-distillation research doc):
   - balance across task_type so weak categories are represented (ZPD: don't let
     the easy category dominate the lesson)
 
-Usage:  python3 distill/curate.py [--max-per-type 400]
+Usage:  python3 distill/curate.py [--max-per-type 400] [--glob 'artifacts/trajectories/2026-06-22/*.jsonl']
 """
 import argparse
 import glob
@@ -31,10 +31,10 @@ OUT_DIR = os.path.join(HERE, "data")
 OUT = os.path.join(OUT_DIR, "curated.jsonl")
 
 
-def load_all():
+def load_all(traj_glob: str):
     rows = []
     seen = set()
-    for path in glob.glob(TRAJ_GLOB, recursive=True):
+    for path in glob.glob(traj_glob, recursive=True):
         real = os.path.realpath(path)
         if real in seen:
             continue
@@ -54,11 +54,21 @@ def load_all():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--max-per-type", type=int, default=400)
+    ap.add_argument(
+        "--glob",
+        default=TRAJ_GLOB,
+        help="Glob for trajectory jsonl files to curate (default: all trajectories under the repo)",
+    )
+    ap.add_argument(
+        "--out",
+        default=OUT,
+        help="Destination jsonl path for curated training rows",
+    )
     args = ap.parse_args()
 
-    rows = load_all()
+    rows = load_all(args.glob)
     if not rows:
-        print(f"No trajectories found at {TRAJ_GLOB}")
+        print(f"No trajectories found at {args.glob}")
         print("Run the harness (--hiro / --mine) first to accumulate verified trajectories.")
         return
 
@@ -85,15 +95,16 @@ def main():
         items.sort(key=lambda r: r.get("steps", 0))  # prefer concise
         curated.extend(items[: args.max_per_type])
 
-    os.makedirs(OUT_DIR, exist_ok=True)
-    with open(OUT, "w") as f:
+    out = os.path.abspath(args.out)
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    with open(out, "w") as f:
         for r in curated:
             # emit just the messages array — the training format
             f.write(json.dumps({"messages": r["messages"]}) + "\n")
 
     print(f"Loaded {len(rows)} raw, {len(best_by_task)} unique verified tasks.")
     print("By type:", {t: len(v) for t, v in by_type.items()})
-    print(f"Wrote {len(curated)} curated examples → {OUT}")
+    print(f"Wrote {len(curated)} curated examples → {out}")
     if len(curated) < 100:
         print("\nWARNING: <100 examples. Distillation wants hundreds+. Run more HIRO/mine rounds.")
 
