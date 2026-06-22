@@ -21,10 +21,12 @@ start. Check your box and append a log line when you finish a unit of work.** Ph
 - [x] A2 index solved trajectories by failure-signature (`build_signature_index.py` -> `signature_index.json`; Rust `SignatureIndex`)
 - [x] A3 wire behavioral retrieval into the loop (flag `PROFESSOR_X_BEHAVIOR_RETRIEVAL`, default OFF; appended post-binding)
 - [x] A4 `cargo build --bins` + full `cargo test --bins` green (370/370)
-- [~] A5 measuring: first run was a BROKEN RULER (emit_event writes to DB not stdout -> hits=0 was a
-      measurement artifact; the 0.357->0.429 was within noise + unverifiable). Fixed: stderr HIT line +
-      counter. CONFIRMED firing (each anchor matches its origin at sim 1.00, hint injected). Trustworthy
-      ON-vs-OFF re-run in progress (qwen3:8b, 14 held-out anchors).
+- [x] A5 DONE (trustworthy): OFF 0.286 vs ON 0.357, hits 14/14 (each anchor matched its origin sim 1.00).
+      Mechanism VALIDATED; impact +1 task = WITHIN NOISE (not a confirmed win). Diagnostic: model fails
+      9/14 anchors EVEN WITH the correct fix injected, and the failure is wrong-edit-production (right
+      vocab, wrong logic) -> bottleneck is CAPABILITY, not information. Verdict: keep the representation,
+      SHELVE the retrieval-use as marginal, PIVOT to Phase 3 (distillation flywheel). Doc:
+      docs/research/2026-06-22-RESULT-A5-behavior-retrieval.md.
 ### Stream B — failure taxonomy (Codex) — see CODEX_TASK.md  [COMPLETE 2026-06-22]
 - [x] B1 `failure_taxonomy.py` ran native bench on both models over hard set + families
 - [x] B2 bucketed failures
@@ -47,3 +49,4 @@ start. Check your box and append a log line when you finish a unit of work.** Ph
 - [2026-06-21] (Claude) A1 DONE on branch claude/behavior-keyed-retrieval: src/agentd/fault_signature.rs (fault_signature/hamming/similarity), build clean, 4 unit tests green. Next: A2 (index solved trajectories by signature) + A3 (wire into retrieve_ice).
 - [2026-06-22] (Claude) A2+A3+A4 DONE: build_signature_index.py -> signature_index.json (34 entries/7 families); Rust SignatureIndex (load+nearest+self-exclusion); behavioral retrieval wired post-binding, flag PROFESSOR_X_BEHAVIOR_RETRIEVAL (default OFF). Full suite 370/370 green. A5 measurement DEFERRED to avoid GPU contention with Codex Stream B — will run ON vs OFF on the held-out anchors once the GPU frees.
 - [2026-06-22] (Claude) Stream B confirmed COMPLETE by Codex; integrated finding: wrong-edit-verified-fail dominates (61-81%) => Stream A (inject correct behaviorally-matching fix) is well-targeted; Stream C reframed to RLEF-style verifier-feedback retry. GPU free -> A5 RUNNING (release binary rebuilt with behavior retrieval; ON vs OFF on 14 held-out anchors, qwen3:8b, with behavior_hit counting).
+- [2026-06-22] (Claude) A5 DONE + Stream C found ALREADY-BUILT. Verdict: behavior-keyed retrieval mechanism VALIDATED (14/14 origin matches) but pass@1 lift marginal/within-noise; model fails even WITH the answer (wrong-edit-production = capability ceiling). Phase 1 conclusion: harness mechanisms all exist; bottleneck = CAPABILITY -> next lever is Phase 3 distillation flywheel. Stream A code kept (flag OFF, suite green); retrieval-use shelved as marginal. Branch claude/behavior-keyed-retrieval ready for review/merge.
