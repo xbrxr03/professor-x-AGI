@@ -67,3 +67,16 @@ This is the uncharted ground the gap-chain leads to, and the framing is genuinel
 first: it's a program with a cheap 3-step beachhead that can KILL it tonight on CPU. If the beachhead
 holds, we have a new theory (self-improvement = channel-code co-design) with a working local kernel; if
 it fails, we fall back to the validated failure-signature embedding and say so.
+
+## BEACHHEAD RESULT (CPU, existing data, 2026-06-21)
+`scripts/benchmarks/repo_fix/beachhead_living_verifier.py`:
+- **"Verifier is a code": 6/7 families have a UNIQUE syndrome per fault** (csv/graph/money/sm/stack/unit
+  = True; interval = False — two faults collide). So the existing verifier ALREADY acts as a locating
+  code for most families; interval is the natural codebook-GROWTH case (mint a check to separate the
+  colliding pair) — the open-set mechanism in miniature, observed not assumed.
+- **Rateless/active-diagnosis efficiency: 28/50 checks (56%) suffice to decode; 44% redundant** (graph
+  2/6, sm 3/8, stack 4/9). Decoding the fault needs far fewer than the full battery → active diagnosis
+  has real headroom.
+VERDICT: the first two claims of the Living Verifier hold on real data (it IS a discriminating code;
+decoding is sparse). Not yet tested: open-set OOD separation across novel fault classes, and the full
+channel-code co-evolution loop (GPU). Honest: beachhead supports the kernel; the program is unproven.
