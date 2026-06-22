@@ -44,3 +44,4 @@ GPU: Codex owns it during collect+train; Claude's gate MEASUREMENT runs after â€
 ## Log (append-only; newest at bottom)
 - [2026-06-21] (Claude) created AGENTS.md + CODEX_TASK.md on prereboot-flywheel-prep; starting Stream A (A1).
 - [2026-06-22] (Claude) PHASE 1 CONCLUDED (on branch claude/behavior-keyed-retrieval): Stream A built+measured (behavior retrieval validated as mechanism, pass@1 lift marginal/within-noise), Stream C found already-built. Bottleneck = edit-production CAPABILITY. Scoped PHASE 3 here (Stream D Claude / Stream E Codex) â€” distillation flywheel + TGC trust-gate. Codex: see CODEX_TASK_P3.md.
+- [2026-06-22T05:46:00-04:00] (Codex) starting Stream E on branch `codex/p3-distill`; claimed GPU for qwen3:14b frontier collection + QLoRA train on the 35-task wrong-edit manifest.
