@@ -577,6 +577,14 @@ impl ReactLoop {
         let (ice_examples, cognition_context) =
             self.apply_binding(ice_examples, cognition_context).await;
 
+        // Behavior-keyed retrieval (flag-gated, default OFF): append the nearest past fix by failure
+        // signature AFTER binding, so the behavioral hint is not suppressed by cross-modal binding.
+        let ice_examples = {
+            let mut e = ice_examples;
+            e.extend(self.retrieve_behavioral());
+            e
+        };
+
         // Fresh scratchpad per task (self-managed working memory).
         if let Ok(mut sp) = self.scratchpad.lock() {
             sp.clear();
@@ -2502,6 +2510,75 @@ impl ReactLoop {
                 format!("Past task ({outcome}): {}", e.content)
             })
             .collect()
+    }
+
+    /// Behavior-keyed retrieval (flag `PROFESSOR_X_BEHAVIOR_RETRIEVAL`, default OFF). Compute the
+    /// CURRENT task's failure signature (which check-asserts fail) and surface the fix hint from the
+    /// nearest past task by signature — a contamination-proof, rename-invariant match (validated
+    /// 2026-06-21: 0.93 vs text 0.14). Returns empty unless the flag is on, a workspace + check.py
+    /// exist, an index is loaded, and a sufficiently-similar entry is found — so it only ever ADDS
+    /// to text retrieval, never replaces it.
+    fn retrieve_behavioral(&self) -> Vec<String> {
+        use crate::agentd::fault_signature::{fault_signature, SignatureIndex};
+        const MIN_SIM: f32 = 0.6;
+        if !Self::behavior_retrieval_enabled() {
+            return Vec::new();
+        }
+        let Some(ws) = self.workspace_override.as_ref() else {
+            return Vec::new();
+        };
+        let Some(sig) = fault_signature(ws) else {
+            return Vec::new();
+        };
+        let Some(index) = Self::signature_index() else {
+            return Vec::new();
+        };
+        let marker = ws.to_string_lossy();
+        match index.nearest(&sig, &marker, MIN_SIM) {
+            Some((e, sim)) => {
+                self.emit_event(
+                    None,
+                    None,
+                    "react.behavior_retrieval.hit",
+                    "behavior-keyed retrieval matched a past fix",
+                    json!({"signature": sig, "match_id": e.id, "similarity": sim}),
+                );
+                // Experiment instrumentation: emit_event only writes to the DB event store, so also
+                // surface a hit on stderr (only under this default-OFF flag) so A/B measurement can
+                // count firings from captured output.
+                eprintln!(
+                    "[behavior_retrieval] HIT sig={sig} match={} sim={sim:.2}",
+                    e.id
+                );
+                vec![format!(
+                    "Behavior-keyed retrieval (signature match {:.0}%): {}",
+                    sim * 100.0,
+                    e.hint
+                )]
+            }
+            None => Vec::new(),
+        }
+    }
+
+    fn behavior_retrieval_enabled() -> bool {
+        std::env::var("PROFESSOR_X_BEHAVIOR_RETRIEVAL")
+            .map(|v| matches!(v.as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false)
+    }
+
+    /// Lazily load the signature index once (path from `PROFESSOR_X_SIGNATURE_INDEX`, default the
+    /// repo-fix corpus). `None` if absent/unparseable → silent fallback to text retrieval.
+    fn signature_index() -> Option<&'static crate::agentd::fault_signature::SignatureIndex> {
+        use crate::agentd::fault_signature::SignatureIndex;
+        use std::sync::OnceLock;
+        static IDX: OnceLock<Option<SignatureIndex>> = OnceLock::new();
+        IDX.get_or_init(|| {
+            let path = std::env::var("PROFESSOR_X_SIGNATURE_INDEX").unwrap_or_else(|_| {
+                "scripts/benchmarks/repo_fix/signature_index.json".to_string()
+            });
+            SignatureIndex::load(std::path::Path::new(&path))
+        })
+        .as_ref()
     }
 
     /// Retrieve task-relevant cognition by EMBEDDING similarity. The old version
