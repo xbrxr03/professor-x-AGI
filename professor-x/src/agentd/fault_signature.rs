@@ -83,6 +83,50 @@ pub fn similarity(a: &str, b: &str) -> Option<f32> {
     Some(1.0 - (d as f32 / a.len() as f32))
 }
 
+/// One corpus entry: a past task's failure signature + a fix hint. Built by
+/// `scripts/benchmarks/repo_fix/build_signature_index.py` into `signature_index.json`.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct SignatureEntry {
+    pub id: String,
+    #[serde(default)]
+    pub family: String,
+    pub signature: String,
+    #[serde(default)]
+    pub buggy_module: String,
+    pub hint: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct SignatureIndex {
+    pub entries: Vec<SignatureEntry>,
+}
+
+impl SignatureIndex {
+    /// Load the JSON index from `path` (`{ "entries": [...] }`). `None` on any IO/parse error so the
+    /// caller silently falls back to text retrieval.
+    pub fn load(path: &Path) -> Option<Self> {
+        let raw = std::fs::read_to_string(path).ok()?;
+        serde_json::from_str(&raw).ok()
+    }
+
+    /// Nearest entry to `sig` by bit-similarity, requiring `sim >= min_sim`. Entries whose `id` is a
+    /// substring of `workspace_marker` are skipped (self-exclusion: the task's own fixture id appears
+    /// in its workspace path, so a task never retrieves its own answer).
+    pub fn nearest(
+        &self,
+        sig: &str,
+        workspace_marker: &str,
+        min_sim: f32,
+    ) -> Option<(&SignatureEntry, f32)> {
+        self.entries
+            .iter()
+            .filter(|e| !workspace_marker.contains(&e.id))
+            .filter_map(|e| similarity(sig, &e.signature).map(|s| (e, s)))
+            .filter(|(_, s)| *s >= min_sim)
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,5 +178,28 @@ mod tests {
         assert_eq!(hamming("101", "1011"), None);
         assert_eq!(similarity("1111", "1111"), Some(1.0));
         assert_eq!(similarity("1111", "0000"), Some(0.0));
+    }
+
+    #[test]
+    fn index_nearest_matches_and_self_excludes() {
+        let idx: SignatureIndex = serde_json::from_str(
+            r#"{"entries":[
+                {"id":"fam_a_01","family":"a","signature":"0111","buggy_module":"m.py","hint":"fix A"},
+                {"id":"fam_a_02","family":"a","signature":"1100","buggy_module":"n.py","hint":"fix B"}
+            ]}"#,
+        )
+        .unwrap();
+        // Query "0111": exact match is fam_a_01.
+        let (e, sim) = idx.nearest("0111", "/tmp/px-repofix-other-123", 0.5).unwrap();
+        assert_eq!(e.id, "fam_a_01");
+        assert_eq!(sim, 1.0);
+        // Self-exclusion: marker contains fam_a_01 -> skip it. At a 0.5 floor the only other entry
+        // (fam_a_02, sim 0.25 to "0111") is below threshold -> no match (correctly conservative).
+        assert!(idx.nearest("0111", "/tmp/px-repofix-fam_a_01-123", 0.5).is_none());
+        // With no floor, self-exclusion still holds: it returns the OTHER entry, never fam_a_01.
+        let got = idx.nearest("0111", "/tmp/px-repofix-fam_a_01-123", 0.0);
+        assert_eq!(got.map(|(e, _)| e.id.as_str()), Some("fam_a_02"));
+        // Different-length signature is not comparable -> no match.
+        assert!(idx.nearest("01110", "/x", 0.5).is_none());
     }
 }

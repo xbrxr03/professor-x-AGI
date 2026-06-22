@@ -1,0 +1,242 @@
+{
+  "entries": [
+    {
+      "id": "fam_csv_01",
+      "family": "csv",
+      "signature": "011111",
+      "buggy_module": "row.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `row.py`. The correct `row.py` is:\ndef parse_row(line):\n    return [c.strip() for c in line.split(',')]\n\n\ndef to_row(cells):\n    return ','.join(str(c) for c in cells)"
+    },
+    {
+      "id": "fam_csv_02",
+      "family": "csv",
+      "signature": "101100",
+      "buggy_module": "row.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `row.py`. The correct `row.py` is:\ndef parse_row(line):\n    return [c.strip() for c in line.split(',')]\n\n\ndef to_row(cells):\n    return ','.join(str(c) for c in cells)"
+    },
+    {
+      "id": "fam_csv_03",
+      "family": "csv",
+      "signature": "110000",
+      "buggy_module": "records.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `records.py`. The correct `records.py` is:\nfrom row import parse_row, to_row\n\n\ndef parse(text):\n    lines = [l for l in text.splitlines() if l.strip()]\n    header = parse_row(lines[0])\n    return [dict(zip(header, parse_row(l))) for l in lines[1:]]\n\n\ndef select(records, key):\n    return [r[key] for r in records]\n\n\ndef dump(records):\n    if not records:\n        return ''\n    header = list(records[0].keys())\n    out = [to_row(header)]\n    for r in records:\n        out.append(to_row([r[h] for h in header]))\n    return '\\n'.join(out)"
+    },
+    {
+      "id": "fam_csv_04",
+      "family": "csv",
+      "signature": "111011",
+      "buggy_module": "records.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `records.py`. The correct `records.py` is:\nfrom row import parse_row, to_row\n\n\ndef parse(text):\n    lines = [l for l in text.splitlines() if l.strip()]\n    header = parse_row(lines[0])\n    return [dict(zip(header, parse_row(l))) for l in lines[1:]]\n\n\ndef select(records, key):\n    return [r[key] for r in records]\n\n\ndef dump(records):\n    if not records:\n        return ''\n    header = list(records[0].keys())\n    out = [to_row(header)]\n    for r in records:\n        out.append(to_row([r[h] for h in header]))\n    return '\\n'.join(out)"
+    },
+    {
+      "id": "fam_csv_05",
+      "family": "csv",
+      "signature": "111100",
+      "buggy_module": "records.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `records.py`. The correct `records.py` is:\nfrom row import parse_row, to_row\n\n\ndef parse(text):\n    lines = [l for l in text.splitlines() if l.strip()]\n    header = parse_row(lines[0])\n    return [dict(zip(header, parse_row(l))) for l in lines[1:]]\n\n\ndef select(records, key):\n    return [r[key] for r in records]\n\n\ndef dump(records):\n    if not records:\n        return ''\n    header = list(records[0].keys())\n    out = [to_row(header)]\n    for r in records:\n        out.append(to_row([r[h] for h in header]))\n    return '\\n'.join(out)"
+    },
+    {
+      "id": "fam_graph_01",
+      "family": "graph",
+      "signature": "001111",
+      "buggy_module": "graph.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `graph.py`. The correct `graph.py` is:\ndef add_edge(adj, u, v):\n    adj.setdefault(u, set()).add(v)\n    adj.setdefault(v, set()).add(u)\n\n\ndef neighbors(adj, u):\n    return adj.get(u, set())\n\n\ndef degree(adj, u):\n    return len(neighbors(adj, u))"
+    },
+    {
+      "id": "fam_graph_02",
+      "family": "graph",
+      "signature": "000111",
+      "buggy_module": "graph.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `graph.py`. The correct `graph.py` is:\ndef add_edge(adj, u, v):\n    adj.setdefault(u, set()).add(v)\n    adj.setdefault(v, set()).add(u)\n\n\ndef neighbors(adj, u):\n    return adj.get(u, set())\n\n\ndef degree(adj, u):\n    return len(neighbors(adj, u))"
+    },
+    {
+      "id": "fam_graph_03",
+      "family": "graph",
+      "signature": "100111",
+      "buggy_module": "graph.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `graph.py`. The correct `graph.py` is:\ndef add_edge(adj, u, v):\n    adj.setdefault(u, set()).add(v)\n    adj.setdefault(v, set()).add(u)\n\n\ndef neighbors(adj, u):\n    return adj.get(u, set())\n\n\ndef degree(adj, u):\n    return len(neighbors(adj, u))"
+    },
+    {
+      "id": "fam_graph_05",
+      "family": "graph",
+      "signature": "111101",
+      "buggy_module": "traverse.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `traverse.py`. The correct `traverse.py` is:\nfrom graph import neighbors\n\n\ndef reachable(adj, start):\n    seen = set()\n    stack = [start]\n    while stack:\n        u = stack.pop()\n        if u in seen:\n            continue\n        seen.add(u)\n        for v in neighbors(adj, u):\n            if v not in seen:\n                stack.append(v)\n    return seen\n\n\ndef connected(adj, a, b):\n    return b in reachable(adj, a)"
+    },
+    {
+      "id": "fam_interval_01",
+      "family": "interval",
+      "signature": "1011111",
+      "buggy_module": "intervals.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `intervals.py`. The correct `intervals.py` is:\ndef overlaps(a, b):\n    return a[0] < b[1] and b[0] < a[1]\n\n\ndef merge_pair(a, b):\n    return (min(a[0], b[0]), max(a[1], b[1]))"
+    },
+    {
+      "id": "fam_interval_02",
+      "family": "interval",
+      "signature": "1111001",
+      "buggy_module": "intervals.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `intervals.py`. The correct `intervals.py` is:\ndef overlaps(a, b):\n    return a[0] < b[1] and b[0] < a[1]\n\n\ndef merge_pair(a, b):\n    return (min(a[0], b[0]), max(a[1], b[1]))"
+    },
+    {
+      "id": "fam_interval_03",
+      "family": "interval",
+      "signature": "1100000",
+      "buggy_module": "intervals.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `intervals.py`. The correct `intervals.py` is:\ndef overlaps(a, b):\n    return a[0] < b[1] and b[0] < a[1]\n\n\ndef merge_pair(a, b):\n    return (min(a[0], b[0]), max(a[1], b[1]))"
+    },
+    {
+      "id": "fam_interval_04",
+      "family": "interval",
+      "signature": "1111100",
+      "buggy_module": "schedule.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `schedule.py`. The correct `schedule.py` is:\nfrom intervals import overlaps, merge_pair\n\n\ndef merge_all(ivs):\n    ivs = sorted(ivs)\n    out = [ivs[0]]\n    for iv in ivs[1:]:\n        if overlaps(out[-1], iv) or out[-1][1] == iv[0]:\n            out[-1] = merge_pair(out[-1], iv)\n        else:\n            out.append(iv)\n    return out\n\n\ndef covered(ivs):\n    return sum(e - s for s, e in merge_all(ivs))"
+    },
+    {
+      "id": "fam_interval_05",
+      "family": "interval",
+      "signature": "1111100",
+      "buggy_module": "schedule.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `schedule.py`. The correct `schedule.py` is:\nfrom intervals import overlaps, merge_pair\n\n\ndef merge_all(ivs):\n    ivs = sorted(ivs)\n    out = [ivs[0]]\n    for iv in ivs[1:]:\n        if overlaps(out[-1], iv) or out[-1][1] == iv[0]:\n            out[-1] = merge_pair(out[-1], iv)\n        else:\n            out.append(iv)\n    return out\n\n\ndef covered(ivs):\n    return sum(e - s for s, e in merge_all(ivs))"
+    },
+    {
+      "id": "fam_money_01",
+      "family": "money",
+      "signature": "11110010",
+      "buggy_module": "tax.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `tax.py`. The correct `tax.py` is:\ndef add_tax(cents, rate_bps):\n    # rate in basis points: 10000 bps = 100%\n    return cents + cents * rate_bps // 10000"
+    },
+    {
+      "id": "fam_money_02",
+      "family": "money",
+      "signature": "11101010",
+      "buggy_module": "discount.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `discount.py`. The correct `discount.py` is:\ndef apply_discount(cents, pct):\n    return cents - cents * pct // 100"
+    },
+    {
+      "id": "fam_money_03",
+      "family": "money",
+      "signature": "11111010",
+      "buggy_module": "pricing.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `pricing.py`. The correct `pricing.py` is:\nfrom tax import add_tax\nfrom discount import apply_discount\n\n\ndef price(cents, rate_bps, pct):\n    # discount first, then tax\n    return add_tax(apply_discount(cents, pct), rate_bps)"
+    },
+    {
+      "id": "fam_money_04",
+      "family": "money",
+      "signature": "01010000",
+      "buggy_module": "tax.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `tax.py`. The correct `tax.py` is:\ndef add_tax(cents, rate_bps):\n    # rate in basis points: 10000 bps = 100%\n    return cents + cents * rate_bps // 10000"
+    },
+    {
+      "id": "fam_money_06",
+      "family": "money",
+      "signature": "11111101",
+      "buggy_module": "cart.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `cart.py`. The correct `cart.py` is:\nfrom pricing import price\n\n\ndef total(items, rate_bps, pct):\n    return sum(price(c, rate_bps, pct) for c in items)"
+    },
+    {
+      "id": "fam_sm_01",
+      "family": "sm",
+      "signature": "01110101",
+      "buggy_module": "states.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `states.py`. The correct `states.py` is:\nLOCKED = 'locked'\nOPEN = 'open'\n\nTRANSITIONS = {\n    (LOCKED, 'coin'): OPEN,\n    (LOCKED, 'push'): LOCKED,\n    (OPEN, 'push'): LOCKED,\n    (OPEN, 'coin'): OPEN,\n}\n\n\ndef next_state(state, event):\n    return TRANSITIONS[(state, event)]"
+    },
+    {
+      "id": "fam_sm_02",
+      "family": "sm",
+      "signature": "10101101",
+      "buggy_module": "states.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `states.py`. The correct `states.py` is:\nLOCKED = 'locked'\nOPEN = 'open'\n\nTRANSITIONS = {\n    (LOCKED, 'coin'): OPEN,\n    (LOCKED, 'push'): LOCKED,\n    (OPEN, 'push'): LOCKED,\n    (OPEN, 'coin'): OPEN,\n}\n\n\ndef next_state(state, event):\n    return TRANSITIONS[(state, event)]"
+    },
+    {
+      "id": "fam_sm_03",
+      "family": "sm",
+      "signature": "11111100",
+      "buggy_module": "machine.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `machine.py`. The correct `machine.py` is:\nfrom states import LOCKED, next_state\n\n\ndef run(events, start=LOCKED):\n    s = start\n    for e in events:\n        s = next_state(s, e)\n    return s\n\n\ndef count_opens(events, start=LOCKED):\n    s = start\n    n = 0\n    for e in events:\n        s = next_state(s, e)\n        if s == 'open':\n            n += 1\n    return n"
+    },
+    {
+      "id": "fam_sm_04",
+      "family": "sm",
+      "signature": "11110111",
+      "buggy_module": "machine.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `machine.py`. The correct `machine.py` is:\nfrom states import LOCKED, next_state\n\n\ndef run(events, start=LOCKED):\n    s = start\n    for e in events:\n        s = next_state(s, e)\n    return s\n\n\ndef count_opens(events, start=LOCKED):\n    s = start\n    n = 0\n    for e in events:\n        s = next_state(s, e)\n        if s == 'open':\n            n += 1\n    return n"
+    },
+    {
+      "id": "fam_stack_01",
+      "family": "stack",
+      "signature": "110010011",
+      "buggy_module": "stack.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `stack.py`. The correct `stack.py` is:\nclass Stack:\n    def __init__(self):\n        self._d = []\n    def push(self, x):\n        self._d.append(x)\n    def pop(self):\n        return self._d.pop()\n    def peek(self):\n        return self._d[-1]\n    def is_empty(self):\n        return len(self._d) == 0"
+    },
+    {
+      "id": "fam_stack_02",
+      "family": "stack",
+      "signature": "101111111",
+      "buggy_module": "stack.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `stack.py`. The correct `stack.py` is:\nclass Stack:\n    def __init__(self):\n        self._d = []\n    def push(self, x):\n        self._d.append(x)\n    def pop(self):\n        return self._d.pop()\n    def peek(self):\n        return self._d[-1]\n    def is_empty(self):\n        return len(self._d) == 0"
+    },
+    {
+      "id": "fam_stack_03",
+      "family": "stack",
+      "signature": "011100100",
+      "buggy_module": "stack.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `stack.py`. The correct `stack.py` is:\nclass Stack:\n    def __init__(self):\n        self._d = []\n    def push(self, x):\n        self._d.append(x)\n    def pop(self):\n        return self._d.pop()\n    def peek(self):\n        return self._d[-1]\n    def is_empty(self):\n        return len(self._d) == 0"
+    },
+    {
+      "id": "fam_stack_04",
+      "family": "stack",
+      "signature": "111110011",
+      "buggy_module": "parens.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `parens.py`. The correct `parens.py` is:\nfrom stack import Stack\n\n\ndef balanced(s):\n    st = Stack()\n    pairs = {')': '(', ']': '[', '}': '{'}\n    for c in s:\n        if c in '([{':\n            st.push(c)\n        elif c in ')]}':\n            if st.is_empty() or st.pop() != pairs[c]:\n                return False\n    return st.is_empty()"
+    },
+    {
+      "id": "fam_stack_05",
+      "family": "stack",
+      "signature": "111111101",
+      "buggy_module": "parens.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `parens.py`. The correct `parens.py` is:\nfrom stack import Stack\n\n\ndef balanced(s):\n    st = Stack()\n    pairs = {')': '(', ']': '[', '}': '{'}\n    for c in s:\n        if c in '([{':\n            st.push(c)\n        elif c in ')]}':\n            if st.is_empty() or st.pop() != pairs[c]:\n                return False\n    return st.is_empty()"
+    },
+    {
+      "id": "fam_stack_06",
+      "family": "stack",
+      "signature": "100010011",
+      "buggy_module": "stack.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `stack.py`. The correct `stack.py` is:\nclass Stack:\n    def __init__(self):\n        self._d = []\n    def push(self, x):\n        self._d.append(x)\n    def pop(self):\n        return self._d.pop()\n    def peek(self):\n        return self._d[-1]\n    def is_empty(self):\n        return len(self._d) == 0"
+    },
+    {
+      "id": "fam_unit_01",
+      "family": "unit",
+      "signature": "010101",
+      "buggy_module": "length.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `length.py`. The correct `length.py` is:\ndef m_to_cm(m):\n    return m * 100\n\n\ndef cm_to_m(cm):\n    return cm / 100"
+    },
+    {
+      "id": "fam_unit_02",
+      "family": "unit",
+      "signature": "101001",
+      "buggy_module": "length.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `length.py`. The correct `length.py` is:\ndef m_to_cm(m):\n    return m * 100\n\n\ndef cm_to_m(cm):\n    return cm / 100"
+    },
+    {
+      "id": "fam_unit_03",
+      "family": "unit",
+      "signature": "110101",
+      "buggy_module": "convert.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `convert.py`. The correct `convert.py` is:\nfrom length import m_to_cm, cm_to_m\n\n\ndef m_to_mm(m):\n    return m_to_cm(m) * 10\n\n\ndef mm_to_m(mm):\n    return cm_to_m(mm / 10)\n\n\ndef scale(values, factor):\n    return [v * factor for v in values]"
+    },
+    {
+      "id": "fam_unit_04",
+      "family": "unit",
+      "signature": "111001",
+      "buggy_module": "convert.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `convert.py`. The correct `convert.py` is:\nfrom length import m_to_cm, cm_to_m\n\n\ndef m_to_mm(m):\n    return m_to_cm(m) * 10\n\n\ndef mm_to_m(mm):\n    return cm_to_m(mm / 10)\n\n\ndef scale(values, factor):\n    return [v * factor for v in values]"
+    },
+    {
+      "id": "fam_unit_05",
+      "family": "unit",
+      "signature": "111110",
+      "buggy_module": "convert.py",
+      "hint": "A behaviorally-matching past task was fixed by correcting module `convert.py`. The correct `convert.py` is:\nfrom length import m_to_cm, cm_to_m\n\n\ndef m_to_mm(m):\n    return m_to_cm(m) * 10\n\n\ndef mm_to_m(mm):\n    return cm_to_m(mm / 10)\n\n\ndef scale(values, factor):\n    return [v * factor for v in values]"
+    }
+  ]
+}
