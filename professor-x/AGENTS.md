@@ -32,10 +32,14 @@ start. Check your box and append a log line when you finish a unit of work.** Ph
 ## PHASE 3 — distillation flywheel vs the wrong-edit ceiling (see docs/PLAN_PHASE3_2026-06-22.md)
 Disjoint: Claude owns `src/` (Rust gate); Codex owns `distill/` (Python training). No shared files.
 GPU: Codex owns it during collect+train; Claude's gate MEASUREMENT runs after — never concurrently.
-### Stream D — Claude (Rust: TGC trust-gate + collection quality)
-- [ ] D1 TGC gate: accept distilled iff held-out renamed-anchor pass@1 +≥MDE (K-pass); log Goodhart gap
-- [ ] D2 NaN/stop-sanity guard rejects a bad gguf before gating (test)
-- [ ] D3 collection captures teacher verified-correct EDIT trajectories (native format) for the frontier
+### Stream D — Claude (TGC trust-gate + collection quality)  [gate BUILT, full run = integration]
+- [x] D1 `scripts/benchmarks/repo_fix/tgc_gate.py`: pure `decide()` (accept iff held-out anchor delta
+      >=MDE AND Goodhart gap bounded) + bench-running mode; `--self-test` PASS (4 cases incl. the
+      overfit/Goodhart-reject). Full GPU run = INTEGRATION (gate Codex's profx-distilled-p3 vs stock).
+      NOTE: built as a Claude-owned script (orchestration over the existing bench), not a main.rs change.
+- [~] D2 NaN guard: `gguf_is_safe()` precondition in the gate (present + non-tiny); full NaN check is in
+      Codex's quantize step (E2); stop-sanity at gate-run time.
+- [x] D3 collection already captures verified-correct native-tool-call trajectories (exists; verify-only).
 ### Stream E — Codex (Python: run the pipeline on the failure frontier) — see CODEX_TASK_P3.md
 - [ ] E1 collect teacher qwen3:14b verified-correct trajectories on the wrong-edit frontier
 - [ ] E2 QLoRA train (assistant-only mask + 2 epochs) -> clean GGUF (NaN-checked, stop-sane) -> serve profx-distilled-p3
@@ -44,3 +48,4 @@ GPU: Codex owns it during collect+train; Claude's gate MEASUREMENT runs after �
 ## Log (append-only; newest at bottom)
 - [2026-06-21] (Claude) created AGENTS.md + CODEX_TASK.md on prereboot-flywheel-prep; starting Stream A (A1).
 - [2026-06-22] (Claude) PHASE 1 CONCLUDED (on branch claude/behavior-keyed-retrieval): Stream A built+measured (behavior retrieval validated as mechanism, pass@1 lift marginal/within-noise), Stream C found already-built. Bottleneck = edit-production CAPABILITY. Scoped PHASE 3 here (Stream D Claude / Stream E Codex) — distillation flywheel + TGC trust-gate. Codex: see CODEX_TASK_P3.md.
+- [2026-06-22] (Claude) committed Codex's Stream B (commit 4302a20, pushed). Started Stream D on branch claude/p3-tgc-gate: TGC gate tgc_gate.py built + --self-test PASS (decision logic rejects the train-overfit/Goodhart case). D2 precondition guard in gate, D3 collection already exists. Full GPU gate run = integration after Codex Stream E. GPU left FREE for Codex training.
