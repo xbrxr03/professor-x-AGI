@@ -1,5 +1,12 @@
 # Failure Taxonomy — 2026-06-08 HIRO Null Runs
 
+> ⚠️ **SUPERSEDED / HIRO-SCOPED (banner added 2026-06-22).** This taxonomy was measured on **HIRO
+> read/shell tasks** and found bad-edit = 0% (thrash dominates). It does **not** describe the current
+> repo-fix benchmark, where **wrong-edit-verified-fail is 61–81%** of failures — see
+> `docs/research/2026-06-21-failure-taxonomy.md` (the current, repo-fix taxonomy). Do not cite this
+> file as evidence that edit-quality doesn't matter; that conclusion was specific to the HIRO sample.
+> See `docs/audits/2026-06-22-reference-cross-check.md` F3.
+
 Source data:
 - `artifacts/trajectories/2026-06-08/trajectories.jsonl`
 - `/tmp/ab_off.log`

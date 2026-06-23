@@ -8,6 +8,7 @@
   "tasks": [
     {
       "id": "fam_csv_01",
+      "category": "repo_fix",
       "family_id": "csv",
       "split": "train",
       "shared_api": [
@@ -28,6 +29,7 @@
     },
     {
       "id": "fam_csv_02",
+      "category": "repo_fix",
       "family_id": "csv",
       "split": "train",
       "shared_api": [
@@ -48,6 +50,7 @@
     },
     {
       "id": "fam_csv_03",
+      "category": "repo_fix",
       "family_id": "csv",
       "split": "train",
       "shared_api": [
@@ -68,6 +71,7 @@
     },
     {
       "id": "fam_csv_04",
+      "category": "repo_fix",
       "family_id": "csv",
       "split": "train",
       "shared_api": [
@@ -88,6 +92,7 @@
     },
     {
       "id": "fam_csv_05",
+      "category": "repo_fix",
       "family_id": "csv",
       "split": "train",
       "shared_api": [
@@ -108,6 +113,7 @@
     },
     {
       "id": "fam_graph_01",
+      "category": "repo_fix",
       "family_id": "graph",
       "split": "train",
       "shared_api": [
@@ -128,6 +134,7 @@
     },
     {
       "id": "fam_graph_02",
+      "category": "repo_fix",
       "family_id": "graph",
       "split": "train",
       "shared_api": [
@@ -148,6 +155,7 @@
     },
     {
       "id": "fam_graph_03",
+      "category": "repo_fix",
       "family_id": "graph",
       "split": "train",
       "shared_api": [
@@ -168,6 +176,7 @@
     },
     {
       "id": "fam_graph_05",
+      "category": "repo_fix",
       "family_id": "graph",
       "split": "train",
       "shared_api": [
@@ -188,6 +197,7 @@
     },
     {
       "id": "fam_interval_01",
+      "category": "repo_fix",
       "family_id": "interval",
       "split": "train",
       "shared_api": [
@@ -207,6 +217,7 @@
     },
     {
       "id": "fam_interval_02",
+      "category": "repo_fix",
       "family_id": "interval",
       "split": "train",
       "shared_api": [
@@ -226,6 +237,7 @@
     },
     {
       "id": "fam_interval_03",
+      "category": "repo_fix",
       "family_id": "interval",
       "split": "train",
       "shared_api": [
@@ -245,6 +257,7 @@
     },
     {
       "id": "fam_interval_04",
+      "category": "repo_fix",
       "family_id": "interval",
       "split": "train",
       "shared_api": [
@@ -264,6 +277,7 @@
     },
     {
       "id": "fam_interval_05",
+      "category": "repo_fix",
       "family_id": "interval",
       "split": "train",
       "shared_api": [
@@ -283,6 +297,7 @@
     },
     {
       "id": "fam_money_01",
+      "category": "repo_fix",
       "family_id": "money",
       "split": "train",
       "shared_api": [
@@ -302,6 +317,7 @@
     },
     {
       "id": "fam_money_02",
+      "category": "repo_fix",
       "family_id": "money",
       "split": "train",
       "shared_api": [
@@ -321,6 +337,7 @@
     },
     {
       "id": "fam_money_03",
+      "category": "repo_fix",
       "family_id": "money",
       "split": "train",
       "shared_api": [
@@ -340,6 +357,7 @@
     },
     {
       "id": "fam_money_04",
+      "category": "repo_fix",
       "family_id": "money",
       "split": "train",
       "shared_api": [
@@ -359,6 +377,7 @@
     },
     {
       "id": "fam_money_06",
+      "category": "repo_fix",
       "family_id": "money",
       "split": "train",
       "shared_api": [
@@ -378,6 +397,7 @@
     },
     {
       "id": "fam_sm_01",
+      "category": "repo_fix",
       "family_id": "sm",
       "split": "train",
       "shared_api": [
@@ -396,6 +416,7 @@
     },
     {
       "id": "fam_sm_02",
+      "category": "repo_fix",
       "family_id": "sm",
       "split": "train",
       "shared_api": [
@@ -414,6 +435,7 @@
     },
     {
       "id": "fam_sm_03",
+      "category": "repo_fix",
       "family_id": "sm",
       "split": "train",
       "shared_api": [
@@ -432,6 +454,7 @@
     },
     {
       "id": "fam_sm_04",
+      "category": "repo_fix",
       "family_id": "sm",
       "split": "train",
       "shared_api": [
@@ -450,6 +473,7 @@
     },
     {
       "id": "fam_stack_01",
+      "category": "repo_fix",
       "family_id": "stack",
       "split": "train",
       "shared_api": [
@@ -469,6 +493,7 @@
     },
     {
       "id": "fam_stack_02",
+      "category": "repo_fix",
       "family_id": "stack",
       "split": "train",
       "shared_api": [
@@ -488,6 +513,7 @@
     },
     {
       "id": "fam_stack_03",
+      "category": "repo_fix",
       "family_id": "stack",
       "split": "train",
       "shared_api": [
@@ -507,6 +533,7 @@
     },
     {
       "id": "fam_stack_04",
+      "category": "repo_fix",
       "family_id": "stack",
       "split": "train",
       "shared_api": [
@@ -526,6 +553,7 @@
     },
     {
       "id": "fam_stack_05",
+      "category": "repo_fix",
       "family_id": "stack",
       "split": "train",
       "shared_api": [
@@ -545,6 +573,7 @@
     },
     {
       "id": "fam_stack_06",
+      "category": "repo_fix",
       "family_id": "stack",
       "split": "train",
       "shared_api": [
@@ -564,6 +593,7 @@
     },
     {
       "id": "fam_unit_01",
+      "category": "repo_fix",
       "family_id": "unit",
       "split": "train",
       "shared_api": [
@@ -584,6 +614,7 @@
     },
     {
       "id": "fam_unit_02",
+      "category": "repo_fix",
       "family_id": "unit",
       "split": "train",
       "shared_api": [
@@ -604,6 +635,7 @@
     },
     {
       "id": "fam_unit_03",
+      "category": "repo_fix",
       "family_id": "unit",
       "split": "train",
       "shared_api": [
@@ -624,6 +656,7 @@
     },
     {
       "id": "fam_unit_04",
+      "category": "repo_fix",
       "family_id": "unit",
       "split": "train",
       "shared_api": [
@@ -644,6 +677,7 @@
     },
     {
       "id": "fam_unit_05",
+      "category": "repo_fix",
       "family_id": "unit",
       "split": "train",
       "shared_api": [
@@ -664,6 +698,7 @@
     },
     {
       "id": "fam_csv_anchor_1",
+      "category": "repo_fix",
       "family_id": "csv",
       "split": "anchor_renamed",
       "shared_api": [
@@ -684,6 +719,7 @@
     },
     {
       "id": "fam_csv_anchor_2",
+      "category": "repo_fix",
       "family_id": "csv",
       "split": "anchor_renamed",
       "shared_api": [
@@ -704,6 +740,7 @@
     },
     {
       "id": "fam_graph_anchor_1",
+      "category": "repo_fix",
       "family_id": "graph",
       "split": "anchor_renamed",
       "shared_api": [
@@ -724,6 +761,7 @@
     },
     {
       "id": "fam_graph_anchor_2",
+      "category": "repo_fix",
       "family_id": "graph",
       "split": "anchor_renamed",
       "shared_api": [
@@ -744,6 +782,7 @@
     },
     {
       "id": "fam_interval_anchor_1",
+      "category": "repo_fix",
       "family_id": "interval",
       "split": "anchor_renamed",
       "shared_api": [
@@ -763,6 +802,7 @@
     },
     {
       "id": "fam_interval_anchor_2",
+      "category": "repo_fix",
       "family_id": "interval",
       "split": "anchor_renamed",
       "shared_api": [
@@ -782,6 +822,7 @@
     },
     {
       "id": "fam_money_anchor_1",
+      "category": "repo_fix",
       "family_id": "money",
       "split": "anchor_renamed",
       "shared_api": [
@@ -801,6 +842,7 @@
     },
     {
       "id": "fam_money_anchor_2",
+      "category": "repo_fix",
       "family_id": "money",
       "split": "anchor_renamed",
       "shared_api": [
@@ -820,6 +862,7 @@
     },
     {
       "id": "fam_sm_anchor_1",
+      "category": "repo_fix",
       "family_id": "sm",
       "split": "anchor_renamed",
       "shared_api": [
@@ -838,6 +881,7 @@
     },
     {
       "id": "fam_sm_anchor_2",
+      "category": "repo_fix",
       "family_id": "sm",
       "split": "anchor_renamed",
       "shared_api": [
@@ -856,6 +900,7 @@
     },
     {
       "id": "fam_stack_anchor_1",
+      "category": "repo_fix",
       "family_id": "stack",
       "split": "anchor_renamed",
       "shared_api": [
@@ -875,6 +920,7 @@
     },
     {
       "id": "fam_stack_anchor_2",
+      "category": "repo_fix",
       "family_id": "stack",
       "split": "anchor_renamed",
       "shared_api": [
@@ -894,6 +940,7 @@
     },
     {
       "id": "fam_unit_anchor_1",
+      "category": "repo_fix",
       "family_id": "unit",
       "split": "anchor_renamed",
       "shared_api": [
@@ -914,6 +961,7 @@
     },
     {
       "id": "fam_unit_anchor_2",
+      "category": "repo_fix",
       "family_id": "unit",
       "split": "anchor_renamed",
       "shared_api": [
