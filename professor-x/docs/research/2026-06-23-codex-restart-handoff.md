@@ -36,37 +36,30 @@ toward a temporally extended self-constraint theory:
 - `docs/research/2026-06-23-cognition-consciousness-discipline-map.md`
 - `docs/research/2026-06-23-diachronic-constraint-theory.md`
 
-## Codex skills installed outside the repo
+## Repo-tracked shared skill pack
 
-These are installed in the local Codex skill directory and survive a restart on
-this machine, but they are **not** tracked by this git repo:
+The canonical versions of the cross-agent research skills now belong in this
+repo:
 
-- `~/.codex/skills/invention-research`
-- `~/.codex/skills/pdf`
-- `~/.codex/skills/jupyter-notebook`
+- `professor-x/skills/runtime/invention-research/`
+- `professor-x/skills/runtime/pdf/`
+- `professor-x/skills/runtime/jupyter-notebook/`
 
-The custom skill created in this session is:
+These are the versions Professor X should treat as source of truth.
 
-- `~/.codex/skills/invention-research/SKILL.md`
+Claude-compatible wrappers also exist in:
 
-Its purpose is to:
+- `.claude/skills/invention-research/`
+- `.claude/skills/pdf/`
+- `.claude/skills/jupyter-notebook/`
 
-- frame one hard invention question
-- build a cross-disciplinary search lattice
-- kill weak novelty claims quickly
-- keep only surviving candidate mechanisms
-- define falsification before promotion
+For Codex, install or refresh the repo-tracked skills into `~/.codex/skills`
+with:
 
-## Important limitation
+- `python3 professor-x/scripts/install_repo_skills.py --force`
 
-Because the Codex skills live under `~/.codex/skills`, a git commit in this
-repo does not itself version those skill files.
-
-If needed, recreate or inspect them directly from:
-
-- `/home/abrar/.codex/skills/invention-research`
-- `/home/abrar/.codex/skills/pdf`
-- `/home/abrar/.codex/skills/jupyter-notebook`
+That keeps Codex aligned with the repo copy instead of a drifting home-directory
+copy.
 
 ## Best next move after restart
 
