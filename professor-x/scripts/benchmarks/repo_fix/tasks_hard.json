@@ -1,0 +1,68 @@
+{
+  "tasks": [
+    {
+      "id": "hard_001",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_001",
+      "description": "Order totals are wrong. check.py fails \u2014 find the root cause across the source files (order.py, pricing.py, tax.py, discount.py) and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_002",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_002",
+      "description": "summarize() returns the wrong word count. check.py fails \u2014 trace the bug through the source files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_003",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_003",
+      "description": "The LRU cache evicts the wrong entry. check.py fails \u2014 fix the eviction logic so the least-recently-used item is removed and check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_004",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_004",
+      "description": "The parity functions give a wrong answer for some inputs. check.py fails \u2014 find and fix the bug so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_005",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_005",
+      "description": "Pagination returns the wrong slice. check.py fails \u2014 find the root cause (across the source files) and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_006",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_006",
+      "description": "Config resolution loses nested values. check.py fails \u2014 trace the bug and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_007",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_007",
+      "description": "variance() is slightly off. check.py fails \u2014 find the root cause across the source files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_008",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_008",
+      "description": "Access control lets the wrong users through. check.py fails \u2014 find and fix the bug so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    }
+  ]
+}

@@ -1,0 +1,102 @@
+{
+  "derived_from_artifact": "/home/abrar/professor-x-main-integrate/professor-x/artifacts/repo-fix/2026-06-22/repo-fix-202836-47664c90.json",
+  "selection": "failed",
+  "tasks": [
+    {
+      "id": "fam_graph_05",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_graph_05",
+      "description": "check.py fails due to a bug in the shared graph library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "fam_interval_03",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_interval_03",
+      "description": "check.py fails due to a bug in the shared interval library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "fam_interval_04",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_interval_04",
+      "description": "check.py fails due to a bug in the shared interval library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "fam_interval_05",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_interval_05",
+      "description": "check.py fails due to a bug in the shared interval library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "fam_money_01",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_money_01",
+      "description": "check.py fails due to a bug in the shared pricing library (tax/discount/pricing/cart). Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "fam_money_02",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_money_02",
+      "description": "check.py fails due to a bug in the shared pricing library (tax/discount/pricing/cart). Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "fam_stack_03",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_stack_03",
+      "description": "check.py fails due to a bug in the shared stack library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "fam_stack_05",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_stack_05",
+      "description": "check.py fails due to a bug in the shared stack library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "fam_unit_01",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_unit_01",
+      "description": "check.py fails due to a bug in the shared unit library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "fam_unit_02",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_unit_02",
+      "description": "check.py fails due to a bug in the shared unit library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "fam_unit_03",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_unit_03",
+      "description": "check.py fails due to a bug in the shared unit library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "fam_unit_05",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_unit_05",
+      "description": "check.py fails due to a bug in the shared unit library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    }
+  ]
+}

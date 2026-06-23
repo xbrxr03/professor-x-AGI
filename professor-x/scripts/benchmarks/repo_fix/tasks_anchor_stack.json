@@ -1,0 +1,33 @@
+{
+  "family": "stack",
+  "split": "anchor_renamed",
+  "derived_from": "stack",
+  "shared_api": [
+    "add",
+    "pop",
+    "top",
+    "well_formed"
+  ],
+  "tasks": [
+    {
+      "id": "fam_stack_anchor_1",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_stack_anchor_1",
+      "description": "check.py fails due to a bug in the shared library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "lifo.py",
+      "anchor_of": "fam_stack_01"
+    },
+    {
+      "id": "fam_stack_anchor_2",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_stack_anchor_2",
+      "description": "check.py fails due to a bug in the shared library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "brackets.py",
+      "anchor_of": "fam_stack_04"
+    }
+  ]
+}

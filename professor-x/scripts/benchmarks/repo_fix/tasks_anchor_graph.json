@@ -1,0 +1,34 @@
+{
+  "family": "graph",
+  "split": "anchor_renamed",
+  "derived_from": "graph",
+  "shared_api": [
+    "link",
+    "adjacent",
+    "valence",
+    "component",
+    "linked"
+  ],
+  "tasks": [
+    {
+      "id": "fam_graph_anchor_1",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_graph_anchor_1",
+      "description": "check.py fails due to a bug in the shared library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "adjacency.py",
+      "anchor_of": "fam_graph_01"
+    },
+    {
+      "id": "fam_graph_anchor_2",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_graph_anchor_2",
+      "description": "check.py fails due to a bug in the shared library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "adjacency.py",
+      "anchor_of": "fam_graph_03"
+    }
+  ]
+}

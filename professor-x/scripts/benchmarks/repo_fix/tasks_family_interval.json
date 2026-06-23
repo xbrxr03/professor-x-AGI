@@ -1,0 +1,56 @@
+{
+  "family": "interval",
+  "shared_api": [
+    "intervals.overlaps",
+    "intervals.merge_pair",
+    "schedule.merge_all",
+    "schedule.covered"
+  ],
+  "tasks": [
+    {
+      "id": "fam_interval_01",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_interval_01",
+      "description": "check.py fails due to a bug in the shared interval library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "intervals.py"
+    },
+    {
+      "id": "fam_interval_02",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_interval_02",
+      "description": "check.py fails due to a bug in the shared interval library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "intervals.py"
+    },
+    {
+      "id": "fam_interval_03",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_interval_03",
+      "description": "check.py fails due to a bug in the shared interval library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "intervals.py"
+    },
+    {
+      "id": "fam_interval_04",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_interval_04",
+      "description": "check.py fails due to a bug in the shared interval library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "schedule.py"
+    },
+    {
+      "id": "fam_interval_05",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_interval_05",
+      "description": "check.py fails due to a bug in the shared interval library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "schedule.py"
+    }
+  ]
+}

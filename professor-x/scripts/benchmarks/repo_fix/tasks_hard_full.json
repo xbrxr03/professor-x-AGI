@@ -1,0 +1,244 @@
+{
+  "tasks": [
+    {
+      "id": "hard_001",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_001",
+      "description": "check.py fails due to a bug in the source. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_002",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_002",
+      "description": "check.py fails due to a bug in the source. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_003",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_003",
+      "description": "check.py fails due to a bug in the source. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_004",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_004",
+      "description": "check.py fails due to a bug in the source. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_005",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_005",
+      "description": "check.py fails due to a bug in the source. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_006",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_006",
+      "description": "check.py fails due to a bug in the source. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_007",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_007",
+      "description": "check.py fails due to a bug in the source. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_008",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_008",
+      "description": "check.py fails due to a bug in the source. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_009",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_009",
+      "description": "check.py fails due to a bug in the source. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_010",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_010",
+      "description": "check.py fails due to a bug in the source. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_011",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_011",
+      "description": "check.py fails due to a bug in the source. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_012",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_012",
+      "description": "check.py fails due to a bug in the source. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_013",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_013",
+      "description": "check.py fails due to a bug in the source. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_014",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_014",
+      "description": "check.py fails due to a bug in the source. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_015",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_015",
+      "description": "check.py fails due to a bug in the source. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_016",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_016",
+      "description": "check.py fails due to a bug in the source. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_017",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_017",
+      "description": "check.py fails due to a bug in the source. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_018",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_018",
+      "description": "check.py fails due to a bug in the source. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_019",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_019",
+      "description": "check.py fails due to a bug in the source. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_020",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_020",
+      "description": "check.py fails due to a bug in the source. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_021",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_021",
+      "description": "check.py fails due to a bug in the source. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_022",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_022",
+      "description": "check.py fails due to a bug in the source. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_023",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_023",
+      "description": "check.py fails due to a bug in the source. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_024",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_024",
+      "description": "check.py fails due to a bug in the source. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_025",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_025",
+      "description": "check.py fails due to a bug in the source. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_026",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_026",
+      "description": "check.py fails due to a bug in the source. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_027",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_027",
+      "description": "check.py fails due to a bug in the source. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_028",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_028",
+      "description": "check.py fails due to a bug in the source. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_029",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_029",
+      "description": "check.py fails due to a bug in the source. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "hard_030",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/hard_030",
+      "description": "check.py fails due to a bug in the source. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    }
+  ]
+}

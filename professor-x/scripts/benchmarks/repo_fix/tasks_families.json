@@ -1,0 +1,936 @@
+{
+  "benchmark": "reuse-families",
+  "n_families": 7,
+  "n_tasks": 48,
+  "n_train": 34,
+  "n_anchor": 14,
+  "median_changed_lines": 2.0,
+  "tasks": [
+    {
+      "id": "fam_csv_01",
+      "family_id": "csv",
+      "split": "train",
+      "shared_api": [
+        "row.parse_row",
+        "row.to_row",
+        "records.parse",
+        "records.select",
+        "records.dump"
+      ],
+      "buggy_module": "row.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_csv_01",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared csv library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_csv_02",
+      "family_id": "csv",
+      "split": "train",
+      "shared_api": [
+        "row.parse_row",
+        "row.to_row",
+        "records.parse",
+        "records.select",
+        "records.dump"
+      ],
+      "buggy_module": "row.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_csv_02",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared csv library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_csv_03",
+      "family_id": "csv",
+      "split": "train",
+      "shared_api": [
+        "row.parse_row",
+        "row.to_row",
+        "records.parse",
+        "records.select",
+        "records.dump"
+      ],
+      "buggy_module": "records.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_csv_03",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared csv library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_csv_04",
+      "family_id": "csv",
+      "split": "train",
+      "shared_api": [
+        "row.parse_row",
+        "row.to_row",
+        "records.parse",
+        "records.select",
+        "records.dump"
+      ],
+      "buggy_module": "records.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_csv_04",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared csv library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_csv_05",
+      "family_id": "csv",
+      "split": "train",
+      "shared_api": [
+        "row.parse_row",
+        "row.to_row",
+        "records.parse",
+        "records.select",
+        "records.dump"
+      ],
+      "buggy_module": "records.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_csv_05",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared csv library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_graph_01",
+      "family_id": "graph",
+      "split": "train",
+      "shared_api": [
+        "graph.add_edge",
+        "graph.neighbors",
+        "graph.degree",
+        "traverse.reachable",
+        "traverse.connected"
+      ],
+      "buggy_module": "graph.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_graph_01",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared graph library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_graph_02",
+      "family_id": "graph",
+      "split": "train",
+      "shared_api": [
+        "graph.add_edge",
+        "graph.neighbors",
+        "graph.degree",
+        "traverse.reachable",
+        "traverse.connected"
+      ],
+      "buggy_module": "graph.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_graph_02",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared graph library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_graph_03",
+      "family_id": "graph",
+      "split": "train",
+      "shared_api": [
+        "graph.add_edge",
+        "graph.neighbors",
+        "graph.degree",
+        "traverse.reachable",
+        "traverse.connected"
+      ],
+      "buggy_module": "graph.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_graph_03",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared graph library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_graph_05",
+      "family_id": "graph",
+      "split": "train",
+      "shared_api": [
+        "graph.add_edge",
+        "graph.neighbors",
+        "graph.degree",
+        "traverse.reachable",
+        "traverse.connected"
+      ],
+      "buggy_module": "traverse.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_graph_05",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared graph library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_interval_01",
+      "family_id": "interval",
+      "split": "train",
+      "shared_api": [
+        "intervals.overlaps",
+        "intervals.merge_pair",
+        "schedule.merge_all",
+        "schedule.covered"
+      ],
+      "buggy_module": "intervals.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_interval_01",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared interval library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_interval_02",
+      "family_id": "interval",
+      "split": "train",
+      "shared_api": [
+        "intervals.overlaps",
+        "intervals.merge_pair",
+        "schedule.merge_all",
+        "schedule.covered"
+      ],
+      "buggy_module": "intervals.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_interval_02",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared interval library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_interval_03",
+      "family_id": "interval",
+      "split": "train",
+      "shared_api": [
+        "intervals.overlaps",
+        "intervals.merge_pair",
+        "schedule.merge_all",
+        "schedule.covered"
+      ],
+      "buggy_module": "intervals.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_interval_03",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared interval library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_interval_04",
+      "family_id": "interval",
+      "split": "train",
+      "shared_api": [
+        "intervals.overlaps",
+        "intervals.merge_pair",
+        "schedule.merge_all",
+        "schedule.covered"
+      ],
+      "buggy_module": "schedule.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_interval_04",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared interval library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_interval_05",
+      "family_id": "interval",
+      "split": "train",
+      "shared_api": [
+        "intervals.overlaps",
+        "intervals.merge_pair",
+        "schedule.merge_all",
+        "schedule.covered"
+      ],
+      "buggy_module": "schedule.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_interval_05",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared interval library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_money_01",
+      "family_id": "money",
+      "split": "train",
+      "shared_api": [
+        "tax.add_tax",
+        "discount.apply_discount",
+        "pricing.price",
+        "cart.total"
+      ],
+      "buggy_module": "tax.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_money_01",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared pricing library (tax/discount/pricing/cart). Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_money_02",
+      "family_id": "money",
+      "split": "train",
+      "shared_api": [
+        "tax.add_tax",
+        "discount.apply_discount",
+        "pricing.price",
+        "cart.total"
+      ],
+      "buggy_module": "discount.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_money_02",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared pricing library (tax/discount/pricing/cart). Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_money_03",
+      "family_id": "money",
+      "split": "train",
+      "shared_api": [
+        "tax.add_tax",
+        "discount.apply_discount",
+        "pricing.price",
+        "cart.total"
+      ],
+      "buggy_module": "pricing.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_money_03",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared pricing library (tax/discount/pricing/cart). Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_money_04",
+      "family_id": "money",
+      "split": "train",
+      "shared_api": [
+        "tax.add_tax",
+        "discount.apply_discount",
+        "pricing.price",
+        "cart.total"
+      ],
+      "buggy_module": "tax.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_money_04",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared pricing library (tax/discount/pricing/cart). Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_money_06",
+      "family_id": "money",
+      "split": "train",
+      "shared_api": [
+        "tax.add_tax",
+        "discount.apply_discount",
+        "pricing.price",
+        "cart.total"
+      ],
+      "buggy_module": "cart.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_money_06",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared pricing library (tax/discount/pricing/cart). Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_sm_01",
+      "family_id": "sm",
+      "split": "train",
+      "shared_api": [
+        "states.next_state",
+        "machine.run",
+        "machine.count_opens"
+      ],
+      "buggy_module": "states.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_sm_01",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared sm library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_sm_02",
+      "family_id": "sm",
+      "split": "train",
+      "shared_api": [
+        "states.next_state",
+        "machine.run",
+        "machine.count_opens"
+      ],
+      "buggy_module": "states.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_sm_02",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared sm library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_sm_03",
+      "family_id": "sm",
+      "split": "train",
+      "shared_api": [
+        "states.next_state",
+        "machine.run",
+        "machine.count_opens"
+      ],
+      "buggy_module": "machine.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_sm_03",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared sm library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_sm_04",
+      "family_id": "sm",
+      "split": "train",
+      "shared_api": [
+        "states.next_state",
+        "machine.run",
+        "machine.count_opens"
+      ],
+      "buggy_module": "machine.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_sm_04",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared sm library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_stack_01",
+      "family_id": "stack",
+      "split": "train",
+      "shared_api": [
+        "Stack.push",
+        "Stack.pop",
+        "Stack.peek",
+        "parens.balanced"
+      ],
+      "buggy_module": "stack.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_stack_01",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared stack library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_stack_02",
+      "family_id": "stack",
+      "split": "train",
+      "shared_api": [
+        "Stack.push",
+        "Stack.pop",
+        "Stack.peek",
+        "parens.balanced"
+      ],
+      "buggy_module": "stack.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_stack_02",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared stack library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_stack_03",
+      "family_id": "stack",
+      "split": "train",
+      "shared_api": [
+        "Stack.push",
+        "Stack.pop",
+        "Stack.peek",
+        "parens.balanced"
+      ],
+      "buggy_module": "stack.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_stack_03",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared stack library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_stack_04",
+      "family_id": "stack",
+      "split": "train",
+      "shared_api": [
+        "Stack.push",
+        "Stack.pop",
+        "Stack.peek",
+        "parens.balanced"
+      ],
+      "buggy_module": "parens.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_stack_04",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared stack library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_stack_05",
+      "family_id": "stack",
+      "split": "train",
+      "shared_api": [
+        "Stack.push",
+        "Stack.pop",
+        "Stack.peek",
+        "parens.balanced"
+      ],
+      "buggy_module": "parens.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_stack_05",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared stack library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_stack_06",
+      "family_id": "stack",
+      "split": "train",
+      "shared_api": [
+        "Stack.push",
+        "Stack.pop",
+        "Stack.peek",
+        "parens.balanced"
+      ],
+      "buggy_module": "stack.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_stack_06",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared stack library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_unit_01",
+      "family_id": "unit",
+      "split": "train",
+      "shared_api": [
+        "length.m_to_cm",
+        "length.cm_to_m",
+        "convert.m_to_mm",
+        "convert.mm_to_m",
+        "convert.scale"
+      ],
+      "buggy_module": "length.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_unit_01",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared unit library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_unit_02",
+      "family_id": "unit",
+      "split": "train",
+      "shared_api": [
+        "length.m_to_cm",
+        "length.cm_to_m",
+        "convert.m_to_mm",
+        "convert.mm_to_m",
+        "convert.scale"
+      ],
+      "buggy_module": "length.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_unit_02",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared unit library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_unit_03",
+      "family_id": "unit",
+      "split": "train",
+      "shared_api": [
+        "length.m_to_cm",
+        "length.cm_to_m",
+        "convert.m_to_mm",
+        "convert.mm_to_m",
+        "convert.scale"
+      ],
+      "buggy_module": "convert.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_unit_03",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared unit library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_unit_04",
+      "family_id": "unit",
+      "split": "train",
+      "shared_api": [
+        "length.m_to_cm",
+        "length.cm_to_m",
+        "convert.m_to_mm",
+        "convert.mm_to_m",
+        "convert.scale"
+      ],
+      "buggy_module": "convert.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_unit_04",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared unit library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_unit_05",
+      "family_id": "unit",
+      "split": "train",
+      "shared_api": [
+        "length.m_to_cm",
+        "length.cm_to_m",
+        "convert.m_to_mm",
+        "convert.mm_to_m",
+        "convert.scale"
+      ],
+      "buggy_module": "convert.py",
+      "anchor_of": null,
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_unit_05",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared unit library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_csv_anchor_1",
+      "family_id": "csv",
+      "split": "anchor_renamed",
+      "shared_api": [
+        "split_cells",
+        "join_cells",
+        "load",
+        "pluck",
+        "render"
+      ],
+      "buggy_module": "cells.py",
+      "anchor_of": "fam_csv_01",
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_csv_anchor_1",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_csv_anchor_2",
+      "family_id": "csv",
+      "split": "anchor_renamed",
+      "shared_api": [
+        "split_cells",
+        "join_cells",
+        "load",
+        "pluck",
+        "render"
+      ],
+      "buggy_module": "table.py",
+      "anchor_of": "fam_csv_03",
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_csv_anchor_2",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_graph_anchor_1",
+      "family_id": "graph",
+      "split": "anchor_renamed",
+      "shared_api": [
+        "link",
+        "adjacent",
+        "valence",
+        "component",
+        "linked"
+      ],
+      "buggy_module": "adjacency.py",
+      "anchor_of": "fam_graph_01",
+      "n_changed_lines": 11,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_graph_anchor_1",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_graph_anchor_2",
+      "family_id": "graph",
+      "split": "anchor_renamed",
+      "shared_api": [
+        "link",
+        "adjacent",
+        "valence",
+        "component",
+        "linked"
+      ],
+      "buggy_module": "adjacency.py",
+      "anchor_of": "fam_graph_03",
+      "n_changed_lines": 11,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_graph_anchor_2",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_interval_anchor_1",
+      "family_id": "interval",
+      "split": "anchor_renamed",
+      "shared_api": [
+        "intersects",
+        "fuse",
+        "consolidate",
+        "span_total"
+      ],
+      "buggy_module": "spans.py",
+      "anchor_of": "fam_interval_01",
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_interval_anchor_1",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_interval_anchor_2",
+      "family_id": "interval",
+      "split": "anchor_renamed",
+      "shared_api": [
+        "intersects",
+        "fuse",
+        "consolidate",
+        "span_total"
+      ],
+      "buggy_module": "planner.py",
+      "anchor_of": "fam_interval_04",
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_interval_anchor_2",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_money_anchor_1",
+      "family_id": "money",
+      "split": "anchor_renamed",
+      "shared_api": [
+        "apply_levy",
+        "apply_markdown",
+        "quote_one",
+        "basket_total"
+      ],
+      "buggy_module": "levy.py",
+      "anchor_of": "fam_money_01",
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_money_anchor_1",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_money_anchor_2",
+      "family_id": "money",
+      "split": "anchor_renamed",
+      "shared_api": [
+        "apply_levy",
+        "apply_markdown",
+        "quote_one",
+        "basket_total"
+      ],
+      "buggy_module": "quote.py",
+      "anchor_of": "fam_money_03",
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_money_anchor_2",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_sm_anchor_1",
+      "family_id": "sm",
+      "split": "anchor_renamed",
+      "shared_api": [
+        "step",
+        "execute",
+        "tally_open"
+      ],
+      "buggy_module": "transitions.py",
+      "anchor_of": "fam_sm_01",
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_sm_anchor_1",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_sm_anchor_2",
+      "family_id": "sm",
+      "split": "anchor_renamed",
+      "shared_api": [
+        "step",
+        "execute",
+        "tally_open"
+      ],
+      "buggy_module": "fsm.py",
+      "anchor_of": "fam_sm_03",
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_sm_anchor_2",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_stack_anchor_1",
+      "family_id": "stack",
+      "split": "anchor_renamed",
+      "shared_api": [
+        "add",
+        "pop",
+        "top",
+        "well_formed"
+      ],
+      "buggy_module": "lifo.py",
+      "anchor_of": "fam_stack_01",
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_stack_anchor_1",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_stack_anchor_2",
+      "family_id": "stack",
+      "split": "anchor_renamed",
+      "shared_api": [
+        "add",
+        "pop",
+        "top",
+        "well_formed"
+      ],
+      "buggy_module": "brackets.py",
+      "anchor_of": "fam_stack_04",
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_stack_anchor_2",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_unit_anchor_1",
+      "family_id": "unit",
+      "split": "anchor_renamed",
+      "shared_api": [
+        "meter_to_centi",
+        "centi_to_meter",
+        "meter_to_milli",
+        "milli_to_meter",
+        "multiply_all"
+      ],
+      "buggy_module": "meters.py",
+      "anchor_of": "fam_unit_01",
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_unit_anchor_1",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    },
+    {
+      "id": "fam_unit_anchor_2",
+      "family_id": "unit",
+      "split": "anchor_renamed",
+      "shared_api": [
+        "meter_to_centi",
+        "centi_to_meter",
+        "meter_to_milli",
+        "milli_to_meter",
+        "multiply_all"
+      ],
+      "buggy_module": "units.py",
+      "anchor_of": "fam_unit_03",
+      "n_changed_lines": 2,
+      "zpd_band": null,
+      "setup": "scripts/benchmarks/repo_fix/fam_unit_anchor_2",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "description": "check.py fails due to a bug in the shared library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py."
+    }
+  ]
+}

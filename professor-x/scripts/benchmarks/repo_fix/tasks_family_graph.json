@@ -1,0 +1,48 @@
+{
+  "family": "graph",
+  "shared_api": [
+    "graph.add_edge",
+    "graph.neighbors",
+    "graph.degree",
+    "traverse.reachable",
+    "traverse.connected"
+  ],
+  "tasks": [
+    {
+      "id": "fam_graph_01",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_graph_01",
+      "description": "check.py fails due to a bug in the shared graph library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "graph.py"
+    },
+    {
+      "id": "fam_graph_02",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_graph_02",
+      "description": "check.py fails due to a bug in the shared graph library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "graph.py"
+    },
+    {
+      "id": "fam_graph_03",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_graph_03",
+      "description": "check.py fails due to a bug in the shared graph library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "graph.py"
+    },
+    {
+      "id": "fam_graph_05",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_graph_05",
+      "description": "check.py fails due to a bug in the shared graph library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "traverse.py"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+0.580
+# graded benchmark (tasks_graded.json: 36 medium fix_015-050 + 8 hard hard_001-008)
+# qwen3:8b-q4_K_M baseline, 2026-06-18.
+# K=2 MEAN = 0.580  (run1 = 0.477 [21/44], run2 = 0.682 [30/44]).
+# headroom band (target 0.4-0.7): ACHIEVED. Gradient: medium tier carries most passes, hard ~0-1/8.
+#
+# ⚠️ HIGH VARIANCE: 0.205 swing between two runs (9 tasks flipped). Mid-difficulty tasks at the 8B's
+# ability edge flip pass/fail run-to-run (stochastic decoding). IMPLICATION for the gate:
+#   - use K>=5 passes (not 2-3) to average out the noise, AND/OR grow to ~80 tasks (lower per-run var)
+#   - set MDE >= 0.10 (a smaller delta is indistinguishable from this run-to-run noise)
+#   - a LARGE improvement (e.g. fixing multi-file localization) will still show through; small ones won't.
+# This is the honest ruler: real headroom, but noisy — measure improvements with enough passes.

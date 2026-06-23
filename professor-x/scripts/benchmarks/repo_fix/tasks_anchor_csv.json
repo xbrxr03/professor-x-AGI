@@ -1,0 +1,34 @@
+{
+  "family": "csv",
+  "split": "anchor_renamed",
+  "derived_from": "csv",
+  "shared_api": [
+    "split_cells",
+    "join_cells",
+    "load",
+    "pluck",
+    "render"
+  ],
+  "tasks": [
+    {
+      "id": "fam_csv_anchor_1",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_csv_anchor_1",
+      "description": "check.py fails due to a bug in the shared library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "cells.py",
+      "anchor_of": "fam_csv_01"
+    },
+    {
+      "id": "fam_csv_anchor_2",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_csv_anchor_2",
+      "description": "check.py fails due to a bug in the shared library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "table.py",
+      "anchor_of": "fam_csv_03"
+    }
+  ]
+}

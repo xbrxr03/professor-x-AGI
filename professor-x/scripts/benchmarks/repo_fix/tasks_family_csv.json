@@ -1,0 +1,57 @@
+{
+  "family": "csv",
+  "shared_api": [
+    "row.parse_row",
+    "row.to_row",
+    "records.parse",
+    "records.select",
+    "records.dump"
+  ],
+  "tasks": [
+    {
+      "id": "fam_csv_01",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_csv_01",
+      "description": "check.py fails due to a bug in the shared csv library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "row.py"
+    },
+    {
+      "id": "fam_csv_02",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_csv_02",
+      "description": "check.py fails due to a bug in the shared csv library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "row.py"
+    },
+    {
+      "id": "fam_csv_03",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_csv_03",
+      "description": "check.py fails due to a bug in the shared csv library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "records.py"
+    },
+    {
+      "id": "fam_csv_04",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_csv_04",
+      "description": "check.py fails due to a bug in the shared csv library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "records.py"
+    },
+    {
+      "id": "fam_csv_05",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_csv_05",
+      "description": "check.py fails due to a bug in the shared csv library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "records.py"
+    }
+  ]
+}
