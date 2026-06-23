@@ -51,3 +51,18 @@ negatively here (it correctly REJECTS). To demonstrate the Goodhart-gap-divergen
 2. Recipe iteration for the next candidate (PLAN_11_10 Phase-1: assistant-only loss masking confirmed,
    EPOCHS=2, more frontier teacher passes, harder corpus) — the model lever, since p3 underperforms.
 3. Do NOT serve p3 as the default; the harness keeps running stock `qwen3:8b`.
+
+---
+## COMPLETED GATE (train half re-run after `category` manifest fix, 2026-06-23)
+Train benches now ran (manifest fixed). Full result:
+| set | baseline qwen3:8b | candidate p3 | delta |
+|---|---|---|---|
+| held-out renamed anchors (K=3) | 0.500 | 0.238 | **−0.262** |
+| train families (K=3) | 0.333 | 0.257 | **−0.076** |
+
+- **candidate Goodhart gap (train − held-out) = +0.019** (essentially zero) → p3 is **NOT train-overfit**;
+  it is **uniformly worse** than stock on both sets. (Baseline's own gap is −0.167: anchors are the
+  easier 2-per-family reps, so stock scores higher on them than on train — fine.)
+- **VERDICT unchanged: REJECT**, now fully measured. The completed gate confirms "worse everywhere,"
+  consistent with the trajectory diagnosis (NO-EDIT / eroded agentic adherence — see
+  PLAN_DISTILLATION_2026-06-23 Phase 0). The fix is on-policy distillation (DEEPDIVE doc).
