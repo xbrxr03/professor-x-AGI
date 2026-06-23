@@ -66,3 +66,19 @@ syndrome no-arbitrage left as a documented future hook (needs decomposed anchor 
 collateral ever flips a *near-miss* candidate's verdict in practice — re-evaluate when anchors grow.
 The rest of Codex's CGW/CLT stays PARKED in the Atlas long-arc. Novelty spot-check:
 2026-06-23-codex-cgw-novelty-spotcheck.md.
+
+---
+## REAL-DATA VALIDATION (2026-06-23) — wiring works; distinct value still unconfirmed (honest)
+Reconstructed per-anchor vectors for stock vs p3 from the gate's anchor-run artifacts and ran the
+collateral `decide()`:
+- **`bench_vec` artifact-parsing path validated on real data** (14 anchors aligned + parsed).
+- Per-anchor: p3 drops pass-rate on ~all anchors (graph_anchor_1 0.71→0.00, stack_anchor_1 0.86→0.33,
+  interval/money/unit anchors →0.00); **2 strict majority-regressions, 0 improvements** → collateral
+  REJECT, **matching the scalar gate** (p3 is uniform-worse, not a near-miss).
+- **Therefore collateral's DISTINCT value (flipping a near-miss the scalar would pass) is NOT yet
+  demonstrated on real data** — exactly the pre-registered caveat. It will be tested on the first
+  near-miss candidate (e.g. a P4 distill that gains aggregate but trades anchors). Logic + wiring are
+  proven; the practical payoff awaits a near-miss.
+- Note: the binary majority-pass threshold under-counts soft drawdown (p3's pass-RATE fell on ~10/14
+  anchors); a pass-rate-delta drawdown is a more sensitive future option, kept out for now in favor of
+  the interpretable "lost a task you reliably passed" rule.
