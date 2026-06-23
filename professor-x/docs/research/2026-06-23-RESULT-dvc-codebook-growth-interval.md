@@ -63,3 +63,16 @@ assert covered([(1,5),(2,3)]) == covered([(1,5)])  # overlap-idempotence -> catc
 Nothing merged into the canonical fixtures — these metamorphic checks are PROPOSED additions (would
 change the ruler), to apply only via review and the add-repofix-fixture red→green discipline, never
 while a gate is running.
+
+---
+## FOUNDATIONAL NUMBERS REPRODUCED (2026-06-23, CPU, verify-the-ruler)
+Re-ran `precheck1.py` on the canonical fixtures — the DVC thread's base numbers reproduce EXACTLY:
+- Test A (anchor→origin / rename-invariance): **signature 13/14 (0.93) vs text 2/14 (0.14)** (chance ~0.21).
+- Test B (buggy_module fix-localization, LOO-NN): **signature 12/34 (0.35) vs text 16/34 (0.47)** —
+  signature LOSES (the gap the DVC value claim must close by making the suite a locating code).
+This is the clean BEFORE. The value test (engineer all families into locating codes via metamorphic
+checks like the interval pair above, on COPIES, then re-run Test B → does signature localization now
+beat text?) is the next focused experiment — bounded, CPU-only, decisive. KILL the DVC value claim if
+signature still loses Test B after the suite is made diagnosable; KEEP (and pursue the GPU RAG payoff)
+if it wins. Interval is already done (5/5 unique); the remaining families mostly already unique (6/7),
+so the lift, if any, comes from sharpening module-discrimination — to be measured, not assumed.
