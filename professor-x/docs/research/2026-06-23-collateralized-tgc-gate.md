@@ -55,7 +55,14 @@ base & candidate, (b) compute `regressions = #anchors base-passed & cand-failed`
 unit-testable (extend the existing `--self-test` with a "gains-mask-drawdown" case the scalar passes
 but collateral rejects).
 
-## Status
-PROPOSED upgrade to the TGC gate (Stream D). The rest of Codex's CGW/CLT stays PARKED in the Atlas
-long-arc (consciousness/AGI), not deleted, sequenced behind the working core. See novelty spot-check:
+## Status — BUILT (2026-06-23), self-test PASS
+Wired into `tgc_gate.py`: `decide()` now takes optional aligned per-anchor pass vectors + `--drawdown-tol`
+and adds factor (3) no-drawdown collateral; `bench_vec()` reads per-task `passed` from the repo-fix
+artifacts so the live gate computes collateral; backward-compatible (no vectors → scalar gate).
+`--self-test` PASS (8 cases) — incl. the decisive pair: a gains-mask-drawdown candidate that the
+**scalar gate ACCEPTS but the collateral gate REJECTS** (2 per-anchor regressions > tol 0). Factor (2)
+syndrome no-arbitrage left as a documented future hook (needs decomposed anchor checks wired).
+**Honest caveat still stands:** at 14 anchors per-task resolution is coarse; the real test is whether
+collateral ever flips a *near-miss* candidate's verdict in practice — re-evaluate when anchors grow.
+The rest of Codex's CGW/CLT stays PARKED in the Atlas long-arc. Novelty spot-check:
 2026-06-23-codex-cgw-novelty-spotcheck.md.

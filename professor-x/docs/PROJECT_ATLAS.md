@@ -40,10 +40,18 @@ Status legend: ACTIVE · NEXT · BUILT · VALIDATED · PARKED · SHELVED(evidenc
   already unique-syndrome; 44% checks redundant (rateless headroom).
 - **Living Verifier / self-improvement = channel-code co-design** — PROGRAM. Kernel validated; the
   open-world novelty-growth pillar UNPROVEN (open-set 35% OOD, confounded). Frontier bet.
-- **TGC (Transfer-Gated Co-Evolution)** — PROPOSED (integration-novel). Accept a harness/weight update
-  only if it improves verifier on RENAMED held-out anchors; logs the Goodhart gap. Targets SIA's named
-  open problem. Resume: Arm-A vs Arm-B experiment.
+- **TGC (Transfer-Gated Co-Evolution)** — BUILT + RAN (integration-novel). Accept a harness/weight
+  update only if it improves verifier on RENAMED held-out anchors; logs the Goodhart gap. Targets SIA's
+  named open problem. 2026-06-22/23: gate ran on `profx-distilled-p3` → **REJECT** (held-out 0.238 <
+  stock 0.500, gap~0 = worse-everywhere, not overfit) — the gate works (refuses a non-generalizing
+  candidate). **UPGRADED to Collateralized-TGC** (2026-06-23): + per-anchor no-drawdown collateral
+  (self-test PASS, scalar accepts / collateral rejects a gains-mask-drawdown candidate) — the buildable
+  nugget from Codex's CGW. Docs: 2026-06-23-collateralized-tgc-gate.md, 2026-06-22-RESULT-D-integration-*.
 - **AACE (Goodhart drift-tripwire)** — DESIGNED. Detect reward-hack/drift in the loop.
+- **CGW/CLT (Codex, collateralized cognition / counterfactual-liquidity consciousness)** — PARKED
+  (long-arc §5). Genuine-shaped novelty (reverse transplant: finance no-arbitrage math as self-mod
+  control law) but untested theory in the frozen lane; its kernel is being validated in miniature by
+  Collateralized-TGC above. Docs: 2026-06-23-codex-cgw-novelty-spotcheck.md.
 - **VCA (Verifier-Counterfactual Credit Assignment)** — CANDIDATE (delta-debug green diffs for credit).
 - **VGTS (verifier-grounded embedding) / Re-Verified RAG** — CANDIDATES, were benchmark-blocked; now
   UNBLOCKED by reuse-families (transfer 0.979).
