@@ -17,12 +17,14 @@ Status legend: ACTIVE · NEXT · BUILT · VALIDATED · PARKED · SHELVED(evidenc
 ## 1. SELF-IMPROVEMENT LEVERS (the MHE portfolio — all stay alive)
 - **Lever 1 Parametric / weights** — distillation flywheel. ACTIVE (un-paused 2026-06-21 after the
   corrupt-GGUF find; clean distilled 0.40 > stock 0.30). Resume: re-quant from f16 + K-pass gate.
-  ⚠️ **PROVENANCE FLAG (2026-06-22, see docs/audits/2026-06-22-reference-cross-check.md F1):** the
-  "0.40 > 0.30" un-pause claim has no cited ruler and is *contradicted* by the latest measured
-  taxonomy (`docs/research/2026-06-21-failure-taxonomy.md`, run 06-22): `profx-distilled-clean`
-  hard=0.133 vs `qwen3:8b` hard=0.400 (distilled LOSES). Note `profx-distilled-clean` ≠ the
-  `profx-distilled-p3` candidate the TGC gate will judge — treat "distilled beats stock" as
-  UNPROVEN until D-integration measures p3 on held-out renamed anchors.
+  ❌ **RESOLVED (2026-06-22, TGC gate): the "0.40 > 0.30" un-pause claim is FALSE.** D-integration ran
+  the trust gate on the recipe-fixed `profx-distilled-p3`: held-out renamed-anchor pass@1 (K=3) =
+  **0.238 (p3) vs 0.500 (stock qwen3:8b) → −0.262, REJECT** (does not generalize; 26pts worse than
+  stock). Earlier `profx-distilled-clean` also lost on the hard set (0.133 vs 0.400). So **distilled
+  does NOT beat stock**; the harness stays on qwen3:8b. The flywheel is ACTIVE but its current
+  candidates underperform — resume = RECIPE iteration (assistant-only mask + EPOCHS=2 + more frontier
+  teacher passes), re-gate. Results: docs/research/2026-06-22-RESULT-D-integration-tgc-gate-p3.md +
+  audit F1.
 - **Lever 2 Contextual / memory** — ICE / memory-driven recall. PARTIAL. Resume: behavior-keyed
   retrieval (see Inventions §2 failure-signature).
 - **Lever 3 Structural / harness** — harness self-evolution, SkillOpt-style skill optimizer. ACTIVE.

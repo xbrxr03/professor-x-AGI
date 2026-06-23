@@ -75,7 +75,7 @@ def bench_pass1(model, tasks, k):
                    PROFESSOR_X_DATA_DIR=os.path.expanduser("~/.professor-x"),
                    REPO_FIX_TASKS=tasks)
         out = subprocess.run(["./target/release/professor-x", "--repo-fix-bench", "--model", model],
-                             capture_output=True, text=True, env=env, timeout=1800).stdout
+                             capture_output=True, text=True, env=env, timeout=7200).stdout
         import re
         m = re.search(r"pass@1 = ([0-9.]+)", out)
         if m:
@@ -126,8 +126,12 @@ def main():
         safe, note = gguf_is_safe(a.gguf)
         if not safe:
             print(json.dumps({"accept": False, "reason": f"gguf guard: {note}"})); sys.exit(1)
-        bt = bench_pass1(a.baseline, a.train, a.k); ct = bench_pass1(a.candidate, a.train, a.k)
-        ba = bench_pass1(a.baseline, a.heldout, a.k); ca = bench_pass1(a.candidate, a.heldout, a.k)
+        def log(m): print(m, file=sys.stderr, flush=True)
+        # held-out (renamed anchors) FIRST — the decisive generalization signal
+        ba = bench_pass1(a.baseline, a.heldout, a.k); log(f"[gate] base_anchor={ba:.3f}")
+        ca = bench_pass1(a.candidate, a.heldout, a.k); log(f"[gate] cand_anchor={ca:.3f}  held-out delta {ca-ba:+.3f} (MDE {a.mde})")
+        bt = bench_pass1(a.baseline, a.train, a.k); log(f"[gate] base_train={bt:.3f}")
+        ct = bench_pass1(a.candidate, a.train, a.k); log(f"[gate] cand_train={ct:.3f}  train delta {ct-bt:+.3f}")
         accept, info = decide(bt, ct, ba, ca, a.mde, a.gap_bound)
         info["gguf_note"] = note
     print(json.dumps(info, indent=2))
