@@ -38,8 +38,11 @@ Status legend: ACTIVE · NEXT · BUILT · VALIDATED · PARKED · SHELVED(evidenc
 - **Diagnostic Verifier Codes** — PROGRAM (grounded in SBFL/syndrome-decoding/locating-arrays/MBD).
   Verifier co-designed as a code over the fault space so failures decode the fix. Kernel: 6/7 families
   already unique-syndrome; 44% checks redundant (rateless headroom).
-- **Living Verifier / self-improvement = channel-code co-design** — PROGRAM. Kernel validated; the
-  open-world novelty-growth pillar UNPROVEN (open-set 35% OOD, confounded). Frontier bet.
+- **Living Verifier / self-improvement = channel-code co-design** — PROGRAM, ADVANCING. Kernel
+  validated; codebook growth now AUTOMATED + GENERALIZED (differential testing; 6/7 families
+  auto-resolve to full locating codes, csv residual = a true behavioral duplicate) and the open-set
+  35% confound RESOLVED (aliasing == behavioral duplicates). See 2026-06-23-B-living-verifier-summary.
+  NEXT: B3 wire into the live verifier (Rust); then the channel-code co-design loop (Phase D).
 - **TGC (Transfer-Gated Co-Evolution)** — BUILT + RAN (integration-novel). Accept a harness/weight
   update only if it improves verifier on RENAMED held-out anchors; logs the Goodhart gap. Targets SIA's
   named open problem. 2026-06-22/23: gate ran on `profx-distilled-p3` → **REJECT** (held-out 0.238 <
