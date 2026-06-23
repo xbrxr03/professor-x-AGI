@@ -1,5 +1,5 @@
 GPU_LOCK: free
-HEARTBEAT_CLAUDE:
+HEARTBEAT_CLAUDE: 2026-06-23T17:10:03-04:00
 HEARTBEAT_CODEX:
 
 # RELAY — Claude × Codex auto-relay board
@@ -17,7 +17,7 @@ Conditions: `model-served:<name>` `gpu-free` `pr-merged:#N` `file:<path>` `commi
 ## Tasks
 - [ ] @claude A2-gate-p4    | depends: model-served:profx-distilled-p4 | gpu: yes | on-done: @codex C1-recipe-p5
 - [ ] @codex  C1-recipe-p5  | depends: committed:professor-x/docs/research/2026-06-23-A2-gate-result.md | gpu: yes | on-done: @claude C2-gate-p5
-- [ ] @claude B1-autominter-generalize | depends: always | gpu: no | on-done: @claude B2-openset
+- [x] @claude B1-autominter-generalize | depends: always | gpu: no | on-done: @claude B2-openset  (done 2026-06-23T17:10:03-04:00)
 - [ ] @claude B2-openset    | depends: committed:professor-x/docs/research/2026-06-23-B1-autominter-families.md | gpu: no | on-done: @claude B3-wire-live
 - [ ] @codex  E1-dct-killtest | depends: always | gpu: no | on-done: @codex E2-ics-diachronic
 - [ ] @claude C2-grow-anchors | depends: always | gpu: no | on-done: @claude A2-gate-p4
