@@ -57,6 +57,22 @@
       "description": "check.py fails: the CSV scanner splits on commas inside quoted fields. Fix scanner.py. Do not edit check.py.",
       "verify_cmd": "python3 check.py",
       "expect_exit": 0
+    },
+    {
+      "id": "real_08",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/real_08",
+      "description": "check.py fails: run-length encode drops the final run (encode('aaabbc') misses ('c',1)). Fix rle.py. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "real_09",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/real_09",
+      "description": "check.py fails: semantic-version compare orders parts lexically not numerically (1.2.0 vs 1.10.0). Fix semver.py. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
     }
   ]
 }
