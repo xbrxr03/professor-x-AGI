@@ -6,7 +6,7 @@
       "id": "real_01",
       "category": "repo_fix",
       "setup": "scripts/benchmarks/repo_fix/real_01",
-      "description": "check.py fails: KVStore TTL expiry is off-by-one (item lives one tick past expiry). Fix store.py so expired keys return None. Do not edit check.py.",
+      "description": "check.py fails: KVStore TTL expiry is off-by-one (item lives one tick past expiry). Fix store.py. Do not edit check.py.",
       "verify_cmd": "python3 check.py",
       "expect_exit": 0
     },
@@ -31,6 +31,30 @@
       "category": "repo_fix",
       "setup": "scripts/benchmarks/repo_fix/real_04",
       "description": "check.py fails: the LRU cache evicts the most-recently-used entry instead of the least-recently-used. Fix cache.py. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "real_05",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/real_05",
+      "description": "check.py fails: the token-bucket rate limiter ignores elapsed ticks when refilling. Fix bucket.py. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "real_06",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/real_06",
+      "description": "check.py fails: pagination is off-by-one (page 1 returns the wrong slice). Fix paginate.py. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "real_07",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/real_07",
+      "description": "check.py fails: the CSV scanner splits on commas inside quoted fields. Fix scanner.py. Do not edit check.py.",
       "verify_cmd": "python3 check.py",
       "expect_exit": 0
     }
