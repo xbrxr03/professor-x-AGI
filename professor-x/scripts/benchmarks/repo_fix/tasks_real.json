@@ -1,0 +1,30 @@
+{
+  "benchmark": "real-feel",
+  "tier": "realistic multi-file stateful",
+  "tasks": [
+    {
+      "id": "real_01",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/real_01",
+      "description": "check.py fails: KVStore TTL expiry is off-by-one (item lives one tick past expiry). Fix store.py so expired keys return None. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "real_02",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/real_02",
+      "description": "check.py fails: the expression evaluator ignores operator precedence (2+3*4 gives 20, not 14). Fix evaluator.py. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    },
+    {
+      "id": "real_03",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/real_03",
+      "description": "check.py fails: ledger transfer debits the source but never credits the destination. Fix ledger.py. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
+    }
+  ]
+}
