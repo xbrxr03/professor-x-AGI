@@ -20,7 +20,7 @@ Conditions: `model-served:<name>` `gpu-free` `pr-merged:#N` `file:<path>` `commi
 - [x] @claude B1-autominter-generalize | depends: always | gpu: no | on-done: @claude B2-openset  (done 2026-06-23T17:10:03-04:00)
 - [x] @claude B2-openset    | depends: committed:professor-x/docs/research/2026-06-23-B1-autominter-families.md | gpu: no | on-done: @claude B3-wire-live  (done 2026-06-23T17:16:56-04:00)
 - [ ] @codex  E1-dct-killtest | depends: always | gpu: no | on-done: @codex E2-ics-diachronic
-- [ ] @claude C2-grow-anchors | depends: always | gpu: no | on-done: @claude A2-gate-p4
+- [x] @claude C2-grow-anchors | depends: always | gpu: no | on-done: @claude A2-gate-p4  (done 2026-06-24T08:15:30-04:00)
 
 ## Log (append-only, newest at bottom)
 - [init 2026-06-23] (Claude) board seeded from PLAN_PARALLEL_2026-06-23. First live trigger:
