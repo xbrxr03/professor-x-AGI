@@ -1,4 +1,4 @@
-GPU_LOCK: claude
+GPU_LOCK: free
 HEARTBEAT_CLAUDE: 2026-06-23T18:55:49-04:00
 HEARTBEAT_CODEX:
 
@@ -15,7 +15,7 @@ Task line: `- [ ] @owner  id | depends: <cond,cond> | gpu: yes|no | on-done: <tr
 Conditions: `model-served:<name>` `gpu-free` `pr-merged:#N` `file:<path>` `committed:<path>` `always`
 
 ## Tasks
-- [ ] @claude A2-gate-p4    | depends: model-served:profx-distilled-p4 | gpu: yes | on-done: @codex C1-recipe-p5
+- [x] @claude A2-gate-p4    | depends: model-served:profx-distilled-p4 | gpu: yes | on-done: @codex C1-recipe-p5  (done 2026-06-23T20:38:56-04:00)
 - [ ] @codex  C1-recipe-p5  | depends: committed:professor-x/docs/research/2026-06-23-A2-gate-result.md | gpu: yes | on-done: @claude C2-gate-p5
 - [x] @claude B1-autominter-generalize | depends: always | gpu: no | on-done: @claude B2-openset  (done 2026-06-23T17:10:03-04:00)
 - [x] @claude B2-openset    | depends: committed:professor-x/docs/research/2026-06-23-B1-autominter-families.md | gpu: no | on-done: @claude B3-wire-live  (done 2026-06-23T17:16:56-04:00)
