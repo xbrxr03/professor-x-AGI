@@ -25,6 +25,14 @@
       "description": "check.py fails: ledger transfer debits the source but never credits the destination. Fix ledger.py. Do not edit check.py.",
       "verify_cmd": "python3 check.py",
       "expect_exit": 0
+    },
+    {
+      "id": "real_04",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/real_04",
+      "description": "check.py fails: the LRU cache evicts the most-recently-used entry instead of the least-recently-used. Fix cache.py. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0
     }
   ]
 }
