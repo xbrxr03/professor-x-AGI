@@ -26,8 +26,38 @@
       "description": "check.py fails due to a bug in the shared library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
       "verify_cmd": "python3 check.py",
       "expect_exit": 0,
+      "buggy_module": "spans.py",
+      "anchor_of": "fam_interval_02"
+    },
+    {
+      "id": "fam_interval_anchor_3",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_interval_anchor_3",
+      "description": "check.py fails due to a bug in the shared library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "spans.py",
+      "anchor_of": "fam_interval_03"
+    },
+    {
+      "id": "fam_interval_anchor_4",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_interval_anchor_4",
+      "description": "check.py fails due to a bug in the shared library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
       "buggy_module": "planner.py",
       "anchor_of": "fam_interval_04"
+    },
+    {
+      "id": "fam_interval_anchor_5",
+      "category": "repo_fix",
+      "setup": "scripts/benchmarks/repo_fix/fam_interval_anchor_5",
+      "description": "check.py fails due to a bug in the shared library. Find the root cause across the files and fix it so check.py passes. Do not edit check.py.",
+      "verify_cmd": "python3 check.py",
+      "expect_exit": 0,
+      "buggy_module": "planner.py",
+      "anchor_of": "fam_interval_05"
     }
   ]
 }

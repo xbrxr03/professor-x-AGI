@@ -3,4 +3,4 @@ def meter_to_centi(m):
 
 
 def centi_to_meter(cm):
-    return cm / 100
+    return cm / 10

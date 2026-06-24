@@ -6,7 +6,7 @@ validate red->green. A renamed anchor that an agent fixes only by reasoning abou
 matching the original mutation operator) is evidence of REAL generalization.
 Anchors: 2 tasks per family -> fam_<name>_anchor_<seq>, manifest tasks_anchor_<name>.json."""
 import os, json, re, glob, shutil, subprocess
-BASE="/home/abrar/professor-x-main-integrate/professor-x/scripts/benchmarks/repo_fix"
+BASE=os.path.dirname(os.path.abspath(__file__))   # portable: writes anchors next to the fixtures
 
 def run_check(d):
     for r,_,_ in os.walk(d):
@@ -65,6 +65,8 @@ for fam,(mod_map,sym_map,anchor_ids) in MAPS.items():
     check=open(f"{BASE}/{man['tasks'][0]['id']}/check.py").read()
     rcheck=rename_text(check,sym_map,mod_map)
     made=[]
+    # GROW: use EVERY family task as an anchor source (was a hardcoded 2/family) -> ~5/family held-out
+    anchor_ids = sorted(by_id.keys())
     for seq,aid in enumerate(anchor_ids,1):
         if aid not in by_id:
             print(f"  [{fam}] anchor src {aid} missing, skip"); continue

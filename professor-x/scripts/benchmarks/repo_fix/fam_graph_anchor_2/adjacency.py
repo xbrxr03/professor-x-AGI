@@ -4,8 +4,8 @@ def link(g, u, v):
 
 
 def adjacent(g, u):
-    return g.get(u, set())
+    return g.get(u, set()) | {u}
 
 
 def valence(g, u):
-    return len(g)
+    return len(adjacent(g, u))

@@ -4,7 +4,7 @@ from cells import split_cells, join_cells
 def load(text):
     lines = [l for l in text.splitlines() if l.strip()]
     header = split_cells(lines[0])
-    return [dict(zip(header, split_cells(l))) for l in lines]
+    return [dict(zip(header, split_cells(l))) for l in lines[1:]]
 
 
 def pluck(table, key):
