@@ -31,3 +31,19 @@ tier (10–20 tasks) and bench 14B vs 8B on it (does the bigger model help more 
 2. **Harness** — Codex's agentic-perf track + validated edit-lever/native-tools/repo-map.
 3. **Trust-gated self-improvement** — Collateralized-TGC (now 34 anchors) + Living Verifier, so it
    improves on real usage. Measured on the real-feel bench.
+
+## Update: 14B context/VRAM fit (the KV-cache caveat)
+`ollama ps` during a 16384-context load: `qwen3:14b-q4_K_M  12 GB  9%/91% CPU/GPU`. So:
+- 14B (9.3GB weights) **fully fits 12GB at SHORT contexts** (the hard-set bench ran on-GPU, completed).
+- At **16k context it partially offloads (~9% to CPU)** → slower (the KV cache + weights exceed 12GB).
+- **For "frontier feel in 12GB": use `OLLAMA_KV_CACHE_TYPE=q8_0`** (halves KV-cache VRAM) and/or cap
+  context, so 14B stays fully on-GPU at useful context lengths. This is a config lever (Codex's harness
+  area) — flag it: the agent should pin a context budget that keeps 14B on-GPU.
+
+## Path to the goal (concrete, integration)
+1. **Base:** qwen3:14b-q4_K_M (validated ≥ 8B, fits 12GB short-ctx). Pin context + q8 KV so it stays
+   on-GPU. NEXT: K=3 confirm (queued) + 14B-vs-8B on the 9-task real-feel tier (queued).
+2. **Harness (Codex):** agentic-perf track + native-tools/edit-lever/repo-map — make 14B *feel* frontier.
+3. **Trust (Claude):** Collateralized-TGC (34 anchors) + Living Verifier so it improves on real usage —
+   the local differentiator a cloud frontier agent can't offer.
+4. **Measure:** the real-feel benchmark (9 validated multi-file tasks) + the real M1 (SWE-Gym-lite) later.
