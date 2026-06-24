@@ -6,6 +6,6 @@ class Lifo:
     def pop(self):
         return self._d.pop()
     def top(self):
-        return self._d[-1]
+        return self._d[0]
     def empty(self):
         return len(self._d) == 0

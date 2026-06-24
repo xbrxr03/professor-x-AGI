@@ -13,6 +13,6 @@ def tally_open(events, start=SHUT):
     n = 0
     for e in events:
         s = step(s, e)
-        if s == 'locked':
+        if s == 'open':
             n += 1
     return n

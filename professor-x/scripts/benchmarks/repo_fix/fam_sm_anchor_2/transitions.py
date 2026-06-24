@@ -4,7 +4,7 @@ AJAR = 'open'
 TABLE = {
     (SHUT, 'coin'): AJAR,
     (SHUT, 'push'): SHUT,
-    (AJAR, 'push'): SHUT,
+    (AJAR, 'push'): AJAR,
     (AJAR, 'coin'): AJAR,
 }
 

@@ -3,4 +3,4 @@ def intersects(a, b):
 
 
 def fuse(a, b):
-    return (min(a[0], b[0]), max(a[1], b[1]))
+    return (min(a[0], b[0]), b[1])
